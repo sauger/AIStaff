@@ -304,14 +304,7 @@ def delete_entry(db: Session, tenant_id: str, agent_id: str, path: str) -> None:
             status_code=404,
             details={"path": target},
         )
-    descendants = db.exec(
-        select(EmployeeCabinetEntry).where(
-            EmployeeCabinetEntry.tenant_id == tenant_id,
-            EmployeeCabinetEntry.agent_id == agent_id,
-            (EmployeeCabinetEntry.path == target)
-            | (col(EmployeeCabinetEntry.path).like(f"{target}/%")),
-        )
-    ).all()
+    descendants = _entries_at_or_under(db, tenant_id, agent_id, target)
     disk = storage_path(tenant_id, agent_id, target)
     for item in descendants:
         db.delete(item)
@@ -368,14 +361,7 @@ def move_entry(
     if source_disk.exists():
         source_disk.replace(dest_disk)
     now = utc_now()
-    descendants = db.exec(
-        select(EmployeeCabinetEntry).where(
-            EmployeeCabinetEntry.tenant_id == tenant_id,
-            EmployeeCabinetEntry.agent_id == agent_id,
-            (EmployeeCabinetEntry.path == source)
-            | (col(EmployeeCabinetEntry.path).like(f"{source}/%")),
-        )
-    ).all()
+    descendants = _entries_at_or_under(db, tenant_id, agent_id, source)
     for item in descendants:
         suffix = item.path[len(source) :]
         item.path = f"{destination}{suffix}"
@@ -400,19 +386,21 @@ def find_by_name(
     needle = str(query or "").strip()
     if not needle:
         raise CabinetError("CABINET_NAME_INVALID", "查找文件时必须给出文件名或路径。")
-    try:
-        as_path = normalize_path(needle, allow_empty=False)
-    except CabinetError:
-        as_path = ""
-    if as_path:
-        exact = get_entry(db, tenant_id, agent_id, as_path)
-        if exact is not None and exact.kind == "file":
-            return CabinetFindResult(
-                query=needle,
-                matches=[_find_match(exact)],
-                needs_clarification=False,
-                message="",
-            )
+    looks_like_path = "/" in needle.replace("\\", "/")
+    if looks_like_path:
+        try:
+            as_path = normalize_path(needle, allow_empty=False)
+        except CabinetError:
+            as_path = ""
+        if as_path:
+            exact = get_entry(db, tenant_id, agent_id, as_path)
+            if exact is not None and exact.kind == "file":
+                return CabinetFindResult(
+                    query=needle,
+                    matches=[_find_match(exact)],
+                    needs_clarification=False,
+                    message="",
+                )
     name = needle.rsplit("/", 1)[-1].strip()
     rows = db.exec(
         select(EmployeeCabinetEntry).where(
@@ -682,6 +670,19 @@ def _ensure_parent_folder(
         )
     )
     db.commit()
+
+
+def _entries_at_or_under(
+    db: Session, tenant_id: str, agent_id: str, target: str
+) -> list[EmployeeCabinetEntry]:
+    prefix = f"{target}/"
+    rows = db.exec(
+        select(EmployeeCabinetEntry).where(
+            EmployeeCabinetEntry.tenant_id == tenant_id,
+            EmployeeCabinetEntry.agent_id == agent_id,
+        )
+    ).all()
+    return [item for item in rows if item.path == target or item.path.startswith(prefix)]
 
 
 def _reject_size(filename: str, size: int, current_used: int) -> None:

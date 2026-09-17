@@ -943,24 +943,6 @@ def _validate_chat_turn_attachments(
     return request.model_copy(update={"attachments": attachments})
 
 
-def _ingest_chat_attachments_into_cabinet(db: Session, request: ChatTurnRequest) -> None:
-    if not request.attachments or not request.agent_id:
-        return
-    from app.cabinet.errors import CabinetError
-    from app.cabinet.service import ingest_chat_attachments
-
-    try:
-        ingest_chat_attachments(
-            db,
-            tenant_id=request.tenant_id,
-            agent_id=request.agent_id,
-            user_id=request.user_id or "",
-            attachments=request.attachments,
-        )
-    except CabinetError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.as_http_detail()) from error
-
-
 @router.get("/slash-commands", response_model=list[SlashCommandRead])
 def list_slash_commands(
     tenant_id: str = Query(...),
@@ -1048,7 +1030,6 @@ def chat_turn(
     ensure_tenant(db, request.tenant_id)
     if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
-    _ingest_chat_attachments_into_cabinet(db, request)
     original_message = request.message
     if team_tl_team is not None:
         # 团队 TL 会话:注入团队上下文(花名册/未闭环任务/黑板/派任务格式)后再走正常引擎
@@ -1125,7 +1106,6 @@ def chat_stream(
         _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
     if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
-    _ingest_chat_attachments_into_cabinet(db, request)
     original_message = request.message
     if team_tl_team_id is not None:
         # 团队 TL 会话:注入团队上下文(花名册/未闭环任务/黑板/派任务格式)后再走正常引擎

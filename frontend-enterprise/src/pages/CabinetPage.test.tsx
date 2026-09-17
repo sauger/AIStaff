@@ -122,6 +122,7 @@ describe('CabinetPage', () => {
     expect(screen.getByText('下载')).toBeTruthy();
     expect(screen.queryByText('上传')).toBeNull();
     expect(screen.queryByText('删除')).toBeNull();
+    expect(screen.queryByText('重命名')).toBeNull();
     expect(screen.queryByText('新建文件夹')).toBeNull();
   });
 });

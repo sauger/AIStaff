@@ -495,6 +495,53 @@ def test_ambiguous_filename_requires_clarification(cabinet_db) -> None:
     assert len(result.matches) == 2
 
 
+def test_filename_query_does_not_prefer_root_path_silently(cabinet_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b) = cabinet_db
+    create_folder(
+        CabinetFolderCreateRequest(tenant_id="tenant_demo", path="", name="模板"),
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    _upload(db, owner, agent_a.id, "报价模板.xlsx", b"root")
+    _upload(db, owner, agent_a.id, "报价模板.xlsx", b"nested", path="模板")
+    result = find_by_name(db, "tenant_demo", agent_a.id, "报价模板.xlsx")
+    assert result.needs_clarification is True
+    assert {item.path for item in result.matches} == {"报价模板.xlsx", "模板/报价模板.xlsx"}
+    exact = find_by_name(db, "tenant_demo", agent_a.id, "模板/报价模板.xlsx")
+    assert exact.needs_clarification is False
+    assert exact.matches[0].path == "模板/报价模板.xlsx"
+
+
+def test_delete_folder_does_not_treat_underscore_as_wildcard(cabinet_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b) = cabinet_db
+    create_folder(
+        CabinetFolderCreateRequest(tenant_id="tenant_demo", path="", name="a_b"),
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    create_folder(
+        CabinetFolderCreateRequest(tenant_id="tenant_demo", path="", name="axb"),
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    _upload(db, owner, agent_a.id, "one.txt", b"keep-me", path="a_b")
+    _upload(db, owner, agent_a.id, "two.txt", b"also-keep", path="axb")
+    remove_entry(
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        path="a_b",
+        db=db,
+        current_user=owner,
+    )
+    listing = list_folder(db, "tenant_demo", agent_a.id, "", can_write=True)
+    assert [item.name for item in listing.entries] == ["axb"]
+    nested = list_folder(db, "tenant_demo", agent_a.id, "axb", can_write=True)
+    assert [item.name for item in nested.entries] == ["two.txt"]
+
+
 def test_manifest_includes_cabinet_tools(cabinet_db) -> None:
     db, (_owner, _other, _admin, agent_a, _agent_b) = cabinet_db
     manifest = CapabilityManifestBuilder(db).build("tenant_demo", agent_a.id, None, None)

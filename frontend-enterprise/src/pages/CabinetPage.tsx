@@ -21,6 +21,7 @@ import {
   OUTLINE_ACTION_BUTTON_CLASS,
 } from '@/lib/enterprise-ui';
 import {
+  ENTERPRISE_AGENT_STORAGE_KEY,
   isTeamScope,
   persistSharedAgentScope,
   readEmployeeScope,
@@ -78,6 +79,7 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
   const [deleteTarget, setDeleteTarget] = useState<CabinetEntryRead | null>(null);
   const [overwriteFile, setOverwriteFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const loadSeqRef = useRef(0);
 
   const currentAgent = useMemo(
     () => agents.find((item) => item.id === agentId) || null,
@@ -125,7 +127,10 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
         || visible.find((item) => !item.is_overall);
       const nextId = preferred?.id || '';
       if (nextId && nextId !== agentId) {
-        persistSharedAgentScope(nextId);
+        const stored = window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY) || '';
+        if (!isTeamScope(stored)) {
+          persistSharedAgentScope(nextId);
+        }
         setAgentId(nextId);
       }
     } catch (error) {
@@ -137,6 +142,7 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
 
   async function loadFolder(nextPath: string) {
     if (!agentId || isTeamScope(agentId)) return;
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -147,12 +153,14 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
       const result = await api.get<CabinetListResponse>(
         `/api/enterprise/cabinet?${params.toString()}`,
       );
+      if (seq !== loadSeqRef.current) return;
       setListing(result);
     } catch (error) {
+      if (seq !== loadSeqRef.current) return;
       notify.error(apiErrorMessage(error));
       setListing(null);
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }
 
@@ -212,7 +220,9 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
       const link = document.createElement('a');
       link.href = url;
       link.download = entry.name;
+      document.body.appendChild(link);
       link.click();
+      link.remove();
       URL.revokeObjectURL(url);
     } catch (error) {
       notify.error(apiErrorMessage(error));
@@ -268,6 +278,7 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
           className="inline-flex min-w-0 items-center gap-[8px] text-left text-[13px] text-[#17191f]"
           onClick={() => {
             if (row.kind === 'folder') setPath(row.path);
+            else void downloadEntry(row);
           }}
         >
           {row.kind === 'folder' ? <IconFolder className="size-[14px] shrink-0" /> : null}
