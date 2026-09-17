@@ -1209,7 +1209,11 @@ class AgentLoop:
     def _get_persona_prompt(self, tenant_id: str, agent_id: str | None = None) -> str | None:
         agent = self._get_agent_profile(tenant_id, agent_id)
         if agent and not agent.is_overall:
-            return _agent_identity_prompt(agent)
+            identity = _agent_identity_prompt(agent)
+            from app.cabinet.service import prompt_context
+
+            cabinet = prompt_context(self.db, tenant_id, agent.id)
+            return "\n\n".join(part for part in (identity, cabinet) if part)
         if agent and agent.is_overall and agent.persona_prompt:
             return agent.persona_prompt
         row = self.db.get(PersonaConfig, tenant_id)

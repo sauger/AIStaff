@@ -930,6 +930,8 @@ def _reply_chunks(reply: str) -> Iterator[str]:
 def _validate_chat_turn_attachments(
     request: ChatTurnRequest,
 ) -> ChatTurnRequest:
+    if not request.attachments:
+        return request
     try:
         attachments = validate_chat_turn_attachments(
             request.attachments,
@@ -939,6 +941,24 @@ def _validate_chat_turn_attachments(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return request.model_copy(update={"attachments": attachments})
+
+
+def _ingest_chat_attachments_into_cabinet(db: Session, request: ChatTurnRequest) -> None:
+    if not request.attachments or not request.agent_id:
+        return
+    from app.cabinet.errors import CabinetError
+    from app.cabinet.service import ingest_chat_attachments
+
+    try:
+        ingest_chat_attachments(
+            db,
+            tenant_id=request.tenant_id,
+            agent_id=request.agent_id,
+            user_id=request.user_id or "",
+            attachments=request.attachments,
+        )
+    except CabinetError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.as_http_detail()) from error
 
 
 @router.get("/slash-commands", response_model=list[SlashCommandRead])
@@ -1028,6 +1048,7 @@ def chat_turn(
     ensure_tenant(db, request.tenant_id)
     if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
+    _ingest_chat_attachments_into_cabinet(db, request)
     original_message = request.message
     if team_tl_team is not None:
         # 团队 TL 会话:注入团队上下文(花名册/未闭环任务/黑板/派任务格式)后再走正常引擎
@@ -1104,6 +1125,7 @@ def chat_stream(
         _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
     if not request.message.strip() and not request.attachments:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
+    _ingest_chat_attachments_into_cabinet(db, request)
     original_message = request.message
     if team_tl_team_id is not None:
         # 团队 TL 会话:注入团队上下文(花名册/未闭环任务/黑板/派任务格式)后再走正常引擎
@@ -3119,6 +3141,11 @@ _RESERVED_TOOL_LABELS = {
     "delete_file": "删除文件",
     "move_file": "移动文件",
     "copy_file": "复制文件",
+    "cabinet_list": "查看文件柜",
+    "cabinet_find": "查找文件柜文件",
+    "cabinet_read": "读取文件柜文件",
+    "cabinet_save": "保存到文件柜",
+    "cabinet_produce_from_template": "按模板生产文件",
 }
 
 _SKILL_COMPLETED_REASON_LABELS = {

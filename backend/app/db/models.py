@@ -781,6 +781,31 @@ class AgentResourceBinding(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class EmployeeCabinetEntry(SQLModel, table=True):
+    """Per-employee working files. Not copied with skills, login recipes, or agents."""
+
+    __tablename__ = "employee_cabinet_entries"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "agent_id", "path", name="uq_employee_cabinet_path"),
+        Index("ix_employee_cabinet_agent_parent", "tenant_id", "agent_id", "parent_path"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("cab"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    kind: str = Field(index=True)
+    name: str
+    path: str
+    parent_path: str = Field(default="", index=True)
+    size_bytes: int = Field(default=0)
+    content_type: str = Field(default="application/octet-stream")
+    sha256: Optional[str] = None
+    source: str = Field(default="console", index=True)
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Tool(SQLModel, table=True):
     __tablename__ = "tools"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tool_tenant_name"),)

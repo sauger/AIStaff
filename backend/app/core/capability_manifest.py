@@ -46,6 +46,11 @@ RESERVED_HARNESS_CAPABILITY_NAMES = {
     "knowledge_search",
     "lark_cli",
     "external_task_status",
+    "cabinet_list",
+    "cabinet_find",
+    "cabinet_read",
+    "cabinet_save",
+    "cabinet_produce_from_template",
 }
 
 
@@ -390,7 +395,10 @@ def _lark_cli_descriptor(
 
 
 def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
+    from app.cabinet.harness import cabinet_capability_descriptors
+
     return [
+        *cabinet_capability_descriptors(),
         CapabilityDescriptor(
             capability_id="builtin.external_task.status",
             name="external_task_status",

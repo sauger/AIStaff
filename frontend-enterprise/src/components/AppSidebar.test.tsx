@@ -128,6 +128,12 @@ describe('AppSidebar agent switcher team group', () => {
     expect(within(trigger).getByText('增长团队')).toBeTruthy();
   });
 
+  it('places the file cabinet next to knowledge in capability navigation', () => {
+    renderSidebar({ selectedAgentId: 'agent-1' });
+    expect(screen.getByText('知识库')).toBeTruthy();
+    expect(screen.getByText('文件柜')).toBeTruthy();
+  });
+
   it('falls back to a bare team label when the selected team is unknown', () => {
     renderSidebar({ selectedAgentId: 'team:missing', scopeTeams: [team] });
 
