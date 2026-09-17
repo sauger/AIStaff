@@ -30,7 +30,7 @@ describe('detached HTTP tool configuration', () => {
     });
   });
 
-  it('does not persist provider status URLs for StaffDeck-managed tasks', () => {
+  it('does not persist provider status URLs for RapidStaff-managed tasks', () => {
     const payload = buildToolPayload({
       ...values(),
       execution_mode: 'detached',

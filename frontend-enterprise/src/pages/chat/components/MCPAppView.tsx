@@ -76,7 +76,7 @@ export default function MCPAppView({ descriptor }: { descriptor: MCPAppViewDescr
       if (request.method === 'ui/initialize' || request.method === 'ui/initialize/request') {
         postRpcResult(request.id, {
           protocolVersion: APP_PROTOCOL_VERSION,
-          hostInfo: { name: 'StaffDeck', version: '1' },
+          hostInfo: { name: 'RapidStaff', version: '1' },
           hostCapabilities: { tools: { call: true }, textFallback: true },
         });
         return;

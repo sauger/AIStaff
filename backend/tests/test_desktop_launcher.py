@@ -197,7 +197,7 @@ def test_health_requires_staffdeck_marker(monkeypatch) -> None:
     def fake_urlopen(url, timeout):
         assert url == "http://127.0.0.1:5173/api/health"
         assert timeout == 1
-        return FakeResponse(b'{"status":"ok","app":"StaffDeck"}')
+        return FakeResponse(b'{"status":"ok","app":"RapidStaff"}')
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     assert desktop_launcher._health_ok("http://127.0.0.1:5173") is True
@@ -432,7 +432,7 @@ def test_macos_window_embeds_local_ui() -> None:
     assert isinstance(webview, FakeWebView)
     assert webview is events["content_view"]
     assert events["request"] == "request:url:http://127.0.0.1:5173/chat/"
-    assert events["title"] == "StaffDeck"
+    assert events["title"] == "RapidStaff"
     assert events["window_init"][1] & FakeAppKit.NSWindowStyleMaskFullSizeContentView
     assert events["title_visibility"] == FakeAppKit.NSWindowTitleHidden
     assert events["titlebar_transparent"] is True
@@ -542,15 +542,15 @@ def test_macos_main_menu_routes_edit_shortcuts_through_responder_chain() -> None
     delegate = object()
     main_menu = desktop_launcher._create_macos_main_menu(FakeAppKit, delegate)
 
-    assert [item.title for item in main_menu.items] == ["StaffDeck", "编辑"]
+    assert [item.title for item in main_menu.items] == ["RapidStaff", "编辑"]
 
     app_items = [item for item in main_menu.items[0].submenu.items if not item.separator]
     assert [(item.title, item.action, item.key) for item in app_items] == [
-        ("关于 StaffDeck", "showAbout:", ""),
-        ("隐藏 StaffDeck", "hide:", "h"),
+        ("关于 RapidStaff", "showAbout:", ""),
+        ("隐藏 RapidStaff", "hide:", "h"),
         ("隐藏其他", "hideOtherApplications:", "h"),
         ("全部显示", "unhideAllApplications:", ""),
-        ("退出 StaffDeck", "quitStaffDeck:", "q"),
+        ("退出 RapidStaff", "quitStaffDeck:", "q"),
     ]
     assert app_items[0].target is delegate
     assert app_items[2].modifiers == command | option

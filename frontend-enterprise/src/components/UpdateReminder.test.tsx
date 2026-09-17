@@ -70,7 +70,7 @@ describe('UpdateReminder', () => {
 
     const renderToast = mocks.toastCustom.mock.calls[0][0];
     render(renderToast('toast-id'));
-    expect(screen.getByText('StaffDeck 有新版本')).toBeTruthy();
+    expect(screen.getByText('RapidStaff 有新版本')).toBeTruthy();
     expect(document.body.textContent).toContain(update.latest_version);
     expect(document.body.textContent).toContain(update.current_version);
     expect(screen.getByRole('link', { name: /查看更新/ }).getAttribute('href')).toBe(

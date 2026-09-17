@@ -40,7 +40,7 @@ export function UpdateNotice({
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-medium leading-[20px] text-[#18181a]">
-          {t('StaffDeck 有新版本')}
+          {t('RapidStaff 有新版本')}
         </p>
         <p className="mt-[1px] text-[12px] leading-[18px] text-[#757f9c]">
           {t('v{1} 已发布，你正在使用 v{2}', { 1: latestVersion, 2: currentVersion })}
