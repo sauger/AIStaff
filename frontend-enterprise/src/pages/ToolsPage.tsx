@@ -2098,7 +2098,7 @@ function ToolFormFields({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="staffdeck_worker">StaffDeck 托管后台执行</SelectItem>
+                    <SelectItem value="staffdeck_worker">RapidStaff 托管后台执行</SelectItem>
                     <SelectItem value="provider_task">Provider 原生异步任务</SelectItem>
                   </SelectContent>
                 </UISelect>
@@ -2106,8 +2106,8 @@ function ToolFormFields({
 
               {values.async_strategy === 'staffdeck_worker' ? (
                 <div className="sm:col-span-2 rounded-[8px] border border-[#e3e7f1] bg-white px-[12px] py-[10px]">
-                  <p className={FIELD_LABEL_CLASS}>StaffDeck 托管异步</p>
-                  <p className={HINT_CLASS}>StaffDeck 会生成任务号，在后台执行普通同步 HTTP 请求并保存最终结果；Provider 不需要返回 taskId。</p>
+                  <p className={FIELD_LABEL_CLASS}>RapidStaff 托管异步</p>
+                  <p className={HINT_CLASS}>RapidStaff 会生成任务号，在后台执行普通同步 HTTP 请求并保存最终结果；Provider 不需要返回 taskId。</p>
                 </div>
               ) : (
                 <>
@@ -2176,7 +2176,7 @@ function ToolFormFields({
                       onChange={(event) => setField('max_tracking_seconds', Number(event.target.value) || 86400)}
                     />
                   </Field>
-                  <p className={cn(HINT_CLASS, 'sm:col-span-2')}>Provider 返回 taskId 后由 StaffDeck 轮询状态；配置外部回调地址后也可接收带任务密钥的回调。</p>
+                  <p className={cn(HINT_CLASS, 'sm:col-span-2')}>Provider 返回 taskId 后由 RapidStaff 轮询状态；配置外部回调地址后也可接收带任务密钥的回调。</p>
                 </>
               )}
               <p className={cn(HINT_CLASS, 'sm:col-span-2')}>提交后当前对话立即结束；普通会话通过任务号查询，SOP 会在任务结束后从持久化检查点继续。</p>
@@ -2309,7 +2309,7 @@ function A2AConnectionFields({
   return (
     <div className="flex flex-col gap-[14px] rounded-[14px] border border-sky-200 bg-sky-50/40 p-[16px]">
       <div className="flex flex-wrap items-start justify-between gap-[12px]">
-        <div><p className="text-[13px] font-semibold text-[#2f3442]">A2A 长任务连接</p><p className="mt-[4px] text-[11px] leading-[17px] text-[#687083]">自动发现 Agent Card；优先流式订阅，断线后回退轮询。任务、事件和产物由 StaffDeck 持久化。</p></div>
+        <div><p className="text-[13px] font-semibold text-[#2f3442]">A2A 长任务连接</p><p className="mt-[4px] text-[11px] leading-[17px] text-[#687083]">自动发现 Agent Card；优先流式订阅，断线后回退轮询。任务、事件和产物由 RapidStaff 持久化。</p></div>
         {adapter && <UIButton type="button" variant="outline" size="sm" onClick={useCodex} disabled={!adapter.enabled}><TerminalSquare className="size-[14px]" />{adapter.enabled ? '连接本机 Codex' : 'Codex Adapter 未启用'}</UIButton>}
       </div>
       <div className="grid gap-[12px] md:grid-cols-2">

@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 from app.version import app_version
 
-APP_NAME = "StaffDeck"
+APP_NAME = "RapidStaff"
 APP_ID = "ai.staffdeck.desktop"
 APP_VERSION = app_version()
 NETWORK_MODES = {"local", "lan", "public"}
@@ -139,7 +139,7 @@ def _apply_network_config(argv: list[str]) -> list[str]:
 
 
 def _setup_network(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="staffdeck setup", description="配置 StaffDeck 网络访问方式")
+    parser = argparse.ArgumentParser(prog="staffdeck setup", description="配置 RapidStaff 网络访问方式")
     parser.add_argument("--mode", choices=sorted(NETWORK_MODES), help="local、lan 或 public")
     parser.add_argument("--port", type=int, default=5173)
     parser.add_argument("--public-url", default="")
@@ -506,7 +506,7 @@ def _create_macos_webview_window(AppKit, Foundation, WebKit, target: str):
     webview.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
     page_url = Foundation.NSURL.URLWithString_(target)
     if page_url is None:
-        raise RuntimeError(f"Invalid StaffDeck window URL: {target!r}")
+        raise RuntimeError(f"Invalid RapidStaff window URL: {target!r}")
     webview.loadRequest_(Foundation.NSURLRequest.requestWithURL_(page_url))
     window.setContentView_(webview)
 

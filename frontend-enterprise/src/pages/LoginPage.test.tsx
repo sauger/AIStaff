@@ -62,7 +62,10 @@ describe('LoginPage', () => {
     renderLogin();
 
     expect(screen.getByText('我们来做什么？')).toBeTruthy();
-    expect(screen.getByAltText('StaffDeck 产品预览')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /RapidStaff/ })).toBeTruthy();
+    expect(screen.getAllByText('RapidStaff').length).toBeGreaterThan(0);
+    expect(screen.getByAltText('RapidStaff 产品预览')).toBeTruthy();
+    expect(screen.queryByText('StaffDeck')).toBeNull();
     expect(screen.queryByLabelText('账号')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: '登录' }));
