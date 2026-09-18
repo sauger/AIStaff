@@ -33,6 +33,7 @@ from app.api import (
 )
 from app.cabinet.api import router as cabinet_router
 from app.mail.api import router as mail_router
+from app.secrets.api import guides_router, secrets_router
 from app.mail.poller import start_mail_poller, stop_mail_poller
 from app.async_jobs import shutdown_async_jobs, start_async_jobs
 from app.channels import start_channel_services, stop_channel_services
@@ -136,6 +137,8 @@ app.include_router(knowledge_bases.router)
 app.include_router(knowledge.router)
 app.include_router(cabinet_router)
 app.include_router(mail_router)
+app.include_router(secrets_router)
+app.include_router(guides_router)
 app.include_router(skills.router)
 app.include_router(model_configs.router)
 app.include_router(memories.router)

@@ -37,6 +37,8 @@ import IconCalendar from '../assets/icons/profile-calendar.svg?react';
 import IconFolder from '../assets/icons/cap-folder.svg?react';
 import IconCabinet from '../assets/icons/cap-cabinet.svg?react';
 import IconMail from '../assets/icons/cap-mail.svg?react';
+import IconSecret from '../assets/icons/cap-secret.svg?react';
+import IconLoginGuide from '../assets/icons/cap-login-guide.svg?react';
 import IconMagicWand from '../assets/icons/cap-magicwand.svg?react';
 import IconClipboard from '../assets/icons/cap-clipboard.svg?react';
 import IconBriefcase from '../assets/icons/cap-briefcase.svg?react';
@@ -81,6 +83,8 @@ const CAPABILITY_NAV: NavItem[] = [
   { route: EnterpriseRoute.Knowledge, label: '知识库', Icon: IconFolder },
   { route: EnterpriseRoute.Cabinet, label: '文件柜', Icon: IconCabinet },
   { route: EnterpriseRoute.Mail, label: '邮件', Icon: IconMail },
+  { route: EnterpriseRoute.Secrets, label: '密钥', Icon: IconSecret },
+  { route: EnterpriseRoute.LoginGuides, label: '登录说明', Icon: IconLoginGuide },
   { route: EnterpriseRoute.GeneralSkills, label: '技能', Icon: IconMagicWand },
   { route: EnterpriseRoute.Skills, label: 'SOP', Icon: IconClipboard },
   { route: EnterpriseRoute.Tools, label: '工具', Icon: IconBriefcase },

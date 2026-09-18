@@ -562,6 +562,14 @@ class HarnessCapabilityInvoker:
             from app.mail.harness import invoke_mail_tool
 
             return invoke_mail_tool(self, name, arguments)
+        if name in {
+            "secret_list",
+            "login_guide_list",
+            "secure_login",
+        }:
+            from app.secrets.harness import invoke_secret_tool
+
+            return invoke_secret_tool(self, name, arguments)
         return _failure(
             "UNSUPPORTED_INTERNAL_CAPABILITY",
             "不支持的 Harness 内部能力。",

@@ -1366,3 +1366,81 @@ export type MailSendResult = {
   message: MailMessageRead;
   notice: string;
 };
+
+export type EmployeeSecretType = 'password' | 'session_snapshot';
+
+export type EmployeeSecretRead = {
+  id: string;
+  agent_id: string;
+  name: string;
+  description: string;
+  secret_type: EmployeeSecretType;
+  value_configured: boolean;
+  linked_login_guide_id?: string | null;
+  linked_login_guide_name?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EmployeeSecretListResponse = {
+  agent_id: string;
+  can_write: boolean;
+  secrets: EmployeeSecretRead[];
+};
+
+export type LoginGuideRead = {
+  id: string;
+  agent_id: string;
+  name: string;
+  url: string;
+  username_selector: string;
+  username_label: string;
+  password_selector: string;
+  password_label: string;
+  submit_selector: string;
+  submit_label: string;
+  default_secret_name?: string | null;
+  default_secret_id?: string | null;
+  published: boolean;
+  copied_from_id?: string | null;
+  can_write: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LoginGuideListResponse = {
+  agent_id: string;
+  can_write: boolean;
+  guides: LoginGuideRead[];
+};
+
+export type LoginGuideGalleryItem = {
+  id: string;
+  name: string;
+  url: string;
+  username_selector: string;
+  username_label: string;
+  password_selector: string;
+  password_label: string;
+  submit_selector: string;
+  submit_label: string;
+  source_agent_id: string;
+  source_agent_name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LoginResult = {
+  success: boolean;
+  login_guide_name: string;
+  secret_name_used?: string | null;
+  secret_type_used?: string | null;
+  switched_to_snapshot?: boolean;
+  snapshot_created?: boolean;
+  snapshot_updated?: boolean;
+  snapshot_name?: string | null;
+  captcha_or_2fa?: boolean;
+  code?: string | null;
+  message: string;
+};
+

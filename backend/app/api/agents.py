@@ -527,9 +527,11 @@ def delete_agent(
     db.commit()
     from app.cabinet.service import purge_agent_cabinet
     from app.mail.service import purge_agent_mail
+    from app.secrets.service import purge_agent_secrets
 
     purge_agent_cabinet(db, tenant_id, agent_id)
     purge_agent_mail(db, tenant_id, agent_id)
+    purge_agent_secrets(db, tenant_id, agent_id)
     for session_tenant_id, session_id in workspace_keys:
         remove_chat_session_workspace(tenant_id=session_tenant_id, session_id=session_id, db=db)
     return {"status": "deleted"}
@@ -1310,10 +1312,11 @@ def binding_read(row: AgentResourceBinding) -> AgentResourceBindingRead:
 def _copy_agent_scope_from_source(
     db: Session, tenant_id: str, source: AgentProfile, target: AgentProfile
 ) -> None:
-    # Employee cabinets, mailboxes, inbound teaching rules, and mail history
-    # stay with the source employee. Copying skills, login recipes, or the
-    # agent profile must not copy working files, mailbox credentials, inbox
-    # cache, sent records, or 来信教学规矩.
+    # Employee cabinets, mailboxes, inbound teaching rules, mail history,
+    # login secrets, and login guides stay with the source employee. Copying
+    # skills, login recipes, or the agent profile must not copy working files,
+    # mailbox credentials, inbox cache, sent records, 来信教学规矩, ciphertext,
+    # or login-guide default secret bindings.
     if source.is_overall:
         copy_overall_scope_to_agent(db, tenant_id, target)
     else:

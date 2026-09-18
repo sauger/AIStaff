@@ -55,6 +55,9 @@ RESERVED_HARNESS_CAPABILITY_NAMES = {
     "mail_read",
     "mail_draft",
     "mail_send",
+    "secret_list",
+    "login_guide_list",
+    "secure_login",
 }
 
 
@@ -401,10 +404,12 @@ def _lark_cli_descriptor(
 def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
     from app.cabinet.harness import cabinet_capability_descriptors
     from app.mail.harness import mail_capability_descriptors
+    from app.secrets.harness import secret_capability_descriptors
 
     return [
         *cabinet_capability_descriptors(),
         *mail_capability_descriptors(),
+        *secret_capability_descriptors(),
         CapabilityDescriptor(
             capability_id="builtin.external_task.status",
             name="external_task_status",

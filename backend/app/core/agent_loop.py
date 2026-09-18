@@ -1230,10 +1230,12 @@ class AgentLoop:
             identity = _agent_identity_prompt(agent)
             from app.cabinet.service import prompt_context as cabinet_prompt_context
             from app.mail.service import prompt_context as mail_prompt_context
+            from app.secrets.service import prompt_context as secret_prompt_context
 
             cabinet = cabinet_prompt_context(self.db, tenant_id, agent.id)
             mailbox = mail_prompt_context(self.db, tenant_id, agent.id)
-            return "\n\n".join(part for part in (identity, cabinet, mailbox) if part)
+            secrets = secret_prompt_context(self.db, tenant_id, agent.id)
+            return "\n\n".join(part for part in (identity, cabinet, mailbox, secrets) if part)
         if agent and agent.is_overall and agent.persona_prompt:
             return agent.persona_prompt
         row = self.db.get(PersonaConfig, tenant_id)
