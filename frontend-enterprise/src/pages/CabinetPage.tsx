@@ -40,10 +40,10 @@ import type { AgentProfileRead, CabinetEntryRead, CabinetListResponse } from '..
 const EMPTY_COPY = '先上传模板，再在对话里说以某某为模板生产';
 
 const CABINET_ICON_BUTTON_CLASS =
-  'size-[34px] shrink-0 rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white p-0 text-[#757f9c] hover:border-[#cbd3e6] hover:bg-white hover:text-[#18181a] [&_svg]:size-[14px]';
+  'size-[34px] shrink-0 rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white p-0 text-[#757f9c] hover:border-[#cbd3e6] hover:bg-white hover:text-[#18181a] focus-visible:border-[#18181a] focus-visible:ring-0 [&_svg]:size-[14px]';
 
 const CABINET_ICON_PRIMARY_BUTTON_CLASS =
-  'size-[34px] shrink-0 rounded-[10px] bg-[#18181a] p-0 text-white hover:bg-[#303030] [&_svg]:size-[14px]';
+  'size-[34px] shrink-0 rounded-[10px] bg-[#18181a] p-0 text-white hover:bg-[#303030] focus-visible:ring-2 focus-visible:ring-[#18181a]/30 [&_svg]:size-[14px]';
 
 function CabinetIconButton({
   label,
@@ -345,7 +345,7 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
     {
       key: 'actions',
       title: '操作',
-      width: 128,
+      width: 160,
       render: (row) => (
         <div className="flex flex-nowrap items-center gap-[8px]">
           {row.kind === 'file' ? (
