@@ -906,6 +906,54 @@ class EmployeeMailTriageRule(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class EmployeeSecret(SQLModel, table=True):
+    """Per-employee encrypted login credential. Not copied with agents, skills, or plaza."""
+
+    __tablename__ = "employee_secrets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "agent_id", "name", name="uq_employee_secret_name"),
+        Index("ix_employee_secret_agent", "tenant_id", "agent_id"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("esec"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    name: str
+    description: str = ""
+    secret_type: str = Field(index=True)
+    value_encrypted: str
+    linked_login_guide_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class EmployeeLoginGuide(SQLModel, table=True):
+    """Structured login steps for one employee. Plaza copy clones steps only, never secrets."""
+
+    __tablename__ = "employee_login_guides"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "agent_id", "name", name="uq_employee_login_guide_name"),
+        Index("ix_employee_login_guide_agent", "tenant_id", "agent_id"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("elogin"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    name: str
+    url: str
+    username_selector: str = ""
+    username_label: str = "用户名"
+    password_selector: str = ""
+    password_label: str = "密码"
+    submit_selector: str = ""
+    submit_label: str = "登录"
+    default_secret_name: Optional[str] = None
+    published_to_gallery: bool = Field(default=False, index=True)
+    copied_from_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Tool(SQLModel, table=True):
     __tablename__ = "tools"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tool_tenant_name"),)
