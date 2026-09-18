@@ -10,6 +10,7 @@ from email.utils import formatdate, getaddresses, make_msgid, parsedate_to_datet
 from typing import Protocol
 
 from app.mail.errors import MailError
+from app.mail.schema import MAIL_DEFAULT_PAGE_SIZE
 
 ENCRYPTION_MODES = {"ssl", "starttls", "none"}
 
@@ -44,6 +45,12 @@ class OutboundAttachment:
 
 
 @dataclass
+class InboxPage:
+    messages: list[FetchedMessage]
+    total: int
+
+
+@dataclass
 class MailboxConnection:
     email_address: str
     username: str
@@ -61,7 +68,13 @@ class MailTransport(Protocol):
 
     def probe_smtp(self, mailbox: MailboxConnection) -> None: ...
 
-    def fetch_inbox(self, mailbox: MailboxConnection) -> list[FetchedMessage]: ...
+    def fetch_inbox(
+        self,
+        mailbox: MailboxConnection,
+        *,
+        offset: int = 0,
+        limit: int = MAIL_DEFAULT_PAGE_SIZE,
+    ) -> InboxPage: ...
 
     def mark_seen(self, mailbox: MailboxConnection, uid: str) -> None: ...
 
@@ -135,7 +148,13 @@ class StdlibMailTransport:
         finally:
             _smtp_quit(client)
 
-    def fetch_inbox(self, mailbox: MailboxConnection) -> list[FetchedMessage]:
+    def fetch_inbox(
+        self,
+        mailbox: MailboxConnection,
+        *,
+        offset: int = 0,
+        limit: int = MAIL_DEFAULT_PAGE_SIZE,
+    ) -> InboxPage:
         client = None
         try:
             client = _imap_connect(mailbox)
@@ -160,14 +179,16 @@ class StdlibMailTransport:
                     f"无法列出 INBOX（主机 {mailbox.imap_host}）。",
                     details={"host": mailbox.imap_host},
                 )
-            uids = (payload[0] or b"").split()
+            uids = list(reversed((payload[0] or b"").split()))
+            start = max(0, offset)
+            end = start + max(0, limit)
             messages: list[FetchedMessage] = []
-            for uid_bytes in uids:
+            for uid_bytes in uids[start:end]:
                 uid = uid_bytes.decode("ascii", errors="ignore")
                 fetched = _fetch_one(client, uid)
                 if fetched is not None:
                     messages.append(fetched)
-            return messages
+            return InboxPage(messages=messages, total=len(uids))
         except MailError:
             raise
         except Exception as exc:

@@ -174,6 +174,10 @@ def _list(invoker: Any, agent_id: str, arguments: dict[str, Any]) -> dict[str, A
         "data": {
             "folder": listing.folder,
             "empty_reason": listing.empty_reason,
+            "page": listing.page,
+            "page_size": listing.page_size,
+            "total": listing.total,
+            "last_error": listing.last_error,
             "messages": [
                 _summary(item.model_dump(mode="json")) for item in listing.messages
             ],

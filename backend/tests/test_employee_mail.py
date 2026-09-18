@@ -59,6 +59,7 @@ from app.mail.service import mailbox_status, message_read, prompt_context
 from app.mail.transport import (
     FetchedAttachment,
     FetchedMessage,
+    InboxPage,
     MailboxConnection,
     _safe_exc,
     set_transport,
@@ -130,6 +131,8 @@ class FakeTransport:
     imap_error: MailError | None = None
     smtp_error: MailError | None = None
     append_note: str | None = None
+    fetch_calls: list[dict[str, int | None]] = field(default_factory=list)
+    fetched_uids: list[str] = field(default_factory=list)
 
     def probe_imap(self, mailbox: MailboxConnection) -> None:
         if self.imap_error:
@@ -139,10 +142,20 @@ class FakeTransport:
         if self.smtp_error:
             raise self.smtp_error
 
-    def fetch_inbox(self, mailbox: MailboxConnection) -> list[FetchedMessage]:
+    def fetch_inbox(
+        self,
+        mailbox: MailboxConnection,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> InboxPage:
         if self.imap_error:
             raise self.imap_error
-        return list(self.inbox)
+        self.fetch_calls.append({"offset": offset, "limit": limit})
+        newest_first = list(reversed(self.inbox))
+        sliced = newest_first[offset:] if limit is None else newest_first[offset : offset + limit]
+        self.fetched_uids.extend(item.uid for item in sliced)
+        return InboxPage(messages=list(sliced), total=len(self.inbox))
 
     def mark_seen(self, mailbox: MailboxConnection, uid: str) -> None:
         for item in self.inbox:
@@ -1072,3 +1085,106 @@ def test_console_can_send_pending_draft(mail_db) -> None:
     )
     assert confirmed.delivered is True
     assert transport.sent
+
+
+def _inbox_item(uid: str, subject: str, *, minutes_ago: int = 1) -> FetchedMessage:
+    return FetchedMessage(
+        uid=uid,
+        rfc_message_id=f"<{uid}@example.com>",
+        from_address="buyer@example.com",
+        to=["agent-a@example.com"],
+        cc=[],
+        bcc=[],
+        subject=subject,
+        body_text=f"正文 {uid}",
+        date=utc_now() - timedelta(minutes=minutes_ago),
+        unseen=True,
+        attachments=[],
+    )
+
+
+def test_inbox_lists_one_page_instead_of_whole_mailbox(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
+    _configure(db, owner, agent_a.id)
+    transport.inbox = [
+        _inbox_item(str(index), f"询价 {index}", minutes_ago=26 - index)
+        for index in range(1, 26)
+    ]
+    listing = get_inbox(
+        tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner
+    )
+    assert listing.page == 1
+    assert listing.page_size == 20
+    assert listing.total == 25
+    assert len(listing.messages) == 20
+    assert listing.messages[0].subject == "询价 25"
+    assert transport.fetch_calls == [{"offset": 0, "limit": 20}]
+    assert transport.fetched_uids == [str(index) for index in range(25, 5, -1)]
+    page_two = get_inbox(
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+        page=2,
+        page_size=20,
+    )
+    assert len(page_two.messages) == 5
+    assert page_two.total == 25
+    assert page_two.messages[-1].subject == "询价 1"
+    assert transport.fetch_calls[-1] == {"offset": 20, "limit": 20}
+
+
+def test_inbox_imap_failure_returns_cached_page_not_http_error(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
+    _configure(db, owner, agent_a.id)
+    transport.inbox = [_inbox_item("9", "缓存来信", minutes_ago=3)]
+    cached = get_inbox(
+        tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner
+    )
+    assert cached.messages[0].subject == "缓存来信"
+    transport.imap_error = MailError(
+        "MAIL_IMAP_FAILED",
+        "IMAP 连接失败（主机 imap.example.com:993）：timed out",
+    )
+    listing = get_inbox(
+        tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner
+    )
+    assert [item.subject for item in listing.messages] == ["缓存来信"]
+    assert listing.last_error and "IMAP" in listing.last_error
+    assert listing.empty_reason is None
+
+
+def test_sent_list_is_paginated_and_detail_includes_body(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _transport = mail_db
+    _configure(db, owner, agent_a.id)
+    for index in range(25):
+        _compose(db, owner, agent_a.id, subject=f"报价 {index}", body=f"正文 {index}")
+    listing = get_sent(
+        tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner
+    )
+    assert listing.page == 1
+    assert listing.page_size == 20
+    assert listing.total == 25
+    assert len(listing.messages) == 20
+    assert listing.messages[0].subject == "报价 24"
+    opened = read_message(
+        listing.messages[0].id,
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    assert opened.body_text == "正文 24"
+    assert opened.to == ["sales@example.com"]
+    assert opened.status == "sent"
+    assert opened.sent_at
+    page_two = get_sent(
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+        page=2,
+        page_size=20,
+    )
+    assert len(page_two.messages) == 5
+    assert page_two.messages[-1].subject == "报价 0"

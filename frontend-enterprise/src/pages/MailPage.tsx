@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import AppHeader from '@/components/AppHeader';
 import CapabilityScopeLoading from '@/components/CapabilityScopeLoading';
 import { DataTable, type DataTableColumn } from '@/components/DataTable';
+import { Paginator } from '@/components/Paginator';
 import {
   Input,
   Textarea,
@@ -34,6 +35,8 @@ import type {
 } from '../types';
 
 type MailTab = 'inbox' | 'compose' | 'sent' | 'config';
+
+const MAIL_PAGE_SIZE = 20;
 
 const TABS: UnderlineTabItem<MailTab>[] = [
   { value: 'inbox', label: '收件箱' },
@@ -93,6 +96,7 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
   const [password, setPassword] = useState('');
   const [mailboxError, setMailboxError] = useState('');
   const [listError, setListError] = useState('');
+  const [listPage, setListPage] = useState(1);
   const [sending, setSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mailboxSeqRef = useRef(0);
@@ -114,6 +118,7 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
       if (!next || isTeamScope(next)) return;
       setAgentId(next);
       setOpened(null);
+      setListPage(1);
     };
     window.addEventListener('ultrarag-enterprise-agent-scope-change', onScopeChange);
     return () => window.removeEventListener('ultrarag-enterprise-agent-scope-change', onScopeChange);
@@ -125,11 +130,16 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
   }, [agentId, agentScopeLoaded]);
 
   useEffect(() => {
+    setListPage(1);
+    setOpened(null);
+  }, [agentId, tab]);
+
+  useEffect(() => {
     if (!agentScopeLoaded || !agentId || isTeamScope(agentId)) return;
     if (tab === 'inbox') void loadInbox();
     if (tab === 'sent') void loadSent();
     if (tab === 'compose') void loadDrafts();
-  }, [agentId, tab, agentScopeLoaded, mailbox?.configured]);
+  }, [agentId, tab, agentScopeLoaded, mailbox?.configured, listPage]);
 
   async function loadAgents() {
     try {
@@ -190,14 +200,14 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
     setListError('');
     try {
       const result = await api.get<MailListResponse>(
-        `/api/enterprise/mail/inbox?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}`,
+        `/api/enterprise/mail/inbox?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}&page=${listPage}&page_size=${MAIL_PAGE_SIZE}`,
       );
       if (seq !== listSeqRef.current) return;
       setInbox(result);
+      setListError(result.last_error || '');
     } catch (error) {
       if (seq !== listSeqRef.current) return;
       notify.error(apiErrorMessage(error));
-      setInbox(null);
       setListError(apiErrorMessage(error));
     } finally {
       if (seq === listSeqRef.current) setLoading(false);
@@ -211,14 +221,14 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
     setListError('');
     try {
       const result = await api.get<MailListResponse>(
-        `/api/enterprise/mail/sent?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}`,
+        `/api/enterprise/mail/sent?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}&page=${listPage}&page_size=${MAIL_PAGE_SIZE}`,
       );
       if (seq !== listSeqRef.current) return;
       setSent(result);
+      setListError(result.last_error || '');
     } catch (error) {
       if (seq !== listSeqRef.current) return;
       notify.error(apiErrorMessage(error));
-      setSent(null);
       setListError(apiErrorMessage(error));
     } finally {
       if (seq === listSeqRef.current) setLoading(false);
@@ -376,13 +386,14 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
   }
 
   const configured = Boolean(mailbox?.configured);
+  const mailboxReady = mailbox !== null || Boolean(mailboxError);
   const listing = tab === 'sent' ? sent : inbox;
   const emptyReason = mailboxError
     ? mailboxError
     : !configured
       ? '这个员工还没有配置邮箱。请先在「配置邮箱」填写 IMAP 和 SMTP。'
       : listError || listing?.empty_reason || (tab === 'sent' ? '还没有已发送的邮件。' : '收件箱是空的。');
-  const showConfigCta = !configured && !mailboxError && canSend;
+  const showConfigCta = mailboxReady && !configured && !mailboxError && canSend;
 
   return (
     <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]">
@@ -406,6 +417,7 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
           onChange={(next) => {
             setTab(next);
             setOpened(null);
+            setListPage(1);
           }}
           variant="line"
           aria-label="邮件分区"
@@ -557,19 +569,43 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
 
       {(tab === 'inbox' || tab === 'sent') && !opened ? (
         <div className="mt-[20px]">
-          {!configured || (listing && listing.messages.length === 0 && !loading) ? (
+          {listError && (listing?.messages || []).length > 0 ? (
+            <p className="mb-[12px] rounded-[10px] bg-[#fff4f4] px-[12px] py-[8px] text-[12px] text-[#d20b0b]">
+              {listError}
+            </p>
+          ) : null}
+          {(!mailboxReady || (loading && !(listing?.messages || []).length)) ? (
+            <DataTable
+              columns={messageColumns(tab)}
+              data={listing?.messages || []}
+              rowKey={(row) => row.id}
+              loading
+              emptyText={emptyReason}
+            />
+          ) : !configured || (listing && listing.messages.length === 0) ? (
             <EmptyState
               text={emptyReason}
               onConfig={showConfigCta ? () => setTab('config') : undefined}
             />
           ) : (
-            <DataTable
-              columns={messageColumns(tab, (row) => void openMessage(row.id))}
-              data={listing?.messages || []}
-              rowKey={(row) => row.id}
-              loading={loading}
-              emptyText={emptyReason}
-            />
+            <>
+              <DataTable
+                columns={messageColumns(tab)}
+                data={listing?.messages || []}
+                rowKey={(row) => row.id}
+                loading={loading}
+                emptyText={emptyReason}
+                onRowClick={(row) => void openMessage(row.id)}
+              />
+              {(listing?.total || 0) > MAIL_PAGE_SIZE ? (
+                <Paginator
+                  aria-label={tab === 'sent' ? '已发送分页' : '收件箱分页'}
+                  page={listing?.page || listPage}
+                  pageCount={Math.max(1, Math.ceil((listing?.total || 0) / MAIL_PAGE_SIZE))}
+                  onChange={setListPage}
+                />
+              ) : null}
+            </>
           )}
         </div>
       ) : null}
@@ -601,6 +637,14 @@ function EmptyState({ text, onConfig }: { text: string; onConfig?: () => void })
   );
 }
 
+function messageStatusLabel(message: MailMessageRead): string {
+  if (message.folder === 'sent' || message.status === 'sent' || message.status === 'failed') {
+    if (message.status === 'failed') return message.smtp_error || '失败';
+    return '成功';
+  }
+  return message.unread ? '未读' : '已读';
+}
+
 function MessageDetail({
   message,
   canReply,
@@ -612,6 +656,7 @@ function MessageDetail({
   onBack: () => void;
   onReply: () => void;
 }) {
+  const when = formatDateTime(message.sent_at || message.received_at || message.created_at);
   return (
     <div className="mt-[20px] rounded-[16px] border border-[#e3e7f1] bg-white p-[24px]">
       <div className="flex items-center justify-between gap-[12px]">
@@ -619,11 +664,15 @@ function MessageDetail({
         {canReply ? <UIButton onClick={onReply}>回复</UIButton> : null}
       </div>
       <h2 className="mt-[16px] text-[18px] font-medium text-[#17191f]">{message.subject || '（无主题）'}</h2>
-      <p className="mt-[8px] m-0 text-[12px] text-[#697085]">
-        {message.from_address} → {message.to.join(', ')}
-      </p>
-      {message.status === 'failed' && message.smtp_error ? (
-        <p className="mt-[8px] text-[12px] text-[#d20b0b]">{message.smtp_error}</p>
+      <div className="mt-[8px] grid gap-[4px] text-[12px] text-[#697085]">
+        <p className="m-0">收件人：{message.to.join(', ') || '（无）'}</p>
+        {message.from_address ? <p className="m-0">发件人：{message.from_address}</p> : null}
+        {message.cc.length ? <p className="m-0">抄送：{message.cc.join(', ')}</p> : null}
+        <p className="m-0">时间：{when}</p>
+        <p className="m-0">状态：{messageStatusLabel(message)}</p>
+      </div>
+      {message.imap_append_note ? (
+        <p className="mt-[8px] text-[12px] text-[#697085]">{message.imap_append_note}</p>
       ) : null}
       <pre className="mt-[16px] whitespace-pre-wrap font-sans text-[14px] text-[#17191f]">{message.body_text}</pre>
       {message.attachments.length ? (
@@ -641,10 +690,7 @@ function MessageDetail({
   );
 }
 
-function messageColumns(
-  tab: MailTab,
-  onOpen: (row: MailMessageRead) => void,
-): DataTableColumn<MailMessageRead>[] {
+function messageColumns(tab: MailTab): DataTableColumn<MailMessageRead>[] {
   return [
     {
       key: 'from',
@@ -655,10 +701,10 @@ function messageColumns(
       key: 'subject',
       title: '主题',
       render: (row) => (
-        <button type="button" className={cn('text-left', row.unread && 'font-medium')} onClick={() => onOpen(row)}>
+        <span className={cn(row.unread && 'font-medium')}>
           {row.subject || '（无主题）'}
           {row.unread ? ' · 未读' : ''}
-        </button>
+        </span>
       ),
     },
     {
@@ -669,7 +715,7 @@ function messageColumns(
     {
       key: 'status',
       title: '状态',
-      render: (row) => (row.status === 'failed' ? (row.smtp_error || '失败') : row.status === 'sent' ? '成功' : row.unread ? '未读' : '已读'),
+      render: (row) => messageStatusLabel(row),
     },
   ];
 }

@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 EncryptionMode = Literal["ssl", "starttls", "none"]
 MailFolder = Literal["inbox", "sent", "draft"]
 
+MAIL_DEFAULT_PAGE_SIZE = 20
+MAIL_MAX_PAGE_SIZE = 50
+
 
 class MailboxConfigRequest(BaseModel):
     tenant_id: str
@@ -97,6 +100,10 @@ class MailListResponse(BaseModel):
     can_send: bool
     empty_reason: str | None = None
     messages: list[MailMessageRead] = Field(default_factory=list)
+    page: int = 1
+    page_size: int = MAIL_DEFAULT_PAGE_SIZE
+    total: int = 0
+    last_error: str | None = None
 
 
 class MailComposeRequest(BaseModel):
