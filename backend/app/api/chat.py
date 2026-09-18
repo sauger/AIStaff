@@ -3126,6 +3126,10 @@ _RESERVED_TOOL_LABELS = {
     "cabinet_read": "读取文件柜文件",
     "cabinet_save": "保存到文件柜",
     "cabinet_produce_from_template": "按模板生产文件",
+    "mail_list": "查看邮件",
+    "mail_read": "阅读邮件",
+    "mail_draft": "起草邮件",
+    "mail_send": "发送邮件",
 }
 
 _SKILL_COMPLETED_REASON_LABELS = {

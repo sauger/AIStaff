@@ -1279,3 +1279,71 @@ export type CabinetListResponse = {
   max_cabinet_bytes: number;
   entries: CabinetEntryRead[];
 };
+
+export type MailEncryption = 'ssl' | 'starttls' | 'none';
+
+export type MailboxStatusRead = {
+  agent_id: string;
+  configured: boolean;
+  email_address?: string | null;
+  imap_host?: string | null;
+  imap_port?: number | null;
+  imap_encryption?: string | null;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  smtp_encryption?: string | null;
+  username?: string | null;
+  password_configured: boolean;
+  can_configure: boolean;
+  can_send: boolean;
+  last_synced_at?: string | null;
+  last_error?: string | null;
+};
+
+export type MailAttachmentRead = {
+  filename: string;
+  content_type?: string | null;
+  size_bytes: number;
+  cabinet_path?: string | null;
+  saved: boolean;
+  error?: string | null;
+};
+
+export type MailMessageRead = {
+  id: string;
+  folder: 'inbox' | 'sent' | 'draft';
+  status: string;
+  direction: string;
+  source: string;
+  from_address: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body_text: string;
+  unread: boolean;
+  sent_at?: string | null;
+  received_at?: string | null;
+  smtp_error?: string | null;
+  imap_append_note?: string | null;
+  attachments: MailAttachmentRead[];
+  confirm_required: boolean;
+  in_reply_to?: string | null;
+  created_at: string;
+};
+
+export type MailListResponse = {
+  agent_id: string;
+  folder: 'inbox' | 'sent' | 'draft';
+  configured: boolean;
+  can_send: boolean;
+  empty_reason?: string | null;
+  messages: MailMessageRead[];
+};
+
+export type MailSendResult = {
+  delivered: boolean;
+  draft: boolean;
+  message: MailMessageRead;
+  notice: string;
+};

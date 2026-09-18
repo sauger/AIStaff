@@ -32,6 +32,8 @@ from app.api import (
     wechat_kf,
 )
 from app.cabinet.api import router as cabinet_router
+from app.mail.api import router as mail_router
+from app.mail.poller import start_mail_poller, stop_mail_poller
 from app.async_jobs import shutdown_async_jobs, start_async_jobs
 from app.channels import start_channel_services, stop_channel_services
 from app.config import get_settings
@@ -88,6 +90,7 @@ def on_startup() -> None:
         start_channel_services()
         start_timeout_sweeper()
         start_harness_recovery_sweeper()
+        start_mail_poller()
         # Internal durable jobs (for example feedback analysis) use the same
         # recovery table even when the externally exposed API is disabled.
         recover_public_jobs()
@@ -110,6 +113,7 @@ def on_shutdown() -> None:
         stop_background_worker()
         stop_timeout_sweeper()
         stop_harness_recovery_sweeper()
+        stop_mail_poller()
         shutdown_async_jobs()
     finally:
         release_runtime_instance_lock()
@@ -131,6 +135,7 @@ app.include_router(general_skills.router)
 app.include_router(knowledge_bases.router)
 app.include_router(knowledge.router)
 app.include_router(cabinet_router)
+app.include_router(mail_router)
 app.include_router(skills.router)
 app.include_router(model_configs.router)
 app.include_router(memories.router)

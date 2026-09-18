@@ -1,0 +1,5 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="mail">
+<path fill-rule="evenodd" clip-rule="evenodd" d="M2.1 2.1C1.3268 2.1 0.7 2.7268 0.7 3.5V10.5C0.7 11.2732 1.3268 11.9 2.1 11.9H11.9C12.6732 11.9 13.3 11.2732 13.3 10.5V3.5C13.3 2.7268 12.6732 2.1 11.9 2.1H2.1ZM1.4 3.5C1.4 3.1134 1.7134 2.8 2.1 2.8H11.9C12.2866 2.8 12.6 3.1134 12.6 3.5V3.92L7 7.28L1.4 3.92V3.5ZM1.4 4.78V10.5C1.4 10.8866 1.7134 11.2 2.1 11.2H11.9C12.2866 11.2 12.6 10.8866 12.6 10.5V4.78L7.21 8.03C7.08 8.11 6.92 8.11 6.79 8.03L1.4 4.78Z" fill="currentColor" stroke="var(--stroke-0, #858B9C)" stroke-width="0.2"/>
+</g>
+</svg>

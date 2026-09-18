@@ -548,6 +548,15 @@ class HarnessCapabilityInvoker:
             from app.cabinet.harness import invoke_cabinet_tool
 
             return invoke_cabinet_tool(self, name, arguments)
+        if name in {
+            "mail_list",
+            "mail_read",
+            "mail_draft",
+            "mail_send",
+        }:
+            from app.mail.harness import invoke_mail_tool
+
+            return invoke_mail_tool(self, name, arguments)
         return _failure(
             "UNSUPPORTED_INTERNAL_CAPABILITY",
             "不支持的 Harness 内部能力。",

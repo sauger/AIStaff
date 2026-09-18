@@ -33,6 +33,9 @@ from app.session.attachment_store import read_staged_chat_attachment
 from app.session.session_schema import ChatAttachmentRead
 
 CHAT_INBOX_FOLDER = "对话附件"
+MAIL_ATTACHMENT_FOLDER = "邮件附件"
+MAIL_INBOUND_FOLDER = "邮件附件/收件"
+MAIL_OUTBOUND_FOLDER = "邮件附件/发件"
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_CABINET_BYTES = 200 * 1024 * 1024
 MAX_PROMPT_ENTRIES = 80
@@ -567,7 +570,7 @@ def prompt_context(db: Session, tenant_id: str, agent_id: str) -> str:
         "按文件名或路径取用：cabinet_find / cabinet_list；读取时用 cabinet_read（文件会放到工作区，不要把整个二进制塞进回复）。",
         "以某文件为模板生产：cabinet_produce_from_template，默认另存为新文件、不覆盖原模板；仅当用户明确要求覆盖时才覆盖。",
         "处理不了的格式必须说明原因，不得假装已生成。任务产物不会自动入柜，必须 cabinet_save 显式保存。",
-        "对话附件默认落在「对话附件/」。",
+        "对话附件默认落在「对话附件/」。邮件附件单独落在「邮件附件/收件」和「邮件附件/发件」，不要和模板混放。",
     ]
     if not rows:
         lines.append("文件柜当前为空。用户可在控制台上传，或在对话中发送附件。")
@@ -756,5 +759,37 @@ def _unique_name(
     index = 2
     while get_entry(db, tenant_id, agent_id, join_path(folder, candidate)) is not None:
         candidate = f"{stem}-{index}{suffix}"
+        index += 1
+    return candidate
+
+
+def ensure_mail_attachment_zone(
+    db: Session, tenant_id: str, agent_id: str, *, source: str = "mail"
+) -> None:
+    make_folder(db, tenant_id, agent_id, "", MAIL_ATTACHMENT_FOLDER, source=source)
+    make_folder(db, tenant_id, agent_id, MAIL_ATTACHMENT_FOLDER, "收件", source=source)
+    make_folder(db, tenant_id, agent_id, MAIL_ATTACHMENT_FOLDER, "发件", source=source)
+
+
+def unique_mail_filename(
+    db: Session,
+    tenant_id: str,
+    agent_id: str,
+    folder: str,
+    filename: str,
+    *,
+    token: str = "",
+) -> str:
+    base = normalize_name(filename)
+    if get_entry(db, tenant_id, agent_id, join_path(folder, base)) is None:
+        return base
+    stem = Path(base).stem or base
+    suffix = Path(base).suffix
+    stamp = "".join(ch for ch in str(token) if ch.isalnum() or ch in "-_")[:18]
+    stamp = stamp or utc_now().strftime("%Y%m%d%H%M%S")
+    candidate = f"{stem}-{stamp}{suffix}"
+    index = 2
+    while get_entry(db, tenant_id, agent_id, join_path(folder, candidate)) is not None:
+        candidate = f"{stem}-{stamp}-{index}{suffix}"
         index += 1
     return candidate
