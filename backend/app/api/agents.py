@@ -1310,9 +1310,10 @@ def binding_read(row: AgentResourceBinding) -> AgentResourceBindingRead:
 def _copy_agent_scope_from_source(
     db: Session, tenant_id: str, source: AgentProfile, target: AgentProfile
 ) -> None:
-    # Employee cabinets and mailboxes stay with the source employee. Copying
-    # skills, login recipes, or the agent profile must not copy working files,
-    # mailbox credentials, inbox cache, or sent records.
+    # Employee cabinets, mailboxes, inbound teaching rules, and mail history
+    # stay with the source employee. Copying skills, login recipes, or the
+    # agent profile must not copy working files, mailbox credentials, inbox
+    # cache, sent records, or 来信教学规矩.
     if source.is_overall:
         copy_overall_scope_to_agent(db, tenant_id, target)
     else:

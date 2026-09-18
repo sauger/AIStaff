@@ -1420,6 +1420,29 @@ function skillConfirmsBeforeSendMail(row: GeneralSkillRead | undefined): boolean
   return false;
 }
 
+function skillInboundAutoRun(row: GeneralSkillRead | undefined): boolean {
+  if (!row) return false;
+  if (row.inbound_auto_run === true) return true;
+  for (const blob of [row.runtime_config, row.permissions, row.metadata]) {
+    const value = blob?.inbound_auto_run;
+    if (value === true) return true;
+    if (typeof value === 'string' && ['true', 'yes', '1'].includes(value.trim().toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function skillInboundMatchHint(row: GeneralSkillRead | undefined): string {
+  if (!row) return '';
+  if (row.inbound_match_hint) return row.inbound_match_hint;
+  for (const blob of [row.runtime_config, row.permissions, row.metadata]) {
+    const value = blob?.inbound_match_hint;
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
 function ConfirmBeforeSendMailControl({
   checked,
   onChange,
@@ -1447,6 +1470,49 @@ function ConfirmBeforeSendMailControl({
   );
 }
 
+function InboundAutoRunControl({
+  checked,
+  hint,
+  onCheckedChange,
+  onHintChange,
+  disabled = false,
+}: {
+  checked: boolean;
+  hint: string;
+  onCheckedChange: (next: boolean) => void;
+  onHintChange: (next: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="rounded-[12px] border border-[#eceef1] bg-[#fafbfc] px-[14px] py-[12px]">
+      <div className="flex items-center justify-between gap-[16px]">
+        <div className="min-w-0">
+          <span className="text-[13px] font-medium text-[#18181a]">可被来信自动跑</span>
+          <p className="mt-[2px] text-[12px] leading-[1.55] text-[#858b9c]">
+            打开后，岗位邮箱来信分流才可能选中该技能并自动做完（含回信发出）。默认关闭。
+          </p>
+        </div>
+        <Switch
+          checked={checked}
+          disabled={disabled}
+          aria-label="可被来信自动跑"
+          onCheckedChange={onCheckedChange}
+        />
+      </div>
+      <div className="mt-[12px]">
+        <span className={FIELD_LABEL_CLASS}>来信触发说明</span>
+        <Input
+          className="mt-[6px]"
+          value={hint}
+          disabled={disabled || !checked}
+          placeholder="例如：供应商报销申请"
+          onChange={(event) => onHintChange(event.target.value)}
+        />
+      </div>
+    </div>
+  );
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-[6px]">
@@ -1470,6 +1536,8 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
   const [skillHomepage, setSkillHomepage] = useState('');
   const [capabilityScope, setCapabilityScope] = useState<CapabilityScope>('general');
   const [confirmBeforeSendMail, setConfirmBeforeSendMail] = useState(false);
+  const [inboundAutoRun, setInboundAutoRun] = useState(false);
+  const [inboundMatchHint, setInboundMatchHint] = useState('');
   const [skillFiles, setSkillFiles] = useState<GeneralSkillFile[]>([
     { path: 'SKILL.md', content: EMPTY_SKILL_MARKDOWN, size: EMPTY_SKILL_MARKDOWN.length, mime_type: 'text/markdown' },
   ]);
@@ -1684,6 +1752,8 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       || skillHomepage !== (original.homepage || '')
       || capabilityScope !== normalizeCapabilityScope(original.capability_scope)
       || confirmBeforeSendMail !== skillConfirmsBeforeSendMail(original)
+      || inboundAutoRun !== skillInboundAutoRun(original)
+      || inboundMatchHint !== skillInboundMatchHint(original)
       || normalizedSkillFiles(skillFiles) !== normalizedSkillFiles(
         original.skill_files?.length ? original.skill_files : [{ path: 'SKILL.md', content: original.skill_markdown }],
       )
@@ -1711,6 +1781,8 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
         homepage: skillHomepage.trim() || undefined,
         capability_scope: capabilityScope,
         confirm_before_send_mail: confirmBeforeSendMail,
+        inbound_auto_run: inboundAutoRun,
+        inbound_match_hint: inboundMatchHint,
         markdown,
         files: skillFiles.length ? skillFiles : [{ path: 'SKILL.md', content: markdown }],
         directories: skillDirectories,
@@ -1727,6 +1799,8 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       setSkillHomepage(row.homepage || '');
       setCapabilityScope(normalizeCapabilityScope(row.capability_scope));
       setConfirmBeforeSendMail(skillConfirmsBeforeSendMail(row));
+      setInboundAutoRun(skillInboundAutoRun(row));
+      setInboundMatchHint(skillInboundMatchHint(row));
       setSkillFiles(row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md', content: row.skill_markdown }]);
       setSkillDirectories(row.skill_directories || []);
       setSelectedFilePath((row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md' }])[0].path);
@@ -1754,6 +1828,8 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setSkillHomepage('');
     setCapabilityScope('general');
     setConfirmBeforeSendMail(false);
+    setInboundAutoRun(false);
+    setInboundMatchHint('');
     setSkillFiles([{ path: 'SKILL.md', content: EMPTY_SKILL_MARKDOWN, size: EMPTY_SKILL_MARKDOWN.length, mime_type: 'text/markdown' }]);
     setSkillDirectories([]);
     setSelectedFilePath('SKILL.md');
@@ -1775,6 +1851,8 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setSkillHomepage(row.homepage || '');
     setCapabilityScope(normalizeCapabilityScope(row.capability_scope));
     setConfirmBeforeSendMail(skillConfirmsBeforeSendMail(row));
+    setInboundAutoRun(skillInboundAutoRun(row));
+    setInboundMatchHint(skillInboundMatchHint(row));
     setSkillFiles(row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md', content: row.skill_markdown }]);
     setSkillDirectories(row.skill_directories || []);
     setSelectedFilePath((row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md' }])[0].path);
@@ -1796,6 +1874,8 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       setSkillHomepage(row.homepage || '');
       setCapabilityScope(normalizeCapabilityScope(row.capability_scope));
       setConfirmBeforeSendMail(skillConfirmsBeforeSendMail(row));
+      setInboundAutoRun(skillInboundAutoRun(row));
+      setInboundMatchHint(skillInboundMatchHint(row));
       setMarkdown(row.skill_markdown);
       setSkillFiles(row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md', content: row.skill_markdown }]);
       setSkillDirectories(row.skill_directories || []);
@@ -2630,6 +2710,15 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
                 <ConfirmBeforeSendMailControl
                   checked={confirmBeforeSendMail}
                   onChange={setConfirmBeforeSendMail}
+                  disabled={!canManageCurrentScope}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <InboundAutoRunControl
+                  checked={inboundAutoRun}
+                  hint={inboundMatchHint}
+                  onCheckedChange={setInboundAutoRun}
+                  onHintChange={setInboundMatchHint}
                   disabled={!canManageCurrentScope}
                 />
               </div>

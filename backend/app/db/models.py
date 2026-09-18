@@ -826,6 +826,7 @@ class EmployeeMailbox(SQLModel, table=True):
     smtp_encryption: str = Field(default="starttls")
     username: str
     password_encrypted: str
+    enabled: bool = Field(default=True, index=True)
     last_synced_at: Optional[datetime] = None
     last_error: Optional[str] = None
     uid_validity: Optional[str] = None
@@ -868,7 +869,39 @@ class EmployeeMailMessage(SQLModel, table=True):
     attachments_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     confirm_required: bool = False
     confirmed_at: Optional[datetime] = None
+    triage_disposition: Optional[str] = Field(default=None, index=True)
+    triage_state: Optional[str] = Field(default=None, index=True)
+    triage_reason: Optional[str] = None
+    triage_skill_id: Optional[str] = None
+    triage_skill_name: Optional[str] = None
+    triage_notified_at: Optional[datetime] = None
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class EmployeeMailTriageRule(SQLModel, table=True):
+    """Owner teaching for inbound mail. Per-employee; not copied with agents."""
+
+    __tablename__ = "employee_mail_triage_rules"
+    __table_args__ = (
+        Index(
+            "ix_employee_mail_triage_rules_agent_from",
+            "tenant_id",
+            "agent_id",
+            "from_address",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("mrule"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    from_address: str = Field(index=True)
+    disposition: str = Field(index=True)
+    skill_id: Optional[str] = None
+    skill_slug: Optional[str] = None
+    instruction: str = ""
+    source_message_id: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

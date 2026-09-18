@@ -6,6 +6,7 @@ from time import sleep
 from sqlmodel import Session
 
 from app.db import engine
+from app.mail.inbound import triage_all_pending
 from app.mail.service import POLL_INTERVAL_SECONDS, sync_all_mailboxes
 
 _stopped = False
@@ -16,6 +17,7 @@ def run_poller(*, once: bool = False, poll_seconds: float = POLL_INTERVAL_SECOND
     while not _stopped:
         with Session(engine) as db:
             sync_all_mailboxes(db)
+            triage_all_pending(db)
         if once:
             return
         sleep(max(5.0, poll_seconds))

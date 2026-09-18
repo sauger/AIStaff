@@ -30,6 +30,14 @@ from app.mail.confirm import (
     send_requires_confirmation,
 )
 from app.mail.errors import MailError
+from app.mail.inbound import (
+    fill_message_read,
+    mailbox_is_enabled,
+    pending_owner_count,
+    purge_agent_inbound_mail,
+    require_enabled_mailbox,
+    triage_pending_for_mailbox,
+)
 from app.mail.schema import (
     MAIL_DEFAULT_PAGE_SIZE,
     MAIL_MAX_PAGE_SIZE,
@@ -126,8 +134,9 @@ def mailbox_status(
         smtp_encryption=row.smtp_encryption,
         username=row.username,
         password_configured=bool(row.password_encrypted),
+        enabled=bool(row.enabled),
         can_configure=can_configure,
-        can_send=can_send,
+        can_send=can_send and bool(row.enabled),
         last_synced_at=row.last_synced_at.isoformat() if row.last_synced_at else None,
         last_error=row.last_error,
     )
@@ -232,7 +241,7 @@ def list_inbox(
         return _unconfigured_list(agent_id, "inbox", page=page, page_size=page_size)
     last_error = mailbox.last_error
     total = _folder_count(db, tenant_id, agent_id, "inbox")
-    if sync:
+    if sync and mailbox_is_enabled(mailbox):
         try:
             total = sync_inbox(db, mailbox, offset=offset, limit=page_size)
             last_error = None
@@ -247,13 +256,15 @@ def list_inbox(
         agent_id=agent_id,
         folder="inbox",
         configured=True,
-        can_send=can_send,
+        can_send=can_send and mailbox_is_enabled(mailbox),
         empty_reason=_empty_reason(rows, last_error, "收件箱是空的。"),
-        messages=[message_read(item, include_body=False) for item in rows],
+        messages=[message_read(item, include_body=False, can_teach=can_send) for item in rows],
         page=page,
         page_size=page_size,
         total=total,
         last_error=last_error,
+        mailbox_enabled=mailbox_is_enabled(mailbox),
+        pending_owner_count=pending_owner_count(db, tenant_id, agent_id),
     )
 
 
@@ -276,12 +287,14 @@ def list_sent(
         agent_id=agent_id,
         folder="sent",
         configured=True,
-        can_send=can_send,
+        can_send=can_send and mailbox_is_enabled(mailbox),
         empty_reason=_empty_reason(rows, None, "还没有已发送的邮件。"),
-        messages=[message_read(item, include_body=False) for item in rows],
+        messages=[message_read(item, include_body=False, can_teach=False) for item in rows],
         page=page,
         page_size=page_size,
         total=total,
+        mailbox_enabled=mailbox_is_enabled(mailbox),
+        pending_owner_count=pending_owner_count(db, tenant_id, agent_id),
     )
 
 
@@ -304,12 +317,14 @@ def list_drafts(
         agent_id=agent_id,
         folder="draft",
         configured=True,
-        can_send=can_send,
+        can_send=can_send and mailbox_is_enabled(mailbox),
         empty_reason="没有待确认的草稿。" if not rows else None,
         messages=[message_read(item, include_body=True) for item in rows],
         page=1,
         page_size=max(len(rows), 1),
         total=len(rows),
+        mailbox_enabled=mailbox_is_enabled(mailbox),
+        pending_owner_count=pending_owner_count(db, tenant_id, agent_id),
     )
 
 
@@ -349,6 +364,7 @@ def compose(
     invoker: Any | None = None,
 ) -> MailSendResult:
     mailbox = _require_mailbox(db, tenant_id, agent_id)
+    require_enabled_mailbox(mailbox)
     to = parse_address_list(request.to)
     if not to:
         raise MailError(
@@ -423,6 +439,7 @@ def send_draft(
     invoker: Any | None = None,
 ) -> MailSendResult:
     mailbox = _require_mailbox(db, tenant_id, agent_id)
+    require_enabled_mailbox(mailbox)
     row = get_message(db, tenant_id, agent_id, draft_id)
     if row.folder != "draft" or row.status not in {"pending_confirm", "draft"}:
         raise MailError("MAIL_NOT_DRAFT", "这封邮件不是待确认草稿，不能再当草稿发出。")
@@ -477,6 +494,7 @@ def sync_inbox(
     offset: int = 0,
     limit: int = MAIL_DEFAULT_PAGE_SIZE,
 ) -> int:
+    require_enabled_mailbox(mailbox)
     fetched = get_transport().fetch_inbox(_connection(mailbox), offset=offset, limit=limit)
     for item in fetched.messages:
         _upsert_inbox(db, mailbox, item)
@@ -485,12 +503,15 @@ def sync_inbox(
     mailbox.updated_at = utc_now()
     db.add(mailbox)
     db.commit()
+    triage_pending_for_mailbox(db, mailbox)
     return fetched.total
 
 
 def sync_all_mailboxes(db: Session) -> None:
     rows = db.exec(select(EmployeeMailbox)).all()
     for mailbox in rows:
+        if not mailbox_is_enabled(mailbox):
+            continue
         try:
             sync_inbox(db, mailbox)
         except MailError as exc:
@@ -505,9 +526,14 @@ def sync_all_mailboxes(db: Session) -> None:
             db.commit()
 
 
-def message_read(row: EmployeeMailMessage, *, include_body: bool = True) -> MailMessageRead:
+def message_read(
+    row: EmployeeMailMessage,
+    *,
+    include_body: bool = True,
+    can_teach: bool = False,
+) -> MailMessageRead:
     attachments = [MailAttachmentRead.model_validate(item) for item in (row.attachments_json or [])]
-    return MailMessageRead(
+    payload = MailMessageRead(
         id=row.id,
         folder=row.folder,  # type: ignore[arg-type]
         status=row.status,
@@ -529,6 +555,7 @@ def message_read(row: EmployeeMailMessage, *, include_body: bool = True) -> Mail
         in_reply_to=row.in_reply_to,
         created_at=row.created_at.isoformat(),
     )
+    return fill_message_read(payload, row, can_teach=can_teach)
 
 
 def purge_agent_mail(db: Session, tenant_id: str, agent_id: str) -> None:
@@ -543,6 +570,7 @@ def purge_agent_mail(db: Session, tenant_id: str, agent_id: str) -> None:
     ).all()
     for row in rows:
         db.delete(row)
+    purge_agent_inbound_mail(db, tenant_id, agent_id)
     db.commit()
 
 
@@ -553,11 +581,15 @@ def prompt_context(db: Session, tenant_id: str, agent_id: str) -> str:
         "按原始邮箱地址发信即可，不要按人名猜地址，也不要去知识库或通讯录里找人。",
         "列出收件箱：mail_list；读信：mail_read；起草：mail_draft；发送：mail_send。",
         "用户说先起草、确认后再发，或技能标明 confirm_before_send_mail 时，只能出草稿，确认前不得 SMTP 投递。",
+        "来信命中已开「可被来信自动跑」的技能时，回信和对外提交直接做完，不再等人确认。",
         "附件会进入文件柜「邮件附件/收件」或「邮件附件/发件」，不要放进对话附件或模板目录。",
         "邮箱密码不可见，也不要写入技能或回复。",
     ]
     if mailbox is None:
         lines.append("这个员工还没有配置邮箱。若用户要求发信或读信，必须说明未配置，不得假装已发送或已收取。")
+        return "\n".join(lines)
+    if not mailbox_is_enabled(mailbox):
+        lines.append("该员工邮箱已停用：不能拉新信、不能分流、不能发出。历史收件和已发送仍可查看。")
         return "\n".join(lines)
     lines.append(f"已配置发件地址：{mailbox.email_address}。")
     pending = db.exec(
@@ -693,6 +725,7 @@ def _upsert_inbox(db: Session, mailbox: EmployeeMailbox, fetched: FetchedMessage
             imap_uid=fetched.uid,
             rfc_message_id=fetched.rfc_message_id or None,
             dedupe_key=dedupe,
+            triage_state="pending",
         )
         return
     existing.imap_uid = fetched.uid
@@ -925,6 +958,7 @@ def _store_message(
     imap_uid: str | None = None,
     rfc_message_id: str | None = None,
     confirm_required: bool = False,
+    triage_state: str | None = None,
 ) -> EmployeeMailMessage:
     row = EmployeeMailMessage(
         tenant_id=tenant_id,
@@ -949,6 +983,7 @@ def _store_message(
         imap_append_note=imap_append_note,
         attachments_json=attachments,
         confirm_required=confirm_required,
+        triage_state=triage_state or ("pending" if folder == "inbox" else None),
     )
     db.add(row)
     db.commit()
@@ -1023,6 +1058,8 @@ def _unconfigured_list(
         page=page,
         page_size=page_size,
         total=0,
+        mailbox_enabled=False,
+        pending_owner_count=0,
     )
 
 

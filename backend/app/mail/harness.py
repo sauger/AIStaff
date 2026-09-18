@@ -243,11 +243,17 @@ def _send(invoker: Any, agent_id: str, arguments: dict[str, Any]) -> dict[str, A
         )
         return _send_payload(result)
     as_draft = bool(arguments.get("as_draft")) or send_requires_confirmation(invoker, arguments)
+    if getattr(invoker, "inbound_mail_auto_complete", False):
+        source = "inbound_skill"
+    elif getattr(invoker, "active_skill", None):
+        source = "skill"
+    else:
+        source = "chat"
     request = _compose_request(
         invoker.tenant_id,
         arguments,
         as_draft=as_draft,
-        source="skill" if getattr(invoker, "active_skill", None) else "chat",
+        source=source,
     )
     result = compose(
         invoker.db,

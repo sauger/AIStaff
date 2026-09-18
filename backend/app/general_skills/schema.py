@@ -30,6 +30,8 @@ class GeneralSkillImportRequest(BaseModel):
     runtime_config: Optional[dict[str, Any]] = None
     permissions: Optional[dict[str, Any]] = None
     confirm_before_send_mail: Optional[bool] = None
+    inbound_auto_run: Optional[bool] = None
+    inbound_match_hint: Optional[str] = None
 
 
 class GeneralSkillClawHubImportRequest(BaseModel):
@@ -45,6 +47,8 @@ class GeneralSkillClawHubImportRequest(BaseModel):
     runtime_config: Optional[dict[str, Any]] = None
     permissions: Optional[dict[str, Any]] = None
     confirm_before_send_mail: Optional[bool] = None
+    inbound_auto_run: Optional[bool] = None
+    inbound_match_hint: Optional[str] = None
 
 
 class GeneralSkillPackageUploadRequest(BaseModel):
@@ -61,6 +65,8 @@ class GeneralSkillPackageUploadRequest(BaseModel):
     runtime_config: Optional[dict[str, Any]] = None
     permissions: Optional[dict[str, Any]] = None
     confirm_before_send_mail: Optional[bool] = None
+    inbound_auto_run: Optional[bool] = None
+    inbound_match_hint: Optional[str] = None
 
 
 class GeneralSkillRead(BaseModel):
@@ -79,6 +85,8 @@ class GeneralSkillRead(BaseModel):
     permissions: dict[str, Any] = Field(default_factory=dict)
     runtime_config: dict[str, Any] = Field(default_factory=dict)
     confirm_before_send_mail: bool = False
+    inbound_auto_run: bool = False
+    inbound_match_hint: str = ""
     created_at: str
     updated_at: str
 

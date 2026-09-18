@@ -167,6 +167,7 @@ class HarnessCapabilityInvoker:
         )
         self._loaded_general_skill_names: set[str] = set()
         self.confirm_before_send_mail = False
+        self.inbound_mail_auto_complete = False
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self._raise_if_cancelled()
@@ -857,7 +858,7 @@ class HarnessCapabilityInvoker:
             )
         result = self._read_general_skill_package(skill, metadata, query)
         self._loaded_general_skill_names.add(f"general_skill.{skill.slug}")
-        if skill_requires_mail_confirm(skill):
+        if skill_requires_mail_confirm(skill) and not self.inbound_mail_auto_complete:
             self.confirm_before_send_mail = True
         if requested_operation == "execute":
             result["data"]["requested_operation"] = "execute"

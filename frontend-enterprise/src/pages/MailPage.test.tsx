@@ -137,7 +137,7 @@ describe('MailPage', () => {
     renderMail(ownerUser);
 
     expect(await screen.findByText('邮件')).toBeTruthy();
-    expect(screen.getByText('这个员工还没有配置邮箱。请先在「配置邮箱」填写 IMAP 和 SMTP。')).toBeTruthy();
+    expect(await screen.findByText('这个员工还没有配置邮箱。请先在「配置邮箱」填写 IMAP 和 SMTP。')).toBeTruthy();
     expect(screen.getByText('去配置邮箱')).toBeTruthy();
     expect(screen.getByText('收件箱')).toBeTruthy();
     expect(screen.getByText('写邮件')).toBeTruthy();
@@ -289,6 +289,137 @@ describe('MailPage', () => {
     expect(screen.getByText('收件人：sales@example.com')).toBeTruthy();
     expect(screen.getByText('状态：成功')).toBeTruthy();
     expect(screen.getByText(/^时间：/)).toBeTruthy();
+  });
+
+  it('shows pending-owner queue and teaching actions for the owner', async () => {
+    const pending = mailMessage({
+      id: 'mail-pending',
+      subject: '请问能否处理',
+      from_address: 'vendor@example.com',
+      unread: false,
+      triage_disposition: 'ask_owner',
+      triage_label: '待主人处理',
+      triage_reason: '没有已开开关技能能认领',
+      can_teach: true,
+      body_text: '正文',
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([ownedAgent]);
+      if (url.includes('/api/enterprise/mail/mailbox')) return jsonResponse(configuredMailbox);
+      if (url.includes('/api/enterprise/general-skills')) {
+        return jsonResponse([{
+          id: 'skill-1',
+          tenant_id: 'tenant_demo',
+          slug: 'reimburse',
+          name: '报销申请',
+          skill_markdown: '# 报销',
+          skill_files: [],
+          metadata: {},
+          status: 'published',
+          permissions: {},
+          runtime_config: {},
+          inbound_auto_run: true,
+          created_at: '2026-09-18T00:00:00Z',
+          updated_at: '2026-09-18T00:00:00Z',
+        }]);
+      }
+      if (url.includes('/api/enterprise/mail/pending-owner')) {
+        return jsonResponse({
+          agent_id: 'agent-1',
+          folder: 'inbox',
+          configured: true,
+          can_send: true,
+          messages: [pending],
+          page: 1,
+          page_size: 1,
+          total: 1,
+          pending_owner_count: 1,
+        });
+      }
+      if (url.includes('/api/enterprise/mail/inbox')) {
+        return jsonResponse({
+          agent_id: 'agent-1',
+          folder: 'inbox',
+          configured: true,
+          can_send: true,
+          messages: [pending],
+          page: 1,
+          page_size: 20,
+          total: 1,
+          pending_owner_count: 1,
+        });
+      }
+      if (url.includes('/api/enterprise/mail/messages/mail-pending/teach')) {
+        expect(init?.method).toBe('POST');
+        return jsonResponse({
+          ...pending,
+          triage_disposition: 'ignore',
+          triage_label: '已忽略',
+          body_text: '正文',
+        });
+      }
+      if (url.includes('/api/enterprise/mail/messages/mail-pending')) {
+        return jsonResponse({ ...pending, body_text: '正文' });
+      }
+      return jsonResponse([]);
+    }));
+
+    const user = userEvent.setup();
+    renderMail(ownerUser);
+    expect(await screen.findByText('待主人处理（1）')).toBeTruthy();
+    await user.click(screen.getByText('请问能否处理 · vendor@example.com'));
+    expect(await screen.findByText('去向理由：没有已开开关技能能认领')).toBeTruthy();
+    expect(screen.getByText('这是垃圾')).toBeTruthy();
+    expect(screen.getByText('下次仍问我')).toBeTruthy();
+    await user.click(screen.getByText('这是垃圾'));
+    expect(await screen.findByText('状态：已忽略')).toBeTruthy();
+  });
+
+  it('lets the owner disable the mailbox and hides send', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const enabled = !(init?.method === 'PUT' && url.includes('/mailbox/enabled'));
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([ownedAgent]);
+      if (url.includes('/api/enterprise/general-skills')) return jsonResponse([]);
+      if (url.includes('/api/enterprise/mail/pending-owner')) {
+        return jsonResponse({
+          agent_id: 'agent-1',
+          folder: 'inbox',
+          configured: true,
+          can_send: true,
+          messages: [],
+          total: 0,
+        });
+      }
+      if (url.includes('/api/enterprise/mail/mailbox/enabled')) {
+        return jsonResponse({ ...configuredMailbox, enabled: false, can_send: false });
+      }
+      if (url.includes('/api/enterprise/mail/mailbox')) {
+        return jsonResponse({ ...configuredMailbox, enabled });
+      }
+      if (url.includes('/api/enterprise/mail/inbox')) {
+        return jsonResponse({
+          agent_id: 'agent-1',
+          folder: 'inbox',
+          configured: true,
+          can_send: true,
+          messages: [mailMessage({ subject: '历史来信', unread: false, body_text: '' })],
+          page: 1,
+          page_size: 20,
+          total: 1,
+          mailbox_enabled: enabled,
+        });
+      }
+      return jsonResponse([]);
+    }));
+
+    const user = userEvent.setup();
+    renderMail(ownerUser);
+    await user.click(await screen.findByRole('tab', { name: '配置邮箱' }));
+    expect(await screen.findByText('停用邮箱')).toBeTruthy();
+    await user.click(screen.getByText('停用邮箱'));
+    expect(await screen.findByText('邮箱已停用：不再拉新信、不再分流、也不能发出。历史来信和已发送仍可打开。')).toBeTruthy();
   });
 
   it('keeps the cached inbox page when IMAP reports last_error', async () => {

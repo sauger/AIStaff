@@ -599,7 +599,12 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
     # handoff_notice/handoff_ack 投递成功后,把飞书返回的 message_id 回写到 delivery;
     # handoff_notice 额外同步到 HumanHandoffRequest.notify_message_id。阶段 4 据此
     # 关联处理人的飞书引用回复(含对确认消息的再次回复)。
-    if delivery.kind in {"handoff_notice", "handoff_ack"} and sent_message_id:
+    if delivery.kind in {
+        "handoff_notice",
+        "handoff_ack",
+        "mail_triage_notice",
+        "mail_triage_ack",
+    } and sent_message_id:
         delivery.message_id = sent_message_id
         if delivery.kind == "handoff_notice":
             _write_handoff_notify_message_id(db, delivery, sent_message_id)

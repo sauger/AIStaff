@@ -381,6 +381,49 @@ def test_import_general_skill_accepts_confirm_before_send_mail() -> None:
         assert "confirm_before_send_mail" not in cleared.runtime_config
 
 
+def test_import_general_skill_accepts_inbound_auto_run() -> None:
+    with _test_session() as db:
+        _seed_minimal_tenant(db)
+        db.add(
+            AgentProfile(
+                id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True
+            )
+        )
+        db.commit()
+
+        created = import_general_skill(
+            GeneralSkillImportRequest(
+                tenant_id="tenant_demo",
+                name="报销技能",
+                slug="reimburse",
+                markdown="# 报销",
+                inbound_auto_run=True,
+                inbound_match_hint="供应商报销申请",
+            ),
+            db,
+            _admin_user(),
+        )
+        assert created.inbound_auto_run is True
+        assert created.inbound_match_hint == "供应商报销申请"
+        assert created.runtime_config["inbound_auto_run"] is True
+
+        closed = import_general_skill(
+            GeneralSkillImportRequest(
+                tenant_id="tenant_demo",
+                name="报销技能",
+                slug="reimburse",
+                original_slug="reimburse",
+                markdown="# 报销",
+                inbound_auto_run=False,
+                inbound_match_hint="",
+            ),
+            db,
+            _admin_user(),
+        )
+        assert closed.inbound_auto_run is False
+        assert "inbound_auto_run" not in closed.runtime_config
+
+
 def test_import_general_skill_without_original_slug_does_not_overwrite_existing() -> None:
     with _test_session() as db:
         _seed_minimal_tenant(db)

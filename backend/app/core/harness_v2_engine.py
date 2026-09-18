@@ -992,6 +992,7 @@ class HarnessV2Engine:
                 trace_sink=trace,
                 step_deadline_monotonic=step_deadline_monotonic,
             )
+            invoker.inbound_mail_auto_complete = bool(request.inbound_mail_auto_complete)
 
             result = self.task_agent.run(
                 requirement,
