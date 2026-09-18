@@ -139,9 +139,43 @@ def iter_confirm_skills(invoker: Any) -> list[Any]:
     return skills
 
 
+def skill_allows_inbound_auto_run(skill: Any | None) -> bool:
+    if skill is None:
+        return False
+    blobs: list[dict[str, Any]] = []
+    for attr in ("runtime_config_json", "metadata_json", "permissions_json", "content_json"):
+        value = getattr(skill, attr, None)
+        if isinstance(value, dict):
+            blobs.append(value)
+    runtime = getattr(skill, "runtime_config", None)
+    if isinstance(runtime, dict):
+        blobs.append(runtime)
+    return any(truthy(item.get("inbound_auto_run")) for item in blobs)
+
+
+def skill_inbound_match_hint(skill: Any | None) -> str:
+    if skill is None:
+        return ""
+    blobs: list[dict[str, Any]] = []
+    for attr in ("runtime_config_json", "metadata_json", "permissions_json"):
+        value = getattr(skill, attr, None)
+        if isinstance(value, dict):
+            blobs.append(value)
+    runtime = getattr(skill, "runtime_config", None)
+    if isinstance(runtime, dict):
+        blobs.append(runtime)
+    for blob in blobs:
+        hint = str(blob.get("inbound_match_hint") or "").strip()
+        if hint:
+            return hint
+    return str(getattr(skill, "inbound_match_hint", "") or "").strip()
+
+
 def send_requires_confirmation(invoker: Any, arguments: dict[str, Any]) -> bool:
     if truthy(arguments.get("as_draft")):
         return True
+    if getattr(invoker, "inbound_mail_auto_complete", False):
+        return False
     if getattr(invoker, "confirm_before_send_mail", False):
         return True
     if conversation_requests_draft(latest_user_text(invoker)):

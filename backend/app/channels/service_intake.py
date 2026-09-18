@@ -1360,6 +1360,29 @@ def process_inbound(
         # 完成人工答复,无需 /回复反馈 前缀;引用已处理的通知/确认消息时回提示。
         # 两种情况均短路返回(不走 AgentLoop),不会触发处理人与数字员工的新对话。
         if (
+            not inbound.is_group
+            and inbound.parent_id
+            and not command
+        ):
+            from app.mail.inbound import try_handle_channel_mail_teaching
+
+            mail_ack = try_handle_channel_mail_teaching(db, binding, inbound)
+            if mail_ack is not None:
+                _stage_notice(
+                    db,
+                    binding,
+                    inbound.external_conv_id,
+                    target,
+                    mail_ack,
+                    final_for_event=True,
+                )
+                event.status = "done"
+                event.processed_at = utc_now()
+                event.updated_at = utc_now()
+                db.add(event)
+                db.commit()
+                return False
+        if (
             binding.channel == "feishu"
             and not inbound.is_group
             and inbound.parent_id

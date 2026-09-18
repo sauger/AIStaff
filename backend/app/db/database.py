@@ -136,6 +136,7 @@ def _migrate_sqlite_skill_schema() -> None:
         _migrate_wechat_kf_accounts(conn, tables)
         _migrate_capability_scope_schema(conn, inspector, tables)
         _migrate_harness_v2_schema(conn, inspector, tables)
+        _migrate_employee_inbound_mail_schema(conn, inspector, tables)
 
         if "api_jobs" in tables:
             job_columns = {column["name"] for column in inspector.get_columns("api_jobs")}
@@ -1294,6 +1295,123 @@ def _channel_account_key_from_row(channel: str, config: object) -> str | None:
         bot_id = str(parsed.get("ilink_bot_id") or "").strip()
         return f"wechat:ilink_bot:{bot_id}" if bot_id else None
     return None
+
+
+def _migrate_employee_inbound_mail_schema(conn, inspector, tables: set[str]) -> None:
+    """Add inbound-mail triage columns, mailbox enabled flag, and teaching rules."""
+    if "employee_mailboxes" in tables:
+        mailbox_columns = {column["name"] for column in inspector.get_columns("employee_mailboxes")}
+        if "enabled" not in mailbox_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE employee_mailboxes "
+                    "ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_employee_mailboxes_enabled "
+                "ON employee_mailboxes(enabled)"
+            )
+        )
+    if "employee_mail_messages" in tables:
+        message_columns = {
+            column["name"] for column in inspector.get_columns("employee_mail_messages")
+        }
+        message_ddl = {
+            "triage_disposition": (
+                "ALTER TABLE employee_mail_messages ADD COLUMN triage_disposition VARCHAR"
+            ),
+            "triage_state": (
+                "ALTER TABLE employee_mail_messages ADD COLUMN triage_state VARCHAR"
+            ),
+            "triage_reason": (
+                "ALTER TABLE employee_mail_messages ADD COLUMN triage_reason VARCHAR"
+            ),
+            "triage_skill_id": (
+                "ALTER TABLE employee_mail_messages ADD COLUMN triage_skill_id VARCHAR"
+            ),
+            "triage_skill_name": (
+                "ALTER TABLE employee_mail_messages ADD COLUMN triage_skill_name VARCHAR"
+            ),
+            "triage_notified_at": (
+                "ALTER TABLE employee_mail_messages ADD COLUMN triage_notified_at DATETIME"
+            ),
+        }
+        for column_name, ddl in message_ddl.items():
+            if column_name not in message_columns:
+                conn.execute(text(ddl))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_employee_mail_messages_triage_disposition "
+                "ON employee_mail_messages(triage_disposition)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_employee_mail_messages_triage_state "
+                "ON employee_mail_messages(triage_state)"
+            )
+        )
+        # Mail v1 inbox rows were inserted before triage existed. Leave them
+        # done so upgrade/deploy does not treat historical mail as new (R1).
+        conn.execute(
+            text(
+                "UPDATE employee_mail_messages "
+                "SET triage_state = 'done', "
+                "triage_reason = COALESCE(triage_reason, '升级前来信，不按新信分流。') "
+                "WHERE folder = 'inbox' AND triage_state IS NULL"
+            )
+        )
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS employee_mail_triage_rules (
+                id VARCHAR PRIMARY KEY,
+                tenant_id VARCHAR,
+                agent_id VARCHAR,
+                from_address VARCHAR,
+                disposition VARCHAR,
+                skill_id VARCHAR,
+                skill_slug VARCHAR,
+                instruction VARCHAR,
+                source_message_id VARCHAR,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_employee_mail_triage_rules_tenant_id "
+            "ON employee_mail_triage_rules(tenant_id)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_employee_mail_triage_rules_agent_id "
+            "ON employee_mail_triage_rules(agent_id)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_employee_mail_triage_rules_from_address "
+            "ON employee_mail_triage_rules(from_address)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_employee_mail_triage_rules_disposition "
+            "ON employee_mail_triage_rules(disposition)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_employee_mail_triage_rules_agent_from "
+            "ON employee_mail_triage_rules(tenant_id, agent_id, from_address)"
+        )
+    )
 
 
 def _migrate_channel_inbound_run_schema(conn, tables: set[str]) -> None:

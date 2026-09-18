@@ -63,7 +63,11 @@ from app.general_skills import (
 from app.general_skills.runner import GeneralSkillReader, GeneralSkillRunner
 from app.general_skills.schema import GeneralSkillFile
 from app.llm.model_config_resolver import resolve_model_config_for_runtime
-from app.mail.confirm import skill_requires_mail_confirm
+from app.mail.confirm import (
+    skill_allows_inbound_auto_run,
+    skill_inbound_match_hint,
+    skill_requires_mail_confirm,
+)
 from app.security.auth import get_current_user
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -117,6 +121,8 @@ def general_skill_read(row: GeneralSkill, status_override: str | None = None) ->
         permissions=row.permissions_json or {},
         runtime_config=row.runtime_config_json or {},
         confirm_before_send_mail=skill_requires_mail_confirm(row),
+        inbound_auto_run=skill_allows_inbound_auto_run(row),
+        inbound_match_hint=skill_inbound_match_hint(row),
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -260,6 +266,8 @@ def import_general_skill(
             existing=row.runtime_config_json,
             requested=request.runtime_config,
             confirm_before_send_mail=request.confirm_before_send_mail,
+            inbound_auto_run=request.inbound_auto_run,
+            inbound_match_hint=request.inbound_match_hint,
             metadata=metadata,
             permissions=row.permissions_json,
         )
@@ -285,6 +293,8 @@ def import_general_skill(
             runtime_config_json=_runtime_config_with_mail_confirm(
                 requested=request.runtime_config,
                 confirm_before_send_mail=request.confirm_before_send_mail,
+                inbound_auto_run=request.inbound_auto_run,
+                inbound_match_hint=request.inbound_match_hint,
                 metadata=metadata,
                 permissions=permissions_json,
             ),
@@ -360,6 +370,8 @@ def import_skillhub_skill(
         runtime_config=request.runtime_config,
         permissions=request.permissions,
         confirm_before_send_mail=request.confirm_before_send_mail,
+        inbound_auto_run=request.inbound_auto_run,
+        inbound_match_hint=request.inbound_match_hint,
         current_user=current_user,
     )
 
@@ -414,6 +426,8 @@ def import_general_skill_package(
         runtime_config=request.runtime_config,
         permissions=request.permissions,
         confirm_before_send_mail=request.confirm_before_send_mail,
+        inbound_auto_run=request.inbound_auto_run,
+        inbound_match_hint=request.inbound_match_hint,
         current_user=current_user,
     )
 
@@ -434,6 +448,8 @@ def _create_imported_general_skill(
     runtime_config: dict[str, Any] | None = None,
     permissions: dict[str, Any] | None = None,
     confirm_before_send_mail: bool | None = None,
+    inbound_auto_run: bool | None = None,
+    inbound_match_hint: str | None = None,
     current_user: object | None = None,
 ) -> GeneralSkillRead:
     _validate_skill_package_references(files)
@@ -481,6 +497,8 @@ def _create_imported_general_skill(
         runtime_config_json=_runtime_config_with_mail_confirm(
             requested=runtime_config,
             confirm_before_send_mail=confirm_before_send_mail,
+            inbound_auto_run=inbound_auto_run,
+            inbound_match_hint=inbound_match_hint,
             metadata=metadata,
             permissions=permissions,
         ),
@@ -1348,6 +1366,8 @@ def _runtime_config_with_mail_confirm(
     existing: dict[str, Any] | None = None,
     requested: dict[str, Any] | None = None,
     confirm_before_send_mail: bool | None = None,
+    inbound_auto_run: bool | None = None,
+    inbound_match_hint: str | None = None,
     metadata: dict[str, Any] | None = None,
     permissions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1371,6 +1391,34 @@ def _runtime_config_with_mail_confirm(
         config["confirm_before_send_mail"] = True
     elif flag is False:
         config.pop("confirm_before_send_mail", None)
+    inbound_flag = _coerce_mail_confirm_flag(inbound_auto_run)
+    if inbound_flag is None and isinstance(requested, dict) and "inbound_auto_run" in requested:
+        inbound_flag = _coerce_mail_confirm_flag(requested.get("inbound_auto_run"))
+    if inbound_flag is None:
+        for blob in (config, permissions, metadata):
+            if isinstance(blob, dict) and "inbound_auto_run" in blob:
+                inbound_flag = _coerce_mail_confirm_flag(blob.get("inbound_auto_run"))
+                if inbound_flag is not None:
+                    break
+    if inbound_flag is True:
+        config["inbound_auto_run"] = True
+    elif inbound_flag is False:
+        config.pop("inbound_auto_run", None)
+    hint: str | None = None
+    if inbound_match_hint is not None:
+        hint = str(inbound_match_hint).strip()
+    elif isinstance(requested, dict) and "inbound_match_hint" in requested:
+        hint = str(requested.get("inbound_match_hint") or "").strip()
+    elif isinstance(config, dict) and "inbound_match_hint" in config:
+        hint = str(config.get("inbound_match_hint") or "").strip()
+    elif isinstance(metadata, dict) and "inbound_match_hint" in metadata:
+        hint = str(metadata.get("inbound_match_hint") or "").strip()
+    if hint:
+        config["inbound_match_hint"] = hint[:200]
+    elif inbound_match_hint is not None or (
+        isinstance(requested, dict) and "inbound_match_hint" in requested
+    ):
+        config.pop("inbound_match_hint", None)
     return config
 
 

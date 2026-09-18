@@ -310,6 +310,8 @@ export type GeneralSkillRead = {
   permissions: Record<string, unknown>;
   runtime_config: Record<string, unknown>;
   confirm_before_send_mail?: boolean;
+  inbound_auto_run?: boolean;
+  inbound_match_hint?: string;
   created_at: string;
   updated_at: string;
 };
@@ -1295,6 +1297,7 @@ export type MailboxStatusRead = {
   smtp_encryption?: string | null;
   username?: string | null;
   password_configured: boolean;
+  enabled?: boolean;
   can_configure: boolean;
   can_send: boolean;
   last_synced_at?: string | null;
@@ -1331,6 +1334,15 @@ export type MailMessageRead = {
   confirm_required: boolean;
   in_reply_to?: string | null;
   created_at: string;
+  triage_disposition?: string | null;
+  triage_state?: string | null;
+  triage_reason?: string | null;
+  triage_skill_id?: string | null;
+  triage_skill_name?: string | null;
+  triage_label?: string | null;
+  triage_notified?: boolean;
+  can_teach?: boolean;
+  teaching_notice?: string | null;
 };
 
 export type MailListResponse = {
@@ -1344,6 +1356,8 @@ export type MailListResponse = {
   page_size?: number;
   total?: number;
   last_error?: string | null;
+  mailbox_enabled?: boolean;
+  pending_owner_count?: number;
 };
 
 export type MailSendResult = {

@@ -12,12 +12,14 @@ from app.mail.schema import (
     MAIL_DEFAULT_PAGE_SIZE,
     MAIL_MAX_PAGE_SIZE,
     MailboxConfigRequest,
+    MailboxEnabledRequest,
     MailboxStatusRead,
     MailComposeRequest,
     MailListResponse,
     MailMessageRead,
     MailProbeResult,
     MailSendResult,
+    MailTeachRequest,
 )
 from app.mail.service import (
     can_send_mail,
@@ -25,6 +27,7 @@ from app.mail.service import (
     compose,
     ensure_reader,
     ensure_sender,
+    get_mailbox,
     get_message,
     list_drafts,
     list_inbox,
@@ -133,6 +136,35 @@ def probe_saved_mailbox(
         raise
 
 
+@router.put("/mailbox/enabled", response_model=MailboxStatusRead)
+def set_mailbox_enabled_status(
+    request: MailboxEnabledRequest,
+    db: SessionDep,
+    current_user: CurrentUser,
+    agent_id: str = Query(...),
+) -> MailboxStatusRead:
+    ensure_current_user_tenant(request.tenant_id, current_user)
+    ensure_tenant(db, request.tenant_id)
+    try:
+        agent = ensure_sender(db, request.tenant_id, agent_id, current_user)
+        row = get_mailbox(db, request.tenant_id, agent_id)
+        if row is None:
+            raise MailError("MAIL_NOT_CONFIGURED", "这个员工还没有配置邮箱，不能停用或启用。")
+        from app.mail.inbound import set_mailbox_enabled
+
+        set_mailbox_enabled(db, row, enabled=request.enabled)
+        return mailbox_status(
+            db,
+            request.tenant_id,
+            agent_id,
+            can_configure=can_send_mail(agent, current_user),
+            can_send=can_send_mail(agent, current_user),
+        )
+    except MailError as error:
+        _raise(error)
+        raise
+
+
 @router.get("/inbox", response_model=MailListResponse)
 def get_inbox(
     db: SessionDep,
@@ -225,7 +257,7 @@ def read_message(
             message_id,
             mark_read=mark_read and can_send_mail(agent, current_user),
         )
-        return message_read(row)
+        return message_read(row, can_teach=can_send_mail(agent, current_user))
     except MailError as error:
         _raise(error)
         raise
@@ -245,6 +277,66 @@ def get_reply_defaults(
         ensure_reader(db, tenant_id, agent_id, current_user)
         row = get_message(db, tenant_id, agent_id, message_id, mark_read=False)
         return reply_defaults(row)
+    except MailError as error:
+        _raise(error)
+        raise
+
+
+@router.get("/pending-owner", response_model=MailListResponse)
+def get_pending_owner(
+    db: SessionDep,
+    current_user: CurrentUser,
+    tenant_id: str = Query(...),
+    agent_id: str = Query(...),
+) -> MailListResponse:
+    ensure_current_user_tenant(tenant_id, current_user)
+    ensure_tenant(db, tenant_id)
+    try:
+        agent = ensure_reader(db, tenant_id, agent_id, current_user)
+        from app.mail.inbound import list_pending_owner_messages, mailbox_is_enabled
+        from app.mail.service import get_mailbox as load_mailbox
+
+        mailbox = load_mailbox(db, tenant_id, agent_id)
+        rows = list_pending_owner_messages(db, tenant_id, agent_id)
+        can_send = can_send_mail(agent, current_user)
+        return MailListResponse(
+            agent_id=agent_id,
+            folder="inbox",
+            configured=mailbox is not None,
+            can_send=can_send and (mailbox is None or mailbox_is_enabled(mailbox)),
+            empty_reason="没有待主人处理的来信。" if not rows else None,
+            messages=[message_read(item, include_body=False, can_teach=can_send) for item in rows],
+            page=1,
+            page_size=max(len(rows), 1),
+            total=len(rows),
+            mailbox_enabled=mailbox is not None and mailbox_is_enabled(mailbox),
+            pending_owner_count=len(rows),
+        )
+    except MailError as error:
+        _raise(error)
+        raise
+
+
+@router.post("/messages/{message_id}/teach", response_model=MailMessageRead)
+def teach_message(
+    message_id: str,
+    request: MailTeachRequest,
+    db: SessionDep,
+    current_user: CurrentUser,
+    agent_id: str = Query(...),
+) -> MailMessageRead:
+    ensure_current_user_tenant(request.tenant_id, current_user)
+    ensure_tenant(db, request.tenant_id)
+    try:
+        agent = ensure_sender(db, request.tenant_id, agent_id, current_user)
+        row = get_message(db, request.tenant_id, agent_id, message_id, mark_read=False)
+        mailbox = get_mailbox(db, request.tenant_id, agent_id)
+        if mailbox is None:
+            raise MailError("MAIL_NOT_CONFIGURED", "这个员工还没有配置邮箱。")
+        from app.mail.inbound import teach_from_console
+
+        taught = teach_from_console(db, mailbox, agent, row, request)
+        return message_read(taught, can_teach=True)
     except MailError as error:
         _raise(error)
         raise

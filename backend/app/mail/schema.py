@@ -37,6 +37,7 @@ class MailboxStatusRead(BaseModel):
     smtp_encryption: str | None = None
     username: str | None = None
     password_configured: bool = False
+    enabled: bool = True
     can_configure: bool = False
     can_send: bool = False
     last_synced_at: str | None = None
@@ -89,6 +90,15 @@ class MailMessageRead(BaseModel):
     confirm_required: bool = False
     in_reply_to: str | None = None
     created_at: str
+    triage_disposition: str | None = None
+    triage_state: str | None = None
+    triage_reason: str | None = None
+    triage_skill_id: str | None = None
+    triage_skill_name: str | None = None
+    triage_label: str | None = None
+    triage_notified: bool = False
+    can_teach: bool = False
+    teaching_notice: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -104,6 +114,8 @@ class MailListResponse(BaseModel):
     page_size: int = MAIL_DEFAULT_PAGE_SIZE
     total: int = 0
     last_error: str | None = None
+    mailbox_enabled: bool = True
+    pending_owner_count: int = 0
 
 
 class MailComposeRequest(BaseModel):
@@ -116,7 +128,7 @@ class MailComposeRequest(BaseModel):
     attachments: list[MailAttachmentInput] = Field(default_factory=list)
     as_draft: bool = False
     in_reply_to: str | None = None
-    source: Literal["console", "chat", "skill"] = "console"
+    source: Literal["console", "chat", "skill", "inbound_skill"] = "console"
 
 
 class MailSendResult(BaseModel):
@@ -124,3 +136,15 @@ class MailSendResult(BaseModel):
     draft: bool = False
     message: MailMessageRead
     notice: str
+
+
+class MailboxEnabledRequest(BaseModel):
+    tenant_id: str
+    enabled: bool
+
+
+class MailTeachRequest(BaseModel):
+    tenant_id: str
+    action: Literal["ignore", "skill", "ask_again"]
+    skill_id: str | None = None
+    note: str = ""
