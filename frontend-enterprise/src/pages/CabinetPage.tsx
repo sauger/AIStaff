@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import AppHeader from '@/components/AppHeader';
 import CapabilityScopeLoading from '@/components/CapabilityScopeLoading';
@@ -27,14 +27,52 @@ import {
   readEmployeeScope,
 } from '@/lib/agent-scope-storage';
 import { api, ApiError, TENANT_ID } from '../api/client';
-import IconAdd from '../assets/icons/add.svg?react';
 import IconFolder from '../assets/icons/cap-folder.svg?react';
+import IconDownload from '../assets/icons/download.svg?react';
+import IconEdit from '../assets/icons/edit.svg?react';
 import IconRefresh from '../assets/icons/refresh.svg?react';
+import IconTrash from '../assets/icons/trash.svg?react';
+import IconUpload from '../assets/icons/upload.svg?react';
 import { isEmployeeOwnedBy, type EnterpriseAuthUser } from '../auth';
 import { visibleEmployeeAgents } from '../employee';
 import type { AgentProfileRead, CabinetEntryRead, CabinetListResponse } from '../types';
 
 const EMPTY_COPY = '先上传模板，再在对话里说以某某为模板生产';
+
+const CABINET_ICON_BUTTON_CLASS =
+  'size-[34px] shrink-0 rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white p-0 text-[#757f9c] hover:border-[#cbd3e6] hover:bg-white hover:text-[#18181a] focus-visible:border-[#18181a] focus-visible:ring-0 [&_svg]:size-[14px]';
+
+const CABINET_ICON_PRIMARY_BUTTON_CLASS =
+  'size-[34px] shrink-0 rounded-[10px] bg-[#18181a] p-0 text-white hover:bg-[#303030] focus-visible:ring-2 focus-visible:ring-[#18181a]/30 [&_svg]:size-[14px]';
+
+function CabinetIconButton({
+  label,
+  onClick,
+  disabled,
+  children,
+  variant = 'outline',
+}: {
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+  variant?: 'outline' | 'primary';
+}) {
+  return (
+    <UIButton
+      type="button"
+      variant={variant === 'primary' ? 'default' : 'outline'}
+      size="icon"
+      className={variant === 'primary' ? CABINET_ICON_PRIMARY_BUTTON_CLASS : CABINET_ICON_BUTTON_CLASS}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </UIButton>
+  );
+}
 
 type CabinetPageProps = {
   currentUser?: EnterpriseAuthUser;
@@ -307,37 +345,28 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
     {
       key: 'actions',
       title: '操作',
-      width: 220,
+      width: 160,
       render: (row) => (
-        <div className="flex flex-wrap gap-[8px]">
+        <div className="flex flex-nowrap items-center gap-[8px]">
           {row.kind === 'file' ? (
-            <UIButton
-              variant="outline"
-              className={OUTLINE_ACTION_BUTTON_CLASS}
-              onClick={() => void downloadEntry(row)}
-            >
-              下载
-            </UIButton>
+            <CabinetIconButton label="下载" onClick={() => void downloadEntry(row)}>
+              <IconDownload aria-hidden="true" />
+            </CabinetIconButton>
           ) : null}
           {canWrite ? (
             <>
-              <UIButton
-                variant="outline"
-                className={OUTLINE_ACTION_BUTTON_CLASS}
+              <CabinetIconButton
+                label="重命名"
                 onClick={() => {
                   setRenameTarget(row);
                   setRenameValue(row.name);
                 }}
               >
-                重命名
-              </UIButton>
-              <UIButton
-                variant="outline"
-                className={OUTLINE_ACTION_BUTTON_CLASS}
-                onClick={() => setDeleteTarget(row)}
-              >
-                删除
-              </UIButton>
+                <IconEdit aria-hidden="true" />
+              </CabinetIconButton>
+              <CabinetIconButton label="删除" onClick={() => setDeleteTarget(row)}>
+                <IconTrash aria-hidden="true" />
+              </CabinetIconButton>
             </>
           ) : null}
         </div>
@@ -383,7 +412,7 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
             </span>
           ))}
         </nav>
-        <div className="flex flex-wrap items-center gap-[8px]">
+        <div className="flex shrink-0 flex-nowrap items-center gap-[8px]">
           <UIButton
             variant="outline"
             className={OUTLINE_ACTION_BUTTON_CLASS}
@@ -395,20 +424,16 @@ export default function CabinetPage({ currentUser, onLogout }: CabinetPageProps 
           </UIButton>
           {canWrite ? (
             <>
-              <UIButton
-                variant="outline"
-                className={OUTLINE_ACTION_BUTTON_CLASS}
-                onClick={() => setFolderOpen(true)}
-              >
-                新建文件夹
-              </UIButton>
-              <UIButton
-                className="h-[34px] rounded-[10px] bg-[#18181a] px-[20px] text-[12px] text-white hover:bg-[#303030]"
+              <CabinetIconButton label="新建文件夹" onClick={() => setFolderOpen(true)}>
+                <IconFolder aria-hidden="true" />
+              </CabinetIconButton>
+              <CabinetIconButton
+                label="上传"
+                variant="primary"
                 onClick={() => fileInputRef.current?.click()}
               >
-                <IconAdd className="size-[14px]" />
-                上传
-              </UIButton>
+                <IconUpload aria-hidden="true" />
+              </CabinetIconButton>
             </>
           ) : null}
           <input
