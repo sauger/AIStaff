@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import timedelta
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 from sqlmodel import Session, select
@@ -15,15 +18,19 @@ from test_employee_mail import (
 from app.agents.branching import mark_resource_private_for_agent
 from app.agents.schema import AgentProfileCreateRequest
 from app.api.agents import create_agent
+from app.api.chat import chat_turn
 from app.channels.adapters.base import ChannelInbound
+from app.core.agent_loop import AgentLoop
 from app.db.models import (
     AgentResourceBinding,
     ChannelBinding,
     ChannelDelivery,
     ChannelIdentity,
+    ChatSession,
     EmployeeMailMessage,
     EmployeeMailTriageRule,
     GeneralSkill,
+    utc_now,
 )
 from app.mail.api import (
     get_inbox,
@@ -40,6 +47,7 @@ from app.mail.harness import invoke_mail_tool
 from app.mail.inbound import (
     InboundComposeInvoker,
     inbound_compose_request,
+    parse_owner_teaching,
     set_inbound_skill_runner,
     try_handle_channel_mail_teaching,
 )
@@ -47,6 +55,7 @@ from app.mail.schema import MailboxEnabledRequest, MailTeachRequest
 from app.mail.service import compose, get_mailbox, prompt_context, sync_all_mailboxes
 from app.mail.transport import FetchedMessage, set_transport
 from app.security.encryption import decrypt_secret
+from app.session.session_schema import ChatTurnRequest, ChatTurnResponse, SessionPublic
 
 
 def _inbox_message(**overrides) -> FetchedMessage:
@@ -123,6 +132,37 @@ def _replying_runner(db, agent, skill, message) -> None:
     )
 
 
+def _patch_production_mail_send_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drive inbound completion through AgentLoop.handle_turn + mail_send."""
+
+    def handle_turn(self, request):
+        message_id = str(getattr(request, "inbound_mail_message_id", "") or "")
+        inbox = self.db.get(EmployeeMailMessage, message_id) if message_id else None
+        to = [inbox.from_address] if inbox is not None else ["vendor@example.com"]
+        subject = f"Re: {inbox.subject}" if inbox is not None else "Re: 来信"
+        invoke_mail_tool(
+            _invoker(
+                self.db,
+                request.agent_id,
+                inbound_mail_auto_complete=bool(request.inbound_mail_auto_complete),
+                inbound_mail_message_id=message_id,
+                confirm_before_send_mail=True,
+            ),
+            "mail_send",
+            {
+                "to": to,
+                "subject": subject,
+                "body": "已按技能处理。",
+            },
+        )
+        return SimpleNamespace(
+            runtime_error_code=None,
+            session_id=request.session_id or "sess_inbound",
+        )
+
+    monkeypatch.setattr(AgentLoop, "handle_turn", handle_turn)
+
+
 @pytest.fixture
 def inbound_mail_db(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
@@ -143,8 +183,12 @@ def _owner_setup(inbound_mail_db):
     return db, owner, other, admin, agent_a, agent_b, transport
 
 
-def test_ae1_opted_in_skill_runs_and_sends(inbound_mail_db) -> None:
+def test_ae1_opted_in_skill_runs_and_sends(
+    inbound_mail_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
+    set_inbound_skill_runner(None)
+    _patch_production_mail_send_loop(monkeypatch)
     _bind_skill(db, agent_a.id)
     transport.inbox = [_inbox_message()]
     listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
@@ -153,6 +197,7 @@ def test_ae1_opted_in_skill_runs_and_sends(inbound_mail_db) -> None:
     sent = get_sent(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert sent.messages
     assert sent.messages[0].status == "sent"
+    assert sent.messages[0].in_reply_to == listing.messages[0].id
     assert transport.sent
     assert "mailbox-secret" not in str(listing.model_dump())
 
@@ -424,8 +469,12 @@ def test_ae11_chat_draft_first_still_requires_confirm(inbound_mail_db) -> None:
     assert result["data"]["delivered"] is False
 
 
-def test_ae12_smtp_failure_marks_failed_and_notifies(inbound_mail_db) -> None:
+def test_ae12_smtp_failure_marks_failed_and_notifies(
+    inbound_mail_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
+    set_inbound_skill_runner(None)
+    _patch_production_mail_send_loop(monkeypatch)
     _bind_skill(db, agent_a.id)
     transport.smtp_error = MailError("MAIL_SMTP_FAILED", "SMTP 被拒绝")
     binding = ChannelBinding(
@@ -448,6 +497,7 @@ def test_ae12_smtp_failure_marks_failed_and_notifies(inbound_mail_db) -> None:
     transport.inbox = [_inbox_message()]
     listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "failed"
+    assert listing.messages[0].triage_label == "失败"
     sent = get_sent(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert sent.messages[0].status == "failed"
     notice = db.exec(select(ChannelDelivery).where(ChannelDelivery.kind == "mail_triage_notice")).first()
@@ -644,3 +694,153 @@ def test_inbound_auto_complete_bypasses_skill_confirm_flag(inbound_mail_db) -> N
     assert send_requires_confirmation(invoker, {}) is False
     chat = _invoker(db, agent_a.id, confirm_before_send_mail=True)
     assert send_requires_confirmation(chat, {}) is True
+
+
+def test_chat_http_cannot_set_inbound_mail_auto_complete(
+    inbound_mail_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, owner, _other, _admin, agent_a, _agent_b, _transport = _owner_setup(inbound_mail_db)
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("app.api.chat._schedule_session_title_summary", lambda *args, **kwargs: None)
+
+    def fake_handle_turn(self, request):
+        seen["flag"] = request.inbound_mail_auto_complete
+        seen["mail_id"] = request.inbound_mail_message_id
+        session_id = request.session_id or "sess_http"
+        return ChatTurnResponse(
+            reply="ok",
+            session_id=session_id,
+            session_state=SessionPublic(session_id=session_id, tenant_id=request.tenant_id),
+        )
+
+    monkeypatch.setattr(AgentLoop, "handle_turn", fake_handle_turn)
+    chat_turn(
+        ChatTurnRequest(
+            tenant_id="tenant_demo",
+            agent_id=agent_a.id,
+            message="给 vendor@example.com 发一封信",
+            inbound_mail_auto_complete=True,
+            inbound_mail_message_id="mail_should_not_pass",
+        ),
+        owner,
+        db,
+    )
+    assert seen["flag"] is False
+    assert seen["mail_id"] is None
+
+
+def test_legacy_inbox_is_not_auto_triaged(inbound_mail_db) -> None:
+    db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
+    _bind_skill(db, agent_a.id)
+    legacy = EmployeeMailMessage(
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        folder="inbox",
+        status="unread",
+        direction="inbound",
+        source="imap",
+        from_address="vendor@example.com",
+        subject="供应商报销申请",
+        body_text="请报销差旅 3200 元，发票见附件。",
+        dedupe_key="legacy-pre-inbound",
+        received_at=utc_now(),
+    )
+    db.add(legacy)
+    db.commit()
+    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    row = next(item for item in listing.messages if item.id == legacy.id)
+    assert row.triage_disposition is None
+    assert row.triage_state is None
+    assert transport.sent == []
+
+
+def test_stale_processing_is_reclaimed(inbound_mail_db) -> None:
+    db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
+    _bind_skill(db, agent_a.id)
+    stuck = EmployeeMailMessage(
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        folder="inbox",
+        status="unread",
+        direction="inbound",
+        source="imap",
+        from_address="vendor@example.com",
+        subject="供应商报销申请",
+        body_text="请报销差旅 3200 元，发票见附件。",
+        dedupe_key="stale-processing",
+        received_at=utc_now(),
+        triage_state="processing",
+        triage_disposition="skill",
+        updated_at=utc_now() - timedelta(minutes=20),
+    )
+    db.add(stuck)
+    db.commit()
+    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    row = next(item for item in listing.messages if item.id == stuck.id)
+    assert row.triage_disposition == "skill"
+    assert row.triage_state == "done"
+    assert transport.sent
+
+
+def test_owner_notice_does_not_copy_group_chat_target(inbound_mail_db) -> None:
+    db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
+    binding = ChannelBinding(
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        channel="feishu",
+        status="active",
+    )
+    db.add(binding)
+    db.flush()
+    db.add(
+        ChatSession(
+            id="sess_group",
+            tenant_id="tenant_demo",
+            user_id=owner.id,
+            agent_id=agent_a.id,
+            channel="feishu",
+            channel_binding_id=binding.id,
+            external_conv_id="oc_group",
+            channel_target_json={"to_user_id": "oc_group", "receive_id_type": "chat_id"},
+        )
+    )
+    db.commit()
+    transport.inbox = [_inbox_message(subject="请问", body_text="帮忙看下")]
+    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    assert listing.messages[0].triage_disposition == "ask_owner"
+    assert db.exec(select(ChannelDelivery)).first() is None
+    pending = get_pending_owner(
+        tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner
+    )
+    assert pending.total == 1
+
+
+def test_teaching_prefers_skill_over_ignore_substring() -> None:
+    skill = GeneralSkill(
+        slug="reimburse",
+        name="报销申请",
+        tenant_id="tenant_demo",
+        skill_markdown="# 报销申请",
+        runtime_config_json={"inbound_match_hint": "供应商报销申请"},
+    )
+    parsed = parse_owner_teaching("按报销申请处理，不要忽略", [skill])
+    assert parsed is not None
+    action, matched, expand_all = parsed
+    assert action == "skill"
+    assert matched is skill
+    assert expand_all is False
+
+
+def test_teaching_all_reimburse_does_not_expand_every_sender() -> None:
+    skill = GeneralSkill(
+        slug="reimburse",
+        name="报销申请",
+        tenant_id="tenant_demo",
+        skill_markdown="# 报销申请",
+        runtime_config_json={"inbound_match_hint": "供应商报销申请"},
+    )
+    parsed = parse_owner_teaching("所有报销申请都按这个处理", [skill])
+    assert parsed is not None
+    action, _matched, expand_all = parsed
+    assert action == "skill"
+    assert expand_all is False

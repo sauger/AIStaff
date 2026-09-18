@@ -254,6 +254,8 @@ def _send(invoker: Any, agent_id: str, arguments: dict[str, Any]) -> dict[str, A
         arguments,
         as_draft=as_draft,
         source=source,
+        in_reply_to_default=str(getattr(invoker, "inbound_mail_message_id", "") or "")
+        or None,
     )
     result = compose(
         invoker.db,
@@ -272,6 +274,7 @@ def _compose_request(
     *,
     as_draft: bool,
     source: str,
+    in_reply_to_default: str | None = None,
 ) -> MailComposeRequest:
     to = parse_address_list(arguments.get("to"))
     attachments = [
@@ -288,7 +291,7 @@ def _compose_request(
         body=str(arguments.get("body") or ""),
         attachments=attachments,
         as_draft=as_draft,
-        in_reply_to=str(arguments.get("in_reply_to") or "") or None,
+        in_reply_to=str(arguments.get("in_reply_to") or "") or in_reply_to_default or None,
         source=source,  # type: ignore[arg-type]
     )
 

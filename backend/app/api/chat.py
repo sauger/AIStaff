@@ -1016,6 +1016,8 @@ def chat_turn(
             "user_id": current_user.id,
             "context_injection": None,
             "message_visibility": "visible",
+            "inbound_mail_auto_complete": False,
+            "inbound_mail_message_id": None,
         }
     )
     request = _validate_chat_turn_attachments(request)
@@ -1091,6 +1093,8 @@ def chat_stream(
             "user_id": current_user.id,
             "context_injection": None,
             "message_visibility": "visible",
+            "inbound_mail_auto_complete": False,
+            "inbound_mail_message_id": None,
         }
     )
     request = _validate_chat_turn_attachments(request)

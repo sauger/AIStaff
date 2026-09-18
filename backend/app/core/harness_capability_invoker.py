@@ -168,6 +168,7 @@ class HarnessCapabilityInvoker:
         self._loaded_general_skill_names: set[str] = set()
         self.confirm_before_send_mail = False
         self.inbound_mail_auto_complete = False
+        self.inbound_mail_message_id: str | None = None
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self._raise_if_cancelled()

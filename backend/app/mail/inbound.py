@@ -4,9 +4,11 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 from urllib.parse import quote
 
+from sqlalchemy import and_, update
 from sqlmodel import Session, col, or_, select
 
 from app.db.models import (
@@ -47,6 +49,7 @@ MAIL_TRIAGE_NOTICE = "mail_triage_notice"
 MAIL_TRIAGE_ACK = "mail_triage_ack"
 MATCH_THRESHOLD = 0.6
 INBOUND_MATCH_HINT_MAX = 200
+PROCESSING_LEASE = timedelta(minutes=15)
 
 _SKILL_RUNNER: Callable[..., None] | None = None
 
@@ -208,22 +211,49 @@ def triage_all_pending(db: Session) -> None:
 def triage_pending_for_mailbox(db: Session, mailbox: EmployeeMailbox) -> None:
     if not mailbox_is_enabled(mailbox):
         return
+    stale_before = utc_now() - PROCESSING_LEASE
     rows = db.exec(
         select(EmployeeMailMessage).where(
             EmployeeMailMessage.tenant_id == mailbox.tenant_id,
             EmployeeMailMessage.agent_id == mailbox.agent_id,
             EmployeeMailMessage.folder == "inbox",
             or_(
-                col(EmployeeMailMessage.triage_state).is_(None),
                 EmployeeMailMessage.triage_state == STATE_PENDING,
-                col(EmployeeMailMessage.triage_disposition).is_(None),
+                and_(
+                    EmployeeMailMessage.triage_state == STATE_PROCESSING,
+                    EmployeeMailMessage.updated_at < stale_before,
+                ),
             ),
         )
     ).all()
     for row in rows:
-        if row.triage_disposition and row.triage_state not in {None, STATE_PENDING}:
+        claimed = _claim_triage_message(db, row.id)
+        if claimed is None:
             continue
-        triage_message(db, mailbox, row)
+        triage_message(db, mailbox, claimed)
+
+
+def _claim_triage_message(db: Session, message_id: str) -> EmployeeMailMessage | None:
+    now = utc_now()
+    stale_before = now - PROCESSING_LEASE
+    result = db.exec(
+        update(EmployeeMailMessage)
+        .where(
+            EmployeeMailMessage.id == message_id,
+            or_(
+                EmployeeMailMessage.triage_state == STATE_PENDING,
+                and_(
+                    EmployeeMailMessage.triage_state == STATE_PROCESSING,
+                    EmployeeMailMessage.updated_at < stale_before,
+                ),
+            ),
+        )
+        .values(triage_state=STATE_PROCESSING, updated_at=now)
+    )
+    db.commit()
+    if result.rowcount != 1:
+        return None
+    return db.get(EmployeeMailMessage, message_id)
 
 
 def triage_message(
@@ -378,7 +408,7 @@ def teach_from_console(
         action=request.action,
         skill_id=request.skill_id,
         instruction=request.note,
-        expand_all="所有" in (request.note or "") or "全部" in (request.note or ""),
+        expand_all=False,
     )
 
 
@@ -466,21 +496,20 @@ def parse_owner_teaching(
     if not raw:
         return None
     lowered = raw.lower()
-    expand_all = "所有" in raw or "全部" in raw
     if any(phrase in raw or phrase in lowered for phrase in _ASK_AGAIN_PHRASES):
-        return "ask_again", None, expand_all
-    if any(phrase in raw or phrase in lowered for phrase in _IGNORE_PHRASES):
-        return "ignore", None, expand_all
+        return "ask_again", None, False
     for skill in skills:
         name = str(skill.name or "").strip()
         slug = str(skill.slug or "").strip()
         hint = skill_inbound_match_hint(skill)
         if name and (name in raw or f"按{name}" in raw or f"用{name}" in raw):
-            return "skill", skill, expand_all
+            return "skill", skill, False
         if slug and slug in raw:
-            return "skill", skill, expand_all
+            return "skill", skill, False
         if hint and hint in raw:
-            return "skill", skill, expand_all
+            return "skill", skill, False
+    if any(phrase in raw or phrase in lowered for phrase in _IGNORE_PHRASES):
+        return "ignore", None, False
     return None
 
 
@@ -637,6 +666,10 @@ def _hand_to_skill(
             message,
             reason="指定的技能未开「可被来信自动跑」或未发布，改为问主人。",
         )
+    existing_sent = _existing_successful_reply(db, mailbox, message)
+    if existing_sent is not None:
+        return _mark_skill_done(db, message, skill, reason)
+    known_failed_ids = _failed_sent_ids(db, mailbox)
     message.triage_disposition = DISPOSITION_SKILL
     message.triage_state = STATE_PROCESSING
     message.triage_skill_id = skill.id
@@ -662,15 +695,7 @@ def _hand_to_skill(
     refreshed = db.get(EmployeeMailMessage, message.id) or message
     if refreshed.triage_disposition == DISPOSITION_FAILED:
         return refreshed
-    failed_sent = db.exec(
-        select(EmployeeMailMessage).where(
-            EmployeeMailMessage.tenant_id == mailbox.tenant_id,
-            EmployeeMailMessage.agent_id == mailbox.agent_id,
-            EmployeeMailMessage.folder == "sent",
-            EmployeeMailMessage.status == "failed",
-            EmployeeMailMessage.in_reply_to == message.id,
-        )
-    ).first()
+    failed_sent = _new_failed_sent(db, mailbox, ignore_ids=known_failed_ids)
     if failed_sent is not None:
         return _fail_skill(
             db,
@@ -680,16 +705,7 @@ def _hand_to_skill(
             skill,
             failed_sent.smtp_error or "回信发出失败。",
         )
-    refreshed.triage_disposition = DISPOSITION_SKILL
-    refreshed.triage_state = STATE_DONE
-    refreshed.triage_skill_id = skill.id
-    refreshed.triage_skill_name = skill.name
-    refreshed.triage_reason = reason
-    refreshed.updated_at = utc_now()
-    db.add(refreshed)
-    db.commit()
-    db.refresh(refreshed)
-    return refreshed
+    return _mark_skill_done(db, refreshed, skill, reason)
 
 
 def _fail_skill(
@@ -720,6 +736,72 @@ def _fail_skill(
     db.commit()
     db.refresh(message)
     return message
+
+
+def _mark_skill_done(
+    db: Session,
+    message: EmployeeMailMessage,
+    skill: GeneralSkill,
+    reason: str,
+) -> EmployeeMailMessage:
+    message.triage_disposition = DISPOSITION_SKILL
+    message.triage_state = STATE_DONE
+    message.triage_skill_id = skill.id
+    message.triage_skill_name = skill.name
+    message.triage_reason = reason
+    message.updated_at = utc_now()
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+    return message
+
+
+def _failed_sent_ids(db: Session, mailbox: EmployeeMailbox) -> set[str]:
+    rows = db.exec(
+        select(EmployeeMailMessage).where(
+            EmployeeMailMessage.tenant_id == mailbox.tenant_id,
+            EmployeeMailMessage.agent_id == mailbox.agent_id,
+            EmployeeMailMessage.folder == "sent",
+            EmployeeMailMessage.status == "failed",
+        )
+    ).all()
+    return {row.id for row in rows}
+
+
+def _new_failed_sent(
+    db: Session,
+    mailbox: EmployeeMailbox,
+    *,
+    ignore_ids: set[str],
+) -> EmployeeMailMessage | None:
+    rows = db.exec(
+        select(EmployeeMailMessage).where(
+            EmployeeMailMessage.tenant_id == mailbox.tenant_id,
+            EmployeeMailMessage.agent_id == mailbox.agent_id,
+            EmployeeMailMessage.folder == "sent",
+            EmployeeMailMessage.status == "failed",
+        )
+    ).all()
+    for row in rows:
+        if row.id not in ignore_ids:
+            return row
+    return None
+
+
+def _existing_successful_reply(
+    db: Session,
+    mailbox: EmployeeMailbox,
+    message: EmployeeMailMessage,
+) -> EmployeeMailMessage | None:
+    return db.exec(
+        select(EmployeeMailMessage).where(
+            EmployeeMailMessage.tenant_id == mailbox.tenant_id,
+            EmployeeMailMessage.agent_id == mailbox.agent_id,
+            EmployeeMailMessage.folder == "sent",
+            EmployeeMailMessage.status == "sent",
+            EmployeeMailMessage.in_reply_to == message.id,
+        )
+    ).first()
 
 
 def _apply_failure(db: Session, message: EmployeeMailMessage, reason: str) -> EmployeeMailMessage:
@@ -884,7 +966,14 @@ def _default_skill_runner(
         f"附件：\n{chr(10).join(attachment_lines) or '（无）'}\n"
         f"邮件id：{message.id}\n"
     )
-    AgentLoop(db).handle_turn(
+    mailbox = db.exec(
+        select(EmployeeMailbox).where(
+            EmployeeMailbox.tenant_id == agent.tenant_id,
+            EmployeeMailbox.agent_id == agent.id,
+        )
+    ).first()
+    known_failed_ids = _failed_sent_ids(db, mailbox) if mailbox is not None else set()
+    response = AgentLoop(db).handle_turn(
         ChatTurnRequest(
             tenant_id=agent.tenant_id,
             session_id=session.id,
@@ -894,8 +983,22 @@ def _default_skill_runner(
             channel="mail_inbound",
             message_visibility="internal",
             inbound_mail_auto_complete=True,
+            inbound_mail_message_id=message.id,
         )
     )
+    error_code = str(getattr(response, "runtime_error_code", "") or "").strip()
+    if error_code:
+        raise MailError(
+            "MAIL_INBOUND_SKILL_FAILED",
+            f"技能「{skill.name}」执行失败：{error_code}",
+        )
+    if mailbox is not None:
+        failed_sent = _new_failed_sent(db, mailbox, ignore_ids=known_failed_ids)
+        if failed_sent is not None:
+            raise MailError(
+                "MAIL_SMTP_FAILED",
+                failed_sent.smtp_error or "回信发出失败。",
+            )
 
 
 def _stage_owner_notice(
@@ -920,20 +1023,6 @@ def _stage_owner_notice(
             builder = _HANDOFF_NOTIFY_TARGET_BUILDERS.get(binding.channel)
             if identity and identity.external_user_id and builder:
                 target = builder(identity.external_user_id, message.id)
-        if target is None:
-            chat_session = db.exec(
-                select(ChatSession)
-                .where(
-                    ChatSession.tenant_id == binding.tenant_id,
-                    ChatSession.channel == binding.channel,
-                    ChatSession.channel_binding_id == binding.id,
-                    ChatSession.user_id == owner_id,
-                    ChatSession.external_conv_id.is_not(None),
-                )
-                .order_by(ChatSession.updated_at.desc())
-            ).first()
-            if chat_session and (chat_session.channel_target_json or {}).get("to_user_id"):
-                target = dict(chat_session.channel_target_json)
         if target is None:
             return False
         target["mail_message_id"] = message.id

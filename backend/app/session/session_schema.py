@@ -231,7 +231,9 @@ class ChatTurnRequest(BaseModel):
     # user-facing conversation and subsequent conversational context.
     message_visibility: Literal["visible", "internal"] = Field(default="visible", exclude=True)
     # Inbound-matched opted-in skills auto-complete, including SMTP send (mail R9).
+    # Chat HTTP must not set this; only the inbound skill runner may.
     inbound_mail_auto_complete: bool = Field(default=False, exclude=True)
+    inbound_mail_message_id: Optional[str] = Field(default=None, exclude=True)
     # Internal callers such as scheduled tasks may pin one published SOP.  This
     # is deliberately separate from the visible message so execution does not
     # depend on the planner rediscovering the same SOP on every wake-up.

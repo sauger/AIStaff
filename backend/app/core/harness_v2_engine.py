@@ -993,6 +993,9 @@ class HarnessV2Engine:
                 step_deadline_monotonic=step_deadline_monotonic,
             )
             invoker.inbound_mail_auto_complete = bool(request.inbound_mail_auto_complete)
+            invoker.inbound_mail_message_id = (
+                str(getattr(request, "inbound_mail_message_id", "") or "").strip() or None
+            )
 
             result = self.task_agent.run(
                 requirement,

@@ -1353,6 +1353,16 @@ def _migrate_employee_inbound_mail_schema(conn, inspector, tables: set[str]) -> 
                 "ON employee_mail_messages(triage_state)"
             )
         )
+        # Mail v1 inbox rows were inserted before triage existed. Leave them
+        # done so upgrade/deploy does not treat historical mail as new (R1).
+        conn.execute(
+            text(
+                "UPDATE employee_mail_messages "
+                "SET triage_state = 'done', "
+                "triage_reason = COALESCE(triage_reason, '升级前来信，不按新信分流。') "
+                "WHERE folder = 'inbox' AND triage_state IS NULL"
+            )
+        )
     conn.execute(
         text(
             """
