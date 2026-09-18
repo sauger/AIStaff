@@ -1228,10 +1228,12 @@ class AgentLoop:
         agent = self._get_agent_profile(tenant_id, agent_id)
         if agent and not agent.is_overall:
             identity = _agent_identity_prompt(agent)
-            from app.cabinet.service import prompt_context
+            from app.cabinet.service import prompt_context as cabinet_prompt_context
+            from app.mail.service import prompt_context as mail_prompt_context
 
-            cabinet = prompt_context(self.db, tenant_id, agent.id)
-            return "\n\n".join(part for part in (identity, cabinet) if part)
+            cabinet = cabinet_prompt_context(self.db, tenant_id, agent.id)
+            mailbox = mail_prompt_context(self.db, tenant_id, agent.id)
+            return "\n\n".join(part for part in (identity, cabinet, mailbox) if part)
         if agent and agent.is_overall and agent.persona_prompt:
             return agent.persona_prompt
         row = self.db.get(PersonaConfig, tenant_id)

@@ -1,9 +1,13 @@
 from app.cabinet.errors import CabinetError
 from app.cabinet.service import (
     CHAT_INBOX_FOLDER,
+    MAIL_ATTACHMENT_FOLDER,
+    MAIL_INBOUND_FOLDER,
+    MAIL_OUTBOUND_FOLDER,
     MAX_CABINET_BYTES,
     MAX_FILE_BYTES,
     delete_entry,
+    ensure_mail_attachment_zone,
     find_by_name,
     ingest_chat_attachments,
     list_folder,
@@ -14,15 +18,20 @@ from app.cabinet.service import (
     purge_agent_cabinet,
     read_file_bytes,
     save_bytes,
+    unique_mail_filename,
     used_bytes,
 )
 
 __all__ = [
     "CHAT_INBOX_FOLDER",
+    "MAIL_ATTACHMENT_FOLDER",
+    "MAIL_INBOUND_FOLDER",
+    "MAIL_OUTBOUND_FOLDER",
     "MAX_CABINET_BYTES",
     "MAX_FILE_BYTES",
     "CabinetError",
     "delete_entry",
+    "ensure_mail_attachment_zone",
     "find_by_name",
     "ingest_chat_attachments",
     "list_folder",
@@ -33,5 +42,6 @@ __all__ = [
     "purge_agent_cabinet",
     "read_file_bytes",
     "save_bytes",
+    "unique_mail_filename",
     "used_bytes",
 ]

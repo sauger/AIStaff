@@ -43,6 +43,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
 } from '@/components/ui';
 import { Button as UIButton } from '@/components/ui/button';
 import { notify } from '@/components/ui/app-toast';
@@ -1406,6 +1407,46 @@ function SectionCard({
   );
 }
 
+function skillConfirmsBeforeSendMail(row: GeneralSkillRead | undefined): boolean {
+  if (!row) return false;
+  if (row.confirm_before_send_mail === true) return true;
+  for (const blob of [row.runtime_config, row.permissions, row.metadata]) {
+    const value = blob?.confirm_before_send_mail;
+    if (value === true) return true;
+    if (typeof value === 'string' && ['true', 'yes', '1'].includes(value.trim().toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function ConfirmBeforeSendMailControl({
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-[16px] rounded-[12px] border border-[#eceef1] bg-[#fafbfc] px-[14px] py-[12px]">
+      <div className="min-w-0">
+        <span className="text-[13px] font-medium text-[#18181a]">发出前要确认</span>
+        <p className="mt-[2px] text-[12px] leading-[1.55] text-[#858b9c]">
+          该技能发信时先出草稿，等人确认后再发送。
+        </p>
+      </div>
+      <Switch
+        checked={checked}
+        disabled={disabled}
+        aria-label="发出前要确认"
+        onCheckedChange={onChange}
+      />
+    </div>
+  );
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-[6px]">
@@ -1428,6 +1469,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
   const [skillDescription, setSkillDescription] = useState('');
   const [skillHomepage, setSkillHomepage] = useState('');
   const [capabilityScope, setCapabilityScope] = useState<CapabilityScope>('general');
+  const [confirmBeforeSendMail, setConfirmBeforeSendMail] = useState(false);
   const [skillFiles, setSkillFiles] = useState<GeneralSkillFile[]>([
     { path: 'SKILL.md', content: EMPTY_SKILL_MARKDOWN, size: EMPTY_SKILL_MARKDOWN.length, mime_type: 'text/markdown' },
   ]);
@@ -1641,6 +1683,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       || skillDescription !== (original.description || '')
       || skillHomepage !== (original.homepage || '')
       || capabilityScope !== normalizeCapabilityScope(original.capability_scope)
+      || confirmBeforeSendMail !== skillConfirmsBeforeSendMail(original)
       || normalizedSkillFiles(skillFiles) !== normalizedSkillFiles(
         original.skill_files?.length ? original.skill_files : [{ path: 'SKILL.md', content: original.skill_markdown }],
       )
@@ -1667,6 +1710,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
         description: skillDescription.trim() || undefined,
         homepage: skillHomepage.trim() || undefined,
         capability_scope: capabilityScope,
+        confirm_before_send_mail: confirmBeforeSendMail,
         markdown,
         files: skillFiles.length ? skillFiles : [{ path: 'SKILL.md', content: markdown }],
         directories: skillDirectories,
@@ -1682,6 +1726,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       setSkillDescription(row.description || '');
       setSkillHomepage(row.homepage || '');
       setCapabilityScope(normalizeCapabilityScope(row.capability_scope));
+      setConfirmBeforeSendMail(skillConfirmsBeforeSendMail(row));
       setSkillFiles(row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md', content: row.skill_markdown }]);
       setSkillDirectories(row.skill_directories || []);
       setSelectedFilePath((row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md' }])[0].path);
@@ -1708,6 +1753,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setSkillDescription('');
     setSkillHomepage('');
     setCapabilityScope('general');
+    setConfirmBeforeSendMail(false);
     setSkillFiles([{ path: 'SKILL.md', content: EMPTY_SKILL_MARKDOWN, size: EMPTY_SKILL_MARKDOWN.length, mime_type: 'text/markdown' }]);
     setSkillDirectories([]);
     setSelectedFilePath('SKILL.md');
@@ -1728,6 +1774,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setSkillDescription(row.description || '');
     setSkillHomepage(row.homepage || '');
     setCapabilityScope(normalizeCapabilityScope(row.capability_scope));
+    setConfirmBeforeSendMail(skillConfirmsBeforeSendMail(row));
     setSkillFiles(row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md', content: row.skill_markdown }]);
     setSkillDirectories(row.skill_directories || []);
     setSelectedFilePath((row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md' }])[0].path);
@@ -1748,6 +1795,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       setSkillDescription(row.description || '');
       setSkillHomepage(row.homepage || '');
       setCapabilityScope(normalizeCapabilityScope(row.capability_scope));
+      setConfirmBeforeSendMail(skillConfirmsBeforeSendMail(row));
       setMarkdown(row.skill_markdown);
       setSkillFiles(row.skill_files?.length ? row.skill_files : [{ path: 'SKILL.md', content: row.skill_markdown }]);
       setSkillDirectories(row.skill_directories || []);
@@ -2576,6 +2624,13 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
                   onChange={setCapabilityScope}
                   disabled={!canManageCurrentScope}
                   resourceType="skill"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <ConfirmBeforeSendMailControl
+                  checked={confirmBeforeSendMail}
+                  onChange={setConfirmBeforeSendMail}
+                  disabled={!canManageCurrentScope}
                 />
               </div>
             </div>

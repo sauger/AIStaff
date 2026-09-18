@@ -27,6 +27,9 @@ class GeneralSkillImportRequest(BaseModel):
     status: str = "published"
     capability_scope: Optional[CapabilityScope] = None
     original_slug: Optional[str] = None
+    runtime_config: Optional[dict[str, Any]] = None
+    permissions: Optional[dict[str, Any]] = None
+    confirm_before_send_mail: Optional[bool] = None
 
 
 class GeneralSkillClawHubImportRequest(BaseModel):
@@ -39,6 +42,9 @@ class GeneralSkillClawHubImportRequest(BaseModel):
     homepage: Optional[str] = None
     status: str = "published"
     capability_scope: CapabilityScope = "general"
+    runtime_config: Optional[dict[str, Any]] = None
+    permissions: Optional[dict[str, Any]] = None
+    confirm_before_send_mail: Optional[bool] = None
 
 
 class GeneralSkillPackageUploadRequest(BaseModel):
@@ -52,6 +58,9 @@ class GeneralSkillPackageUploadRequest(BaseModel):
     homepage: Optional[str] = None
     status: str = "published"
     capability_scope: CapabilityScope = "general"
+    runtime_config: Optional[dict[str, Any]] = None
+    permissions: Optional[dict[str, Any]] = None
+    confirm_before_send_mail: Optional[bool] = None
 
 
 class GeneralSkillRead(BaseModel):
@@ -69,6 +78,7 @@ class GeneralSkillRead(BaseModel):
     capability_scope: CapabilityScope
     permissions: dict[str, Any] = Field(default_factory=dict)
     runtime_config: dict[str, Any] = Field(default_factory=dict)
+    confirm_before_send_mail: bool = False
     created_at: str
     updated_at: str
 

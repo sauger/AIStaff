@@ -806,6 +806,73 @@ class EmployeeCabinetEntry(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class EmployeeMailbox(SQLModel, table=True):
+    """Per-employee IMAP/SMTP identity. Not a login secret and not copied with agents."""
+
+    __tablename__ = "employee_mailboxes"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "agent_id", name="uq_employee_mailbox_agent"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("mbox"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    email_address: str
+    imap_host: str
+    imap_port: int = Field(default=993)
+    imap_encryption: str = Field(default="ssl")
+    smtp_host: str
+    smtp_port: int = Field(default=587)
+    smtp_encryption: str = Field(default="starttls")
+    username: str
+    password_encrypted: str
+    last_synced_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    uid_validity: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class EmployeeMailMessage(SQLModel, table=True):
+    """Inbox cache, product sent log, and pending confirm drafts. Not copied with agents."""
+
+    __tablename__ = "employee_mail_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "agent_id", "folder", "dedupe_key", name="uq_employee_mail_dedupe"
+        ),
+        Index("ix_employee_mail_agent_folder", "tenant_id", "agent_id", "folder"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("mail"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    folder: str = Field(index=True)
+    status: str = Field(index=True)
+    direction: str = Field(default="outbound", index=True)
+    source: str = Field(default="console", index=True)
+    imap_uid: Optional[str] = None
+    rfc_message_id: Optional[str] = None
+    dedupe_key: str
+    from_address: str = ""
+    to_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    cc_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    bcc_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    subject: str = ""
+    body_text: str = ""
+    in_reply_to: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    received_at: Optional[datetime] = None
+    smtp_error: Optional[str] = None
+    imap_append_note: Optional[str] = None
+    attachments_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    confirm_required: bool = False
+    confirmed_at: Optional[datetime] = None
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Tool(SQLModel, table=True):
     __tablename__ = "tools"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tool_tenant_name"),)

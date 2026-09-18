@@ -12,6 +12,7 @@ import zipfile
 from collections.abc import Callable, Iterator
 from html import unescape
 from io import BytesIO
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
@@ -62,6 +63,7 @@ from app.general_skills import (
 from app.general_skills.runner import GeneralSkillReader, GeneralSkillRunner
 from app.general_skills.schema import GeneralSkillFile
 from app.llm.model_config_resolver import resolve_model_config_for_runtime
+from app.mail.confirm import skill_requires_mail_confirm
 from app.security.auth import get_current_user
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -114,6 +116,7 @@ def general_skill_read(row: GeneralSkill, status_override: str | None = None) ->
         capability_scope=normalize_capability_scope(row.capability_scope),
         permissions=row.permissions_json or {},
         runtime_config=row.runtime_config_json or {},
+        confirm_before_send_mail=skill_requires_mail_confirm(row),
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -251,10 +254,20 @@ def import_general_skill(
         row.status = request.status
         if request.capability_scope is not None:
             row.capability_scope = request.capability_scope
+        if request.permissions is not None:
+            row.permissions_json = _permissions_json(request.permissions)
+        row.runtime_config_json = _runtime_config_with_mail_confirm(
+            existing=row.runtime_config_json,
+            requested=request.runtime_config,
+            confirm_before_send_mail=request.confirm_before_send_mail,
+            metadata=metadata,
+            permissions=row.permissions_json,
+        )
         row.updated_at = now
     else:
         if requested_directories:
             metadata["skill_directories"] = requested_directories
+        permissions_json = _permissions_json(request.permissions)
         row = GeneralSkill(
             tenant_id=request.tenant_id,
             slug=slug,
@@ -268,8 +281,13 @@ def import_general_skill(
             capability_scope=normalize_capability_scope(
                 request.capability_scope or inherited_capability_scope
             ),
-            permissions_json={"network": True, "python": True},
-            runtime_config_json={"runtime": "python", "timeout_seconds": 12},
+            permissions_json=permissions_json,
+            runtime_config_json=_runtime_config_with_mail_confirm(
+                requested=request.runtime_config,
+                confirm_before_send_mail=request.confirm_before_send_mail,
+                metadata=metadata,
+                permissions=permissions_json,
+            ),
             created_at=now,
             updated_at=now,
         )
@@ -339,6 +357,9 @@ def import_skillhub_skill(
         description=request.description,
         homepage=request.homepage,
         capability_scope=request.capability_scope,
+        runtime_config=request.runtime_config,
+        permissions=request.permissions,
+        confirm_before_send_mail=request.confirm_before_send_mail,
         current_user=current_user,
     )
 
@@ -390,6 +411,9 @@ def import_general_skill_package(
         description=request.description,
         homepage=request.homepage,
         capability_scope=request.capability_scope,
+        runtime_config=request.runtime_config,
+        permissions=request.permissions,
+        confirm_before_send_mail=request.confirm_before_send_mail,
         current_user=current_user,
     )
 
@@ -407,6 +431,9 @@ def _create_imported_general_skill(
     description: str | None = None,
     homepage: str | None = None,
     capability_scope: str = "general",
+    runtime_config: dict[str, Any] | None = None,
+    permissions: dict[str, Any] | None = None,
+    confirm_before_send_mail: bool | None = None,
     current_user: object | None = None,
 ) -> GeneralSkillRead:
     _validate_skill_package_references(files)
@@ -450,8 +477,13 @@ def _create_imported_general_skill(
         ),
         status=status,
         capability_scope=normalize_capability_scope(capability_scope),
-        permissions_json={"network": True, "python": True},
-        runtime_config_json={"runtime": "python", "timeout_seconds": 12},
+        permissions_json=_permissions_json(permissions),
+        runtime_config_json=_runtime_config_with_mail_confirm(
+            requested=runtime_config,
+            confirm_before_send_mail=confirm_before_send_mail,
+            metadata=metadata,
+            permissions=permissions,
+        ),
         created_at=now,
         updated_at=now,
     )
@@ -1289,6 +1321,57 @@ def _skill_files_or_markdown(row: GeneralSkill) -> list[dict[str, object]]:
             "size": len(row.skill_markdown.encode("utf-8")),
         }
     ]
+
+
+def _permissions_json(requested: dict[str, Any] | None) -> dict[str, Any]:
+    permissions = {"network": True, "python": True}
+    if isinstance(requested, dict):
+        permissions.update(requested)
+    return permissions
+
+
+def _coerce_mail_confirm_flag(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return None
+
+
+def _runtime_config_with_mail_confirm(
+    *,
+    existing: dict[str, Any] | None = None,
+    requested: dict[str, Any] | None = None,
+    confirm_before_send_mail: bool | None = None,
+    metadata: dict[str, Any] | None = None,
+    permissions: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config: dict[str, Any] = {"runtime": "python", "timeout_seconds": 12}
+    if isinstance(existing, dict):
+        config.update(existing)
+    if isinstance(requested, dict):
+        config.update(requested)
+    config.setdefault("runtime", "python")
+    config.setdefault("timeout_seconds", 12)
+    flag = _coerce_mail_confirm_flag(confirm_before_send_mail)
+    if flag is None and isinstance(requested, dict) and "confirm_before_send_mail" in requested:
+        flag = _coerce_mail_confirm_flag(requested.get("confirm_before_send_mail"))
+    if flag is None:
+        for blob in (config, permissions, metadata):
+            if isinstance(blob, dict) and "confirm_before_send_mail" in blob:
+                flag = _coerce_mail_confirm_flag(blob.get("confirm_before_send_mail"))
+                if flag is not None:
+                    break
+    if flag is True:
+        config["confirm_before_send_mail"] = True
+    elif flag is False:
+        config.pop("confirm_before_send_mail", None)
+    return config
 
 
 def _parse_skill_metadata(markdown: str) -> dict[str, object]:
