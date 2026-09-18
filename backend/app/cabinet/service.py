@@ -472,7 +472,7 @@ def produce_from_template(
         for old, new in (replacements or {}).items()
         if str(old)
     }
-    if changes and not can_apply_replacements(template_row.name):
+    if not can_apply_replacements(template_row.name):
         raise CabinetError(
             "CABINET_TEMPLATE_UNPROCESSABLE",
             (
@@ -482,7 +482,7 @@ def produce_from_template(
             ),
             details={"path": template_path, "filename": template_row.name},
         )
-    produced = apply_replacements(template_row.name, data, changes) if changes else data
+    produced = apply_replacements(template_row.name, data, changes)
     if destination_path:
         destination = normalize_path(destination_path, allow_empty=False)
     else:

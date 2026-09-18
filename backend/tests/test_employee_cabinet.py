@@ -269,6 +269,39 @@ def test_unprocessable_template_fails_without_new_file(cabinet_db) -> None:
     assert [item.name for item in listing.entries] == ["印章.png"]
 
 
+def test_produce_unprocessable_format_fails_without_replacements(
+    cabinet_db, tmp_path: Path
+) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b) = cabinet_db
+    for filename, payload in (
+        ("印章.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 16),
+        ("说明.pdf", b"%PDF-1.4 test"),
+        ("无扩展名", b"\x00\x01\x02binary"),
+    ):
+        _upload(db, owner, agent_a.id, filename, payload)
+        with pytest.raises(CabinetError) as error:
+            produce_from_template(db, "tenant_demo", agent_a.id, template=filename)
+        assert error.value.code == "CABINET_TEMPLATE_UNPROCESSABLE"
+        assert "没有生成新文件" in error.value.message
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    result = invoke_cabinet_tool(
+        SimpleNamespace(
+            db=db,
+            tenant_id="tenant_demo",
+            agent_id=agent_a.id,
+            workspace_root=workspace,
+        ),
+        "cabinet_produce_from_template",
+        {"template": "印章.png"},
+    )
+    assert result["success"] is False
+    assert result["error"]["code"] == "CABINET_TEMPLATE_UNPROCESSABLE"
+    listing = list_folder(db, "tenant_demo", agent_a.id, "", can_write=True)
+    assert {item.name for item in listing.entries} == {"印章.png", "说明.pdf", "无扩展名"}
+    assert not any("新文件" in item.name for item in listing.entries)
+
+
 def test_upload_accepts_unrestricted_formats(cabinet_db) -> None:
     db, (owner, _other, _admin, agent_a, _agent_b) = cabinet_db
     for filename, payload in (
