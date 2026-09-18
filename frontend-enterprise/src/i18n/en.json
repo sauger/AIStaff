@@ -2272,6 +2272,8 @@
   "仅限 SOP": "SOP Only",
   "查看仅限 SOP 说明": "View SOP-only scope details",
   "切换能力范围": "Toggle capability scope",
+  "发出前要确认": "Confirm before sending mail",
+  "该技能发信时先出草稿，等人确认后再发送。": "This skill drafts mail first and waits for a person to confirm before sending.",
   "闲聊与 SOP 执行中均可自主调用。": "Available for autonomous use in chat and SOP execution.",
   "仅在 SOP 步骤指定相关工具时可用。": "Available only when the relevant tool is specified in an SOP step.",
   "仅在 SOP 步骤指定相关技能时可用。": "Available only when the relevant skill is specified in an SOP step.",

@@ -9,6 +9,10 @@ import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from app.agents.branching import (
+    ensure_private_resource_binding,
+    mark_resource_private_for_agent,
+)
 from app.agents.schema import AgentProfileCreateRequest
 from app.api.agents import create_agent
 from app.cabinet.service import (
@@ -24,13 +28,16 @@ from app.core.capability_manifest import (
     RESERVED_HARNESS_CAPABILITY_NAMES,
     CapabilityManifestBuilder,
 )
+from app.core.harness_capability_invoker import HarnessCapabilityInvoker
 from app.db.models import (
     AgentProfile,
     AgentResourceBinding,
+    ChatSession,
     EmployeeMailbox,
     EmployeeMailMessage,
     GeneralSkill,
     Message,
+    ModelConfig,
     Skill,
     Tenant,
     User,
@@ -489,6 +496,105 @@ def test_skill_confirm_flag_blocks_send(mail_db) -> None:
         {"to": ["sales@example.com"], "subject": "报价", "body": "内容"},
     )
     assert result["data"]["draft"] is True
+    assert transport.sent == []
+
+
+def test_general_skill_harness_name_blocks_send_without_chat_confirm(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
+    _configure(db, owner, agent_a.id)
+    skill = GeneralSkill(
+        tenant_id="tenant_demo",
+        slug="quote",
+        name="报价技能",
+        skill_markdown="# 报价",
+        status="published",
+        runtime_config_json={"confirm_before_send_mail": True},
+    )
+    db.add(skill)
+    db.commit()
+    result = invoke_mail_tool(
+        _invoker(
+            db,
+            agent_a.id,
+            active_skill=None,
+            latest_user_text="给 sales@example.com 发报价",
+            _activated_names={"general_skill.quote"},
+        ),
+        "mail_send",
+        {"to": ["sales@example.com"], "subject": "报价", "body": "内容"},
+    )
+    assert result["success"] is True
+    assert result["data"]["draft"] is True
+    assert result["data"]["delivered"] is False
+    assert transport.sent == []
+
+
+def test_loaded_general_skill_confirm_flag_blocks_harness_send(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
+    _configure(db, owner, agent_a.id)
+    skill = GeneralSkill(
+        tenant_id="tenant_demo",
+        slug="quote",
+        name="报价技能",
+        skill_markdown="# 报价\n给客户发报价邮件。",
+        status="published",
+        permissions_json={"confirm_before_send_mail": True},
+    )
+    mark_resource_private_for_agent(skill, agent_a.id)
+    db.add(skill)
+    db.flush()
+    ensure_private_resource_binding(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        "general_skill",
+        skill.id,
+        "active",
+        metadata_json=skill.metadata_json,
+    )
+    db.commit()
+    db.refresh(skill)
+    session = ChatSession(
+        id="sess_1",
+        tenant_id="tenant_demo",
+        user_id=owner.id,
+        agent_id=agent_a.id,
+    )
+    invoker = HarnessCapabilityInvoker(
+        db,
+        tenant_id="tenant_demo",
+        session=session,
+        task_frame_id="task-mail-confirm",
+        model_config=ModelConfig(
+            id="model-mail",
+            tenant_id="tenant_demo",
+            name="test",
+            api_key_encrypted="x",
+            model="test",
+        ),
+        manifest=CapabilityManifestBuilder(db).build("tenant_demo", agent_a.id, None, None),
+        active_skill=None,
+        active_step_id=None,
+        agent_id=agent_a.id,
+        initially_activated_names={"capability_describe", "mail_send"},
+    )
+    described = invoker.invoke(
+        "capability_describe",
+        {"capabilities": ["general_skill.quote"]},
+    )
+    assert described["success"] is True
+    loaded = invoker.invoke(
+        "general_skill.quote",
+        {"query": "给 sales@example.com 发报价", "operation": "read"},
+    )
+    assert loaded["success"] is True
+    result = invoker.invoke(
+        "mail_send",
+        {"to": ["sales@example.com"], "subject": "报价", "body": "内容"},
+    )
+    assert result["success"] is True
+    assert result["data"]["draft"] is True
+    assert result["data"]["delivered"] is False
     assert transport.sent == []
 
 

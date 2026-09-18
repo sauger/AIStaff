@@ -312,6 +312,75 @@ def test_import_general_skill_uses_user_supplied_metadata() -> None:
             assert exc.detail == "General skill slug cannot be modified"
 
 
+def test_import_general_skill_accepts_confirm_before_send_mail() -> None:
+    with _test_session() as db:
+        _seed_minimal_tenant(db)
+        db.add(
+            AgentProfile(
+                id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True
+            )
+        )
+        db.commit()
+
+        created = import_general_skill(
+            GeneralSkillImportRequest(
+                tenant_id="tenant_demo",
+                name="报价技能",
+                slug="quote",
+                markdown="# 报价",
+                confirm_before_send_mail=True,
+            ),
+            db,
+            _admin_user(),
+        )
+        assert created.confirm_before_send_mail is True
+        assert created.runtime_config["runtime"] == "python"
+        assert created.runtime_config["timeout_seconds"] == 12
+        assert created.runtime_config["confirm_before_send_mail"] is True
+
+        via_runtime = import_general_skill(
+            GeneralSkillImportRequest(
+                tenant_id="tenant_demo",
+                name="询价技能",
+                slug="inquiry",
+                markdown="# 询价",
+                runtime_config={"confirm_before_send_mail": True, "timeout_seconds": 20},
+            ),
+            db,
+            _admin_user(),
+        )
+        assert via_runtime.confirm_before_send_mail is True
+        assert via_runtime.runtime_config["timeout_seconds"] == 20
+
+        via_metadata = import_general_skill_package(
+            GeneralSkillPackageUploadRequest(
+                tenant_id="tenant_demo",
+                filename="quote.md",
+                content_base64=base64.b64encode(
+                    "---\nconfirm_before_send_mail: true\n---\n# 报价包\n".encode()
+                ).decode(),
+            ),
+            db,
+            _admin_user(),
+        )
+        assert via_metadata.confirm_before_send_mail is True
+
+        cleared = import_general_skill(
+            GeneralSkillImportRequest(
+                tenant_id="tenant_demo",
+                name="报价技能",
+                slug="quote",
+                original_slug="quote",
+                markdown="# 报价",
+                confirm_before_send_mail=False,
+            ),
+            db,
+            _admin_user(),
+        )
+        assert cleared.confirm_before_send_mail is False
+        assert "confirm_before_send_mail" not in cleared.runtime_config
+
+
 def test_import_general_skill_without_original_slug_does_not_overwrite_existing() -> None:
     with _test_session() as db:
         _seed_minimal_tenant(db)

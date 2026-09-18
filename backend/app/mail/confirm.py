@@ -92,6 +92,24 @@ def latest_user_text(invoker: Any) -> str:
     return str(rows[0].content or "")
 
 
+def skill_activation_names(skill: Any | None) -> set[str]:
+    names: set[str] = set()
+    if skill is None:
+        return names
+    for raw in (
+        getattr(skill, "slug", None),
+        getattr(skill, "name", None),
+        getattr(skill, "id", None),
+        getattr(skill, "skill_id", None),
+    ):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        names.add(text)
+        names.add(f"general_skill.{text}")
+    return names
+
+
 def iter_confirm_skills(invoker: Any) -> list[Any]:
     skills: list[Any] = []
     active = getattr(invoker, "active_skill", None)
@@ -100,22 +118,23 @@ def iter_confirm_skills(invoker: Any) -> list[Any]:
     db = getattr(invoker, "db", None)
     tenant_id = str(getattr(invoker, "tenant_id", "") or "")
     activated = set(getattr(invoker, "_activated_names", set()) or set())
-    if db is None or not tenant_id or not activated:
+    loaded = set(getattr(invoker, "_loaded_general_skill_names", set()) or set())
+    names_to_match = activated | loaded
+    if db is None or not tenant_id or not names_to_match:
         return skills
     try:
         rows = db.exec(select(GeneralSkill).where(GeneralSkill.tenant_id == tenant_id)).all()
     except (AttributeError, TypeError, ValueError):
         return skills
     for row in rows:
-        names = {row.slug, row.name, row.id}
-        if names & activated:
+        if skill_activation_names(row) & names_to_match:
             skills.append(row)
     try:
         sop_rows = db.exec(select(Skill).where(Skill.tenant_id == tenant_id)).all()
     except (AttributeError, TypeError, ValueError):
         return skills
     for row in sop_rows:
-        if row.skill_id in activated or row.name in activated:
+        if skill_activation_names(row) & names_to_match:
             skills.append(row)
     return skills
 

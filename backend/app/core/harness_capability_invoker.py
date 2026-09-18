@@ -67,6 +67,7 @@ from app.harness.sandbox import parse_network_policy
 from app.knowledge.citations import knowledge_citations_from_results
 from app.knowledge.schema import KnowledgeSearchRequest
 from app.knowledge.service import KnowledgeService
+from app.mail.confirm import skill_requires_mail_confirm
 from app.skills.tool_authorization import current_sop_tool_authorization
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import ToolCall
@@ -164,6 +165,8 @@ class HarnessCapabilityInvoker:
                 if name in self._descriptors
             }
         )
+        self._loaded_general_skill_names: set[str] = set()
+        self.confirm_before_send_mail = False
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self._raise_if_cancelled()
@@ -853,6 +856,9 @@ class HarnessCapabilityInvoker:
                 "通用技能 operation 只能是 read。",
             )
         result = self._read_general_skill_package(skill, metadata, query)
+        self._loaded_general_skill_names.add(f"general_skill.{skill.slug}")
+        if skill_requires_mail_confirm(skill):
+            self.confirm_before_send_mail = True
         if requested_operation == "execute":
             result["data"]["requested_operation"] = "execute"
             result["data"]["compatibility_notice"] = (
