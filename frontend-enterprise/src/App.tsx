@@ -50,6 +50,7 @@ import GeneralSkillsPage, {
   GeneralSkillNewPage,
 } from "./pages/GeneralSkillsPage";
 import KnowledgeManagePage, { KnowledgeAddPage } from "./pages/KnowledgePage";
+import CabinetPage from "./pages/CabinetPage";
 import LoginPage from "./pages/LoginPage";
 import ModelsPage from "./pages/ModelsPage";
 import RuntimeSettingsPage from "./pages/RuntimeSettingsPage";
@@ -384,6 +385,7 @@ function Shell({
     "/enterprise/memories",
     "/enterprise/feedback",
     "/enterprise/knowledge",
+    "/enterprise/cabinet",
     "/enterprise/general-skills",
     "/enterprise/skills",
     "/enterprise/tools",
@@ -650,6 +652,15 @@ function Shell({
                 path="/enterprise/knowledge"
                 element={
                   <KnowledgeManagePage
+                    currentUser={auth.user}
+                    onLogout={onLogout}
+                  />
+                }
+              />
+              <Route
+                path="/enterprise/cabinet"
+                element={
+                  <CabinetPage
                     currentUser={auth.user}
                     onLogout={onLogout}
                   />

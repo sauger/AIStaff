@@ -11,6 +11,7 @@ export enum EnterpriseRoute {
   Feedback = '/enterprise/feedback',
   Channels = '/enterprise/channels',
   Knowledge = '/enterprise/knowledge',
+  Cabinet = '/enterprise/cabinet',
   GeneralSkills = '/enterprise/general-skills',
   Skills = '/enterprise/skills',
   Tools = '/enterprise/tools',

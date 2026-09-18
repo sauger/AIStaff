@@ -930,6 +930,8 @@ def _reply_chunks(reply: str) -> Iterator[str]:
 def _validate_chat_turn_attachments(
     request: ChatTurnRequest,
 ) -> ChatTurnRequest:
+    if not request.attachments:
+        return request
     try:
         attachments = validate_chat_turn_attachments(
             request.attachments,
@@ -3119,6 +3121,11 @@ _RESERVED_TOOL_LABELS = {
     "delete_file": "删除文件",
     "move_file": "移动文件",
     "copy_file": "复制文件",
+    "cabinet_list": "查看文件柜",
+    "cabinet_find": "查找文件柜文件",
+    "cabinet_read": "读取文件柜文件",
+    "cabinet_save": "保存到文件柜",
+    "cabinet_produce_from_template": "按模板生产文件",
 }
 
 _SKILL_COMPLETED_REASON_LABELS = {

@@ -31,6 +31,7 @@ from app.api import (
     ui_config,
     wechat_kf,
 )
+from app.cabinet.api import router as cabinet_router
 from app.async_jobs import shutdown_async_jobs, start_async_jobs
 from app.channels import start_channel_services, stop_channel_services
 from app.config import get_settings
@@ -129,6 +130,7 @@ app.include_router(agents.enterprise_router)
 app.include_router(general_skills.router)
 app.include_router(knowledge_bases.router)
 app.include_router(knowledge.router)
+app.include_router(cabinet_router)
 app.include_router(skills.router)
 app.include_router(model_configs.router)
 app.include_router(memories.router)

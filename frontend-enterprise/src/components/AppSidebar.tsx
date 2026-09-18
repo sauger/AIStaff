@@ -35,6 +35,7 @@ import IconAlarm from '../assets/icons/profile-alarm.svg?react';
 import IconHistory from '../assets/icons/profile-history.svg?react';
 import IconCalendar from '../assets/icons/profile-calendar.svg?react';
 import IconFolder from '../assets/icons/cap-folder.svg?react';
+import IconCabinet from '../assets/icons/cap-cabinet.svg?react';
 import IconMagicWand from '../assets/icons/cap-magicwand.svg?react';
 import IconClipboard from '../assets/icons/cap-clipboard.svg?react';
 import IconBriefcase from '../assets/icons/cap-briefcase.svg?react';
@@ -77,6 +78,7 @@ const PROFILE_NAV: NavItem[] = [
 
 const CAPABILITY_NAV: NavItem[] = [
   { route: EnterpriseRoute.Knowledge, label: '知识库', Icon: IconFolder },
+  { route: EnterpriseRoute.Cabinet, label: '文件柜', Icon: IconCabinet },
   { route: EnterpriseRoute.GeneralSkills, label: '技能', Icon: IconMagicWand },
   { route: EnterpriseRoute.Skills, label: 'SOP', Icon: IconClipboard },
   { route: EnterpriseRoute.Tools, label: '工具', Icon: IconBriefcase },

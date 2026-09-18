@@ -1253,3 +1253,29 @@ export type TeamEventRead = {
   payload: Record<string, unknown>;
   created_at: string;
 };
+
+export type CabinetEntryKind = 'file' | 'folder';
+
+export type CabinetEntryRead = {
+  id: string;
+  kind: CabinetEntryKind;
+  name: string;
+  path: string;
+  parent_path: string;
+  size_bytes: number;
+  content_type?: string | null;
+  sha256?: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CabinetListResponse = {
+  agent_id: string;
+  path: string;
+  can_write: boolean;
+  used_bytes: number;
+  max_file_bytes: number;
+  max_cabinet_bytes: number;
+  entries: CabinetEntryRead[];
+};

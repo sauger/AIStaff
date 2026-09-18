@@ -538,6 +538,16 @@ class HarnessCapabilityInvoker:
                 active_skill=self.active_skill,
                 active_step_id=self.active_step_id,
             )
+        if name in {
+            "cabinet_list",
+            "cabinet_find",
+            "cabinet_read",
+            "cabinet_save",
+            "cabinet_produce_from_template",
+        }:
+            from app.cabinet.harness import invoke_cabinet_tool
+
+            return invoke_cabinet_tool(self, name, arguments)
         return _failure(
             "UNSUPPORTED_INTERNAL_CAPABILITY",
             "不支持的 Harness 内部能力。",

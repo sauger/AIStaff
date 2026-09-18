@@ -169,6 +169,7 @@ class AgentLoop:
         user_message_id: str | None = None
         step_result = StepAgentResult(action="reply")
         try:
+            self._ingest_chat_attachments_into_cabinet(request)
             return engine.run(request)
         except (HarnessTurnConflict, HarnessSessionBusy) as exc:
             chat_session = engine.session
@@ -1206,10 +1207,31 @@ class AgentLoop:
     ) -> ModelConfig | None:
         return model_for_agent(self.db, tenant_id, agent_id, role)
 
+    def _ingest_chat_attachments_into_cabinet(self, request: ChatTurnRequest) -> None:
+        if not request.attachments or not request.agent_id:
+            return
+        from app.cabinet.errors import CabinetError
+        from app.cabinet.service import ingest_chat_attachments
+
+        try:
+            ingest_chat_attachments(
+                self.db,
+                tenant_id=request.tenant_id,
+                agent_id=request.agent_id,
+                user_id=request.user_id or "",
+                attachments=request.attachments,
+            )
+        except CabinetError as error:
+            raise AgentLoopPreconditionError(error.code, error.message) from error
+
     def _get_persona_prompt(self, tenant_id: str, agent_id: str | None = None) -> str | None:
         agent = self._get_agent_profile(tenant_id, agent_id)
         if agent and not agent.is_overall:
-            return _agent_identity_prompt(agent)
+            identity = _agent_identity_prompt(agent)
+            from app.cabinet.service import prompt_context
+
+            cabinet = prompt_context(self.db, tenant_id, agent.id)
+            return "\n\n".join(part for part in (identity, cabinet) if part)
         if agent and agent.is_overall and agent.persona_prompt:
             return agent.persona_prompt
         row = self.db.get(PersonaConfig, tenant_id)
