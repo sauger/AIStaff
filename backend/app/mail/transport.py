@@ -460,7 +460,7 @@ def _imap_error(mailbox: MailboxConnection, exc: Exception) -> MailError:
         )
     return MailError(
         "MAIL_IMAP_FAILED",
-        f"IMAP 连接失败（主机 {mailbox.imap_host}:{mailbox.imap_port}）：{_safe_exc(exc)}",
+        f"IMAP 连接失败（主机 {mailbox.imap_host}:{mailbox.imap_port}）：{_safe_exc(exc, mailbox)}",
         details={"host": mailbox.imap_host, "port": mailbox.imap_port},
     )
 
@@ -480,11 +480,14 @@ def _smtp_error(mailbox: MailboxConnection, exc: Exception) -> MailError:
         )
     return MailError(
         "MAIL_SMTP_FAILED",
-        f"SMTP 连接或发送失败（主机 {mailbox.smtp_host}:{mailbox.smtp_port}）：{_safe_exc(exc)}",
+        f"SMTP 连接或发送失败（主机 {mailbox.smtp_host}:{mailbox.smtp_port}）：{_safe_exc(exc, mailbox)}",
         details={"host": mailbox.smtp_host, "port": mailbox.smtp_port},
     )
 
 
-def _safe_exc(exc: Exception) -> str:
+def _safe_exc(exc: Exception, mailbox: MailboxConnection | None = None) -> str:
     text = str(exc or exc.__class__.__name__).replace("\n", " ").strip()
+    secret = str(getattr(mailbox, "password", "") or "")
+    if secret:
+        text = text.replace(secret, "******")
     return text[:180] or exc.__class__.__name__

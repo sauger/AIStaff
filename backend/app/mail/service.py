@@ -363,6 +363,15 @@ def compose(
         not confirmed and send_requires_confirmation(invoker, {"as_draft": request.as_draft})
     )
     if wait:
+        if prepared:
+            attachments = _store_outbound_copies(
+                db,
+                tenant_id,
+                agent_id,
+                attachments,
+                prepared,
+                token=f"draft-{utc_now().isoformat()}",
+            )
         row = _store_message(
             db,
             tenant_id=tenant_id,
@@ -649,7 +658,12 @@ def _upsert_inbox(db: Session, mailbox: EmployeeMailbox, fetched: FetchedMessage
         )
     ).first()
     attachments = _store_inbound_attachments(
-        db, mailbox.tenant_id, mailbox.agent_id, fetched, token=fetched.uid or dedupe
+        db,
+        mailbox.tenant_id,
+        mailbox.agent_id,
+        fetched,
+        token=fetched.uid or dedupe,
+        existing=existing.attachments_json if existing is not None else None,
     )
     if existing is None:
         _store_message(
@@ -696,11 +710,22 @@ def _store_inbound_attachments(
     fetched: FetchedMessage,
     *,
     token: str,
+    existing: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     stored: list[dict[str, Any]] = []
-    if fetched.attachments:
+    reused = {
+        str(item.get("filename") or ""): item
+        for item in (existing or [])
+        if item.get("saved") and item.get("cabinet_path") and item.get("filename")
+    }
+    pending = [item for item in fetched.attachments if item.filename not in reused]
+    if pending:
         ensure_mail_attachment_zone(db, tenant_id, agent_id)
     for item in fetched.attachments:
+        previous = reused.get(item.filename)
+        if previous is not None:
+            stored.append(previous)
+            continue
         stored.append(
             _save_attachment_bytes(
                 db,
@@ -776,6 +801,9 @@ def _store_outbound_copies(
             "content_type": item.content_type,
             "size_bytes": len(item.data),
         }
+        if info.get("saved") and info.get("cabinet_path"):
+            stored.append(info)
+            continue
         saved = _save_attachment_bytes(
             db,
             tenant_id,

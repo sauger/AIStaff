@@ -91,7 +91,12 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
   const [smtpEncryption, setSmtpEncryption] = useState('starttls');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [mailboxError, setMailboxError] = useState('');
+  const [listError, setListError] = useState('');
+  const [sending, setSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const mailboxSeqRef = useRef(0);
+  const listSeqRef = useRef(0);
 
   const currentAgent = useMemo(
     () => agents.find((item) => item.id === agentId) || null,
@@ -133,12 +138,15 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
       );
       const visible = visibleEmployeeAgents(rows, currentUser, { activeOnly: true });
       setAgents(visible);
+      const stored = window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY) || '';
+      if (isTeamScope(agentId) || isTeamScope(stored)) {
+        return;
+      }
       const preferred = visible.find((item) => item.id === agentId && !item.is_overall)
         || visible.find((item) => !item.is_overall);
       const nextId = preferred?.id || '';
       if (nextId && nextId !== agentId) {
-        const stored = window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY) || '';
-        if (!isTeamScope(stored)) persistSharedAgentScope(nextId);
+        persistSharedAgentScope(nextId);
         setAgentId(nextId);
       }
     } catch (error) {
@@ -149,12 +157,15 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
   }
 
   async function loadMailbox() {
-    if (!agentId) return;
+    if (!agentId || isTeamScope(agentId)) return;
+    const seq = ++mailboxSeqRef.current;
     try {
       const result = await api.get<MailboxStatusRead>(
         `/api/enterprise/mail/mailbox?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}`,
       );
+      if (seq !== mailboxSeqRef.current) return;
       setMailbox(result);
+      setMailboxError('');
       setEmailAddress(result.email_address || '');
       setImapHost(result.imap_host || '');
       setImapPort(String(result.imap_port || 993));
@@ -165,40 +176,52 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
       setUsername(result.username || '');
       setPassword('');
     } catch (error) {
+      if (seq !== mailboxSeqRef.current) return;
       notify.error(apiErrorMessage(error));
       setMailbox(null);
+      setMailboxError(apiErrorMessage(error));
     }
   }
 
   async function loadInbox() {
-    if (!agentId) return;
+    if (!agentId || isTeamScope(agentId)) return;
+    const seq = ++listSeqRef.current;
     setLoading(true);
+    setListError('');
     try {
       const result = await api.get<MailListResponse>(
         `/api/enterprise/mail/inbox?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}`,
       );
+      if (seq !== listSeqRef.current) return;
       setInbox(result);
     } catch (error) {
+      if (seq !== listSeqRef.current) return;
       notify.error(apiErrorMessage(error));
       setInbox(null);
+      setListError(apiErrorMessage(error));
     } finally {
-      setLoading(false);
+      if (seq === listSeqRef.current) setLoading(false);
     }
   }
 
   async function loadSent() {
-    if (!agentId) return;
+    if (!agentId || isTeamScope(agentId)) return;
+    const seq = ++listSeqRef.current;
     setLoading(true);
+    setListError('');
     try {
       const result = await api.get<MailListResponse>(
         `/api/enterprise/mail/sent?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}`,
       );
+      if (seq !== listSeqRef.current) return;
       setSent(result);
     } catch (error) {
+      if (seq !== listSeqRef.current) return;
       notify.error(apiErrorMessage(error));
       setSent(null);
+      setListError(apiErrorMessage(error));
     } finally {
-      setLoading(false);
+      if (seq === listSeqRef.current) setLoading(false);
     }
   }
 
@@ -246,7 +269,8 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
   }
 
   async function sendMail(asDraft = false) {
-    if (!agentId) return;
+    if (!agentId || sending) return;
+    setSending(true);
     const attachments = await Promise.all(
       files.map(async (file) => ({
         filename: file.name,
@@ -283,11 +307,14 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
       }
     } catch (error) {
       notify.error(apiErrorMessage(error));
+    } finally {
+      setSending(false);
     }
   }
 
   async function sendDraft(id: string) {
-    if (!agentId) return;
+    if (!agentId || sending) return;
+    setSending(true);
     try {
       const result = await api.post<MailSendResult>(
         `/api/enterprise/mail/drafts/${encodeURIComponent(id)}/send?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}`,
@@ -299,6 +326,8 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
       void loadSent();
     } catch (error) {
       notify.error(apiErrorMessage(error));
+    } finally {
+      setSending(false);
     }
   }
 
@@ -332,11 +361,28 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
 
   if (!agentScopeLoaded) return <CapabilityScopeLoading />;
 
+  if (isTeamScope(agentId) || !agentId) {
+    return (
+      <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]">
+        <AppHeader
+          onLogout={onLogout}
+          userName={currentUser?.username}
+          title="邮件"
+          description="这个数字员工的岗位邮箱。收件箱、写信和已发送走同一套 IMAP + SMTP。"
+        />
+        <EmptyState text="请先选择一个数字员工，再打开岗位邮箱。" />
+      </div>
+    );
+  }
+
   const configured = Boolean(mailbox?.configured);
   const listing = tab === 'sent' ? sent : inbox;
-  const emptyReason = !configured
-    ? '这个员工还没有配置邮箱。请先在「配置邮箱」填写 IMAP 和 SMTP。'
-    : listing?.empty_reason || (tab === 'sent' ? '还没有已发送的邮件。' : '收件箱是空的。');
+  const emptyReason = mailboxError
+    ? mailboxError
+    : !configured
+      ? '这个员工还没有配置邮箱。请先在「配置邮箱」填写 IMAP 和 SMTP。'
+      : listError || listing?.empty_reason || (tab === 'sent' ? '还没有已发送的邮件。' : '收件箱是空的。');
+  const showConfigCta = !configured && !mailboxError && canSend;
 
   return (
     <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]">
@@ -354,7 +400,16 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
       ) : null}
 
       <div className="mt-[20px]">
-        <UnderlineTabs items={TABS} value={tab} onChange={setTab} variant="line" aria-label="邮件分区" />
+        <UnderlineTabs
+          items={TABS}
+          value={tab}
+          onChange={(next) => {
+            setTab(next);
+            setOpened(null);
+          }}
+          variant="line"
+          aria-label="邮件分区"
+        />
       </div>
 
       {tab === 'config' ? (
@@ -409,17 +464,31 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
       {tab === 'compose' ? (
         <div className="mt-[20px] max-w-[720px] rounded-[16px] border border-[#e3e7f1] bg-white p-[24px]">
           {!configured ? (
-            <EmptyState text={emptyReason} onConfig={() => setTab('config')} />
+            <EmptyState
+              text={emptyReason}
+              onConfig={showConfigCta ? () => setTab('config') : undefined}
+            />
           ) : (
             <>
               {(drafts?.messages || []).length ? (
                 <div className="mb-[16px] rounded-[10px] bg-[#f6f7fa] p-[12px]">
                   <p className="m-0 text-[13px] font-medium text-[#17191f]">待确认草稿</p>
                   {drafts?.messages.map((item) => (
-                    <div key={item.id} className="mt-[8px] flex items-center justify-between gap-[8px] text-[12px]">
-                      <span>{item.to.join(', ')} · {item.subject || '（无主题）'}</span>
+                    <div key={item.id} className="mt-[12px] grid gap-[4px] border-t border-[#e3e7f1] pt-[12px] first:mt-[8px] first:border-t-0 first:pt-0">
+                      <p className="m-0 text-[12px] text-[#17191f]">收件人：{item.to.join(', ') || '（无）'}</p>
+                      {item.cc.length ? <p className="m-0 text-[12px] text-[#697085]">抄送：{item.cc.join(', ')}</p> : null}
+                      {item.bcc.length ? <p className="m-0 text-[12px] text-[#697085]">密送：{item.bcc.join(', ')}</p> : null}
+                      <p className="m-0 text-[12px] text-[#17191f]">{item.subject || '（无主题）'}</p>
+                      <p className="m-0 whitespace-pre-wrap text-[12px] text-[#464c5e]">{item.body_text || '（无正文）'}</p>
+                      {item.attachments.length ? (
+                        <p className="m-0 text-[12px] text-[#697085]">
+                          附件：{item.attachments.map((file) => file.filename).join('、')}
+                        </p>
+                      ) : null}
                       {canSend ? (
-                        <UIButton size="sm" onClick={() => void sendDraft(item.id)}>发送草稿</UIButton>
+                        <div>
+                          <UIButton size="sm" disabled={sending} onClick={() => void sendDraft(item.id)}>发送草稿</UIButton>
+                        </div>
                       ) : null}
                     </div>
                   ))}
@@ -466,8 +535,8 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
               </div>
               {canSend ? (
                 <div className="mt-[16px] flex gap-[8px]">
-                  <UIButton onClick={() => void sendMail(false)}>发送</UIButton>
-                  <UIButton variant="outline" className={OUTLINE_ACTION_BUTTON_CLASS} onClick={() => void sendMail(true)}>
+                  <UIButton disabled={sending} onClick={() => void sendMail(false)}>发送</UIButton>
+                  <UIButton variant="outline" className={OUTLINE_ACTION_BUTTON_CLASS} disabled={sending} onClick={() => void sendMail(true)}>
                     保存草稿
                   </UIButton>
                 </div>
@@ -491,7 +560,7 @@ export default function MailPage({ currentUser, onLogout }: MailPageProps = {}) 
           {!configured || (listing && listing.messages.length === 0 && !loading) ? (
             <EmptyState
               text={emptyReason}
-              onConfig={!configured ? () => setTab('config') : undefined}
+              onConfig={showConfigCta ? () => setTab('config') : undefined}
             />
           ) : (
             <DataTable

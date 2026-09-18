@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -28,9 +30,11 @@ from app.db.models import (
     EmployeeMailbox,
     EmployeeMailMessage,
     GeneralSkill,
+    Message,
     Skill,
     Tenant,
     User,
+    utc_now,
 )
 from app.mail.api import (
     confirm_draft,
@@ -45,7 +49,13 @@ from app.mail.errors import MailError
 from app.mail.harness import invoke_mail_tool
 from app.mail.schema import MailAttachmentInput, MailboxConfigRequest, MailComposeRequest
 from app.mail.service import mailbox_status, message_read, prompt_context
-from app.mail.transport import FetchedAttachment, FetchedMessage, MailboxConnection, set_transport
+from app.mail.transport import (
+    FetchedAttachment,
+    FetchedMessage,
+    MailboxConnection,
+    _safe_exc,
+    set_transport,
+)
 from app.security.encryption import decrypt_secret
 
 
@@ -246,6 +256,23 @@ def test_owner_saves_mailbox_without_echoing_password(mail_db) -> None:
     assert decrypt_secret(row.password_encrypted) == "super-secret-password"
 
 
+def test_transport_error_text_redacts_mailbox_password() -> None:
+    mailbox = MailboxConnection(
+        email_address="agent-a@example.com",
+        username="agent-a@example.com",
+        password="super-secret-password",
+        imap_host="imap.example.com",
+        imap_port=993,
+        imap_encryption="ssl",
+        smtp_host="smtp.example.com",
+        smtp_port=587,
+        smtp_encryption="starttls",
+    )
+    text = _safe_exc(RuntimeError("LOGIN failed for super-secret-password"), mailbox)
+    assert "super-secret-password" not in text
+    assert "******" in text
+
+
 def test_mailbox_password_stays_out_of_skills(mail_db) -> None:
     db, (owner, _other, _admin, agent_a, _agent_b), _transport = mail_db
     _configure(db, owner, agent_a.id, password="not-for-skills")
@@ -413,6 +440,39 @@ def test_chat_draft_then_confirm(mail_db) -> None:
     assert len(transport.sent) == 1
 
 
+def test_prior_draft_phrase_does_not_block_later_turn(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
+    _configure(db, owner, agent_a.id)
+    now = utc_now()
+    db.add(
+        Message(
+            tenant_id="tenant_demo",
+            session_id="sess_1",
+            role="user",
+            content="先起草邮件，我确认后再发送",
+            created_at=now - timedelta(seconds=30),
+        )
+    )
+    db.add(
+        Message(
+            tenant_id="tenant_demo",
+            session_id="sess_1",
+            role="user",
+            content="给 sales@example.com 发报价，主题报价，正文见附件",
+            created_at=now,
+        )
+    )
+    db.commit()
+    result = invoke_mail_tool(
+        _invoker(db, agent_a.id),
+        "mail_send",
+        {"to": ["sales@example.com"], "subject": "报价", "body": "见正文"},
+    )
+    assert result["success"] is True
+    assert result["data"]["delivered"] is True
+    assert len(transport.sent) == 1
+
+
 def test_skill_confirm_flag_blocks_send(mail_db) -> None:
     db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
     _configure(db, owner, agent_a.id)
@@ -490,6 +550,33 @@ def test_inbound_attachment_lands_in_mail_zone_not_chat_inbox(mail_db) -> None:
     assert get_entry(db, "tenant_demo", agent_a.id, f"{CHAT_INBOX_FOLDER}/询价.pdf") is None
     root = list_folder(db, "tenant_demo", agent_a.id, "", can_write=True)
     assert "询价.pdf" not in [item.name for item in root.entries]
+
+
+def test_inbound_attachment_not_duplicated_on_resync(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
+    _configure(db, owner, agent_a.id)
+    transport.inbox = [
+        FetchedMessage(
+            uid="9",
+            rfc_message_id="<file@example.com>",
+            from_address="buyer@example.com",
+            to=["agent-a@example.com"],
+            cc=[],
+            bcc=[],
+            subject="询价附件",
+            body_text="见附件",
+            date=None,
+            unseen=True,
+            attachments=[
+                FetchedAttachment(filename="询价.pdf", content_type="application/pdf", data=b"%PDF"),
+            ],
+        )
+    ]
+    get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    inbound = list_folder(db, "tenant_demo", agent_a.id, MAIL_INBOUND_FOLDER, can_write=True)
+    files = [item for item in inbound.entries if item.kind == "file"]
+    assert [item.name for item in files] == ["询价.pdf"]
 
 
 def test_outbound_attachment_copies_template_without_moving_it(mail_db) -> None:
@@ -589,6 +676,7 @@ def test_admin_can_read_others_mail_but_cannot_send_or_configure(mail_db) -> Non
         current_user=admin,
     )
     assert opened.body_text == "管理员可看"
+    assert opened.unread is True
     with pytest.raises(Exception) as send_error:
         _compose(db, admin, agent_a.id)
     assert send_error.value.status_code == 403
@@ -818,6 +906,47 @@ def test_mail_tools_are_reserved_and_password_stays_out_of_message_read(mail_db)
     names = {item.name for item in manifest.available}
     assert {"mail_list", "mail_read", "mail_draft", "mail_send"} <= names
     assert "mail_send" in RESERVED_HARNESS_CAPABILITY_NAMES
+
+
+def test_draft_upload_survives_confirm_send(mail_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), transport = mail_db
+    _configure(db, owner, agent_a.id)
+    drafted = send_or_draft(
+        MailComposeRequest(
+            tenant_id="tenant_demo",
+            to=["sales@example.com"],
+            subject="带附件草稿",
+            body="请确认附件",
+            as_draft=True,
+            attachments=[
+                MailAttachmentInput(
+                    filename="报价.pdf",
+                    content_base64=base64.b64encode(b"%PDF-draft").decode(),
+                    content_type="application/pdf",
+                )
+            ],
+        ),
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    assert drafted.draft is True
+    assert drafted.message.attachments[0].saved is True
+    assert (drafted.message.attachments[0].cabinet_path or "").startswith(
+        f"{MAIL_OUTBOUND_FOLDER}/"
+    )
+    confirmed = confirm_draft(
+        drafted.message.id,
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    assert confirmed.delivered is True
+    assert len(transport.sent) == 1
+    outbound = list_folder(db, "tenant_demo", agent_a.id, MAIL_OUTBOUND_FOLDER, can_write=True)
+    files = [item for item in outbound.entries if item.kind == "file"]
+    assert [item.name for item in files] == ["报价.pdf"]
 
 
 def test_console_can_send_pending_draft(mail_db) -> None:

@@ -204,9 +204,13 @@ def read_message(
     ensure_current_user_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     try:
-        ensure_reader(db, tenant_id, agent_id, current_user)
+        agent = ensure_reader(db, tenant_id, agent_id, current_user)
         row = get_message(
-            db, tenant_id, agent_id, message_id, mark_read=mark_read
+            db,
+            tenant_id,
+            agent_id,
+            message_id,
+            mark_read=mark_read and can_send_mail(agent, current_user),
         )
         return message_read(row)
     except MailError as error:

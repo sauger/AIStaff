@@ -87,7 +87,9 @@ def latest_user_text(invoker: Any) -> str:
         ).all()
     except (AttributeError, TypeError, ValueError):
         return ""
-    return "\n".join(str(row.content or "") for row in rows[:4])
+    if not rows:
+        return ""
+    return str(rows[0].content or "")
 
 
 def iter_confirm_skills(invoker: Any) -> list[Any]:
