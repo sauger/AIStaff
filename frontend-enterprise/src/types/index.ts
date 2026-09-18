@@ -1340,6 +1340,10 @@ export type MailListResponse = {
   can_send: boolean;
   empty_reason?: string | null;
   messages: MailMessageRead[];
+  page?: number;
+  page_size?: number;
+  total?: number;
+  last_error?: string | null;
 };
 
 export type MailSendResult = {

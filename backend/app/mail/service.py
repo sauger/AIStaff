@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from app.cabinet.errors import CabinetError
 from app.cabinet.paths import join_path
@@ -31,6 +31,8 @@ from app.mail.confirm import (
 )
 from app.mail.errors import MailError
 from app.mail.schema import (
+    MAIL_DEFAULT_PAGE_SIZE,
+    MAIL_MAX_PAGE_SIZE,
     MailAttachmentInput,
     MailAttachmentRead,
     MailboxConfigRequest,
@@ -221,34 +223,37 @@ def list_inbox(
     *,
     can_send: bool,
     sync: bool = True,
+    page: int = 1,
+    page_size: int = MAIL_DEFAULT_PAGE_SIZE,
 ) -> MailListResponse:
+    page, page_size, offset = _clamp_page(page, page_size)
     mailbox = get_mailbox(db, tenant_id, agent_id)
     if mailbox is None:
-        return MailListResponse(
-            agent_id=agent_id,
-            folder="inbox",
-            configured=False,
-            can_send=False,
-            empty_reason="这个员工还没有配置邮箱。请先在邮件页填写 IMAP 和 SMTP。",
-            messages=[],
-        )
+        return _unconfigured_list(agent_id, "inbox", page=page, page_size=page_size)
+    last_error = mailbox.last_error
+    total = _folder_count(db, tenant_id, agent_id, "inbox")
     if sync:
         try:
-            sync_inbox(db, mailbox)
+            total = sync_inbox(db, mailbox, offset=offset, limit=page_size)
+            last_error = None
         except MailError as exc:
-            mailbox.last_error = exc.message
-            mailbox.updated_at = utc_now()
-            db.add(mailbox)
-            db.commit()
-            raise
-    rows = _folder_rows(db, tenant_id, agent_id, "inbox")
+            last_error = exc.message
+            _store_mailbox_error(db, mailbox, last_error)
+        except Exception as exc:  # noqa: BLE001 - first page must still return local cache.
+            last_error = f"收取收件箱失败：{exc.__class__.__name__}"
+            _store_mailbox_error(db, mailbox, last_error)
+    rows = _folder_rows(db, tenant_id, agent_id, "inbox", offset=offset, limit=page_size)
     return MailListResponse(
         agent_id=agent_id,
         folder="inbox",
         configured=True,
         can_send=can_send,
-        empty_reason="收件箱是空的。" if not rows else None,
+        empty_reason=_empty_reason(rows, last_error, "收件箱是空的。"),
         messages=[message_read(item, include_body=False) for item in rows],
+        page=page,
+        page_size=page_size,
+        total=total,
+        last_error=last_error,
     )
 
 
@@ -258,25 +263,25 @@ def list_sent(
     agent_id: str,
     *,
     can_send: bool,
+    page: int = 1,
+    page_size: int = MAIL_DEFAULT_PAGE_SIZE,
 ) -> MailListResponse:
+    page, page_size, offset = _clamp_page(page, page_size)
     mailbox = get_mailbox(db, tenant_id, agent_id)
     if mailbox is None:
-        return MailListResponse(
-            agent_id=agent_id,
-            folder="sent",
-            configured=False,
-            can_send=False,
-            empty_reason="这个员工还没有配置邮箱。请先在邮件页填写 IMAP 和 SMTP。",
-            messages=[],
-        )
-    rows = _folder_rows(db, tenant_id, agent_id, "sent")
+        return _unconfigured_list(agent_id, "sent", page=page, page_size=page_size)
+    total = _folder_count(db, tenant_id, agent_id, "sent")
+    rows = _folder_rows(db, tenant_id, agent_id, "sent", offset=offset, limit=page_size)
     return MailListResponse(
         agent_id=agent_id,
         folder="sent",
         configured=True,
         can_send=can_send,
-        empty_reason="还没有已发送的邮件。" if not rows else None,
+        empty_reason=_empty_reason(rows, None, "还没有已发送的邮件。"),
         messages=[message_read(item, include_body=False) for item in rows],
+        page=page,
+        page_size=page_size,
+        total=total,
     )
 
 
@@ -289,14 +294,7 @@ def list_drafts(
 ) -> MailListResponse:
     mailbox = get_mailbox(db, tenant_id, agent_id)
     if mailbox is None:
-        return MailListResponse(
-            agent_id=agent_id,
-            folder="draft",
-            configured=False,
-            can_send=False,
-            empty_reason="这个员工还没有配置邮箱。请先在邮件页填写 IMAP 和 SMTP。",
-            messages=[],
-        )
+        return _unconfigured_list(agent_id, "draft")
     rows = [
         item
         for item in _folder_rows(db, tenant_id, agent_id, "draft")
@@ -309,6 +307,9 @@ def list_drafts(
         can_send=can_send,
         empty_reason="没有待确认的草稿。" if not rows else None,
         messages=[message_read(item, include_body=True) for item in rows],
+        page=1,
+        page_size=max(len(rows), 1),
+        total=len(rows),
     )
 
 
@@ -469,15 +470,22 @@ def reply_defaults(row: EmployeeMailMessage) -> dict[str, Any]:
     }
 
 
-def sync_inbox(db: Session, mailbox: EmployeeMailbox) -> None:
-    fetched = get_transport().fetch_inbox(_connection(mailbox))
-    for item in fetched:
+def sync_inbox(
+    db: Session,
+    mailbox: EmployeeMailbox,
+    *,
+    offset: int = 0,
+    limit: int = MAIL_DEFAULT_PAGE_SIZE,
+) -> int:
+    fetched = get_transport().fetch_inbox(_connection(mailbox), offset=offset, limit=limit)
+    for item in fetched.messages:
         _upsert_inbox(db, mailbox, item)
     mailbox.last_synced_at = utc_now()
     mailbox.last_error = None
     mailbox.updated_at = utc_now()
     db.add(mailbox)
     db.commit()
+    return fetched.total
 
 
 def sync_all_mailboxes(db: Session) -> None:
@@ -949,7 +957,13 @@ def _store_message(
 
 
 def _folder_rows(
-    db: Session, tenant_id: str, agent_id: str, folder: str
+    db: Session,
+    tenant_id: str,
+    agent_id: str,
+    folder: str,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> list[EmployeeMailMessage]:
     stmt = select(EmployeeMailMessage).where(
         EmployeeMailMessage.tenant_id == tenant_id,
@@ -968,7 +982,63 @@ def _folder_rows(
         )
     else:
         stmt = stmt.order_by(col(EmployeeMailMessage.created_at).desc())
+    if limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
     return list(stmt_exec(db, stmt))
+
+
+def _folder_count(db: Session, tenant_id: str, agent_id: str, folder: str) -> int:
+    value = db.exec(
+        select(func.count())
+        .select_from(EmployeeMailMessage)
+        .where(
+            EmployeeMailMessage.tenant_id == tenant_id,
+            EmployeeMailMessage.agent_id == agent_id,
+            EmployeeMailMessage.folder == folder,
+        )
+    ).one()
+    return int(value or 0)
+
+
+def _clamp_page(page: int, page_size: int) -> tuple[int, int, int]:
+    page = max(1, int(page or 1))
+    page_size = min(MAIL_MAX_PAGE_SIZE, max(1, int(page_size or MAIL_DEFAULT_PAGE_SIZE)))
+    return page, page_size, (page - 1) * page_size
+
+
+def _unconfigured_list(
+    agent_id: str,
+    folder: str,
+    *,
+    page: int = 1,
+    page_size: int = MAIL_DEFAULT_PAGE_SIZE,
+) -> MailListResponse:
+    return MailListResponse(
+        agent_id=agent_id,
+        folder=folder,  # type: ignore[arg-type]
+        configured=False,
+        can_send=False,
+        empty_reason="这个员工还没有配置邮箱。请先在邮件页填写 IMAP 和 SMTP。",
+        messages=[],
+        page=page,
+        page_size=page_size,
+        total=0,
+    )
+
+
+def _empty_reason(
+    rows: list[EmployeeMailMessage], last_error: str | None, empty_copy: str
+) -> str | None:
+    if rows:
+        return None
+    return last_error or empty_copy
+
+
+def _store_mailbox_error(db: Session, mailbox: EmployeeMailbox, message: str) -> None:
+    mailbox.last_error = message
+    mailbox.updated_at = utc_now()
+    db.add(mailbox)
+    db.commit()
 
 
 def stmt_exec(db: Session, stmt: Any) -> list[EmployeeMailMessage]:

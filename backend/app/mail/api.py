@@ -9,6 +9,8 @@ from app.db import get_session
 from app.db.models import User
 from app.mail.errors import MailError
 from app.mail.schema import (
+    MAIL_DEFAULT_PAGE_SIZE,
+    MAIL_MAX_PAGE_SIZE,
     MailboxConfigRequest,
     MailboxStatusRead,
     MailComposeRequest,
@@ -137,6 +139,8 @@ def get_inbox(
     current_user: CurrentUser,
     tenant_id: str = Query(...),
     agent_id: str = Query(...),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAIL_MAX_PAGE_SIZE)] = MAIL_DEFAULT_PAGE_SIZE,
 ) -> MailListResponse:
     ensure_current_user_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
@@ -148,6 +152,8 @@ def get_inbox(
             agent_id,
             can_send=can_send_mail(agent, current_user),
             sync=True,
+            page=page,
+            page_size=page_size,
         )
     except MailError as error:
         _raise(error)
@@ -160,13 +166,20 @@ def get_sent(
     current_user: CurrentUser,
     tenant_id: str = Query(...),
     agent_id: str = Query(...),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAIL_MAX_PAGE_SIZE)] = MAIL_DEFAULT_PAGE_SIZE,
 ) -> MailListResponse:
     ensure_current_user_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     try:
         agent = ensure_reader(db, tenant_id, agent_id, current_user)
         return list_sent(
-            db, tenant_id, agent_id, can_send=can_send_mail(agent, current_user)
+            db,
+            tenant_id,
+            agent_id,
+            can_send=can_send_mail(agent, current_user),
+            page=page,
+            page_size=page_size,
         )
     except MailError as error:
         _raise(error)
