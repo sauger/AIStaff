@@ -12,6 +12,8 @@
       --muted: #5c6478;
       --accent: #2563eb;
       --accent-soft: #dbeafe;
+      --clone: #7c3aed;
+      --clone-soft: #ede9fe;
       --ok: #059669;
       --warn: #d97706;
       --err: #dc2626;
@@ -37,15 +39,19 @@
       padding: 28px 20px 48px;
     }
 
-    header {
-      margin-bottom: 24px;
-    }
+    header { margin-bottom: 24px; }
 
     h1 {
       margin: 0 0 8px;
       font-size: 1.75rem;
       font-weight: 700;
       letter-spacing: -0.02em;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1.15rem;
+      font-weight: 700;
     }
 
     .subtitle {
@@ -57,12 +63,18 @@
     .badge {
       display: inline-block;
       margin-top: 12px;
+      margin-right: 8px;
       padding: 4px 10px;
       border-radius: 999px;
       background: var(--accent-soft);
       color: var(--accent);
       font-size: 0.85rem;
       font-weight: 600;
+    }
+
+    .badge.clone {
+      background: var(--clone-soft);
+      color: var(--clone);
     }
 
     .card {
@@ -72,6 +84,11 @@
       box-shadow: var(--shadow);
       padding: 22px;
       margin-bottom: 18px;
+    }
+
+    .card.clone-card {
+      border-color: #ddd6fe;
+      background: linear-gradient(180deg, #faf5ff 0%, #fff 40%);
     }
 
     .steps {
@@ -107,6 +124,8 @@
       font-size: 0.85rem;
     }
 
+    .step-num.clone { background: var(--clone); }
+
     label {
       display: block;
       font-weight: 600;
@@ -120,7 +139,18 @@
       margin-top: 6px;
     }
 
+    .notice {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #9a3412;
+      font-size: 0.9rem;
+    }
+
     input[type="password"],
+    input[type="file"],
     textarea {
       width: 100%;
       border: 2px solid var(--border);
@@ -139,9 +169,72 @@
     }
 
     textarea {
-      min-height: 120px;
+      min-height: 88px;
       resize: vertical;
     }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
+
+    .toggle-row input {
+      width: 20px;
+      height: 20px;
+      accent-color: var(--clone);
+    }
+
+    .toggle-row label {
+      margin: 0;
+      font-size: 1.05rem;
+      cursor: pointer;
+    }
+
+    .clone-panel {
+      display: none;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px dashed #c4b5fd;
+    }
+
+    .clone-panel.show { display: block; }
+
+    .timer-box {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin: 14px 0;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: #fff;
+      border: 2px solid var(--border);
+    }
+
+    .timer {
+      font-size: 2rem;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      min-width: 88px;
+      color: var(--clone);
+    }
+
+    .timer.recording {
+      color: var(--err);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      50% { opacity: 0.65; }
+    }
+
+    .timer-hint {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .timer-hint strong { color: var(--text); }
 
     .row {
       display: flex;
@@ -168,6 +261,21 @@
       background: var(--accent);
       color: #fff;
       min-width: 140px;
+    }
+
+    .btn-clone {
+      background: var(--clone);
+      color: #fff;
+    }
+
+    .btn-record {
+      background: #dc2626;
+      color: #fff;
+    }
+
+    .btn-stop {
+      background: #1e293b;
+      color: #fff;
     }
 
     .btn-secondary {
@@ -204,6 +312,13 @@
 
     audio.show { display: block; }
 
+    .ref-preview {
+      margin-top: 10px;
+      display: none;
+    }
+
+    .ref-preview.show { display: block; }
+
     .footer-links {
       margin-top: 8px;
       font-size: 0.9rem;
@@ -229,44 +344,95 @@
     }
 
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    .divider {
+      margin: 16px 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
       <h1>🎙️ Fish Audio 免费试听</h1>
-      <p class="subtitle">输入中文 → 一键合成语音。仅使用免费模型 <code>s2.1-pro-free</code>。</p>
-      <span class="badge">$0 · 开发/试听 · 非商用演示</span>
+      <p class="subtitle">输入中文 → 一键合成。可<strong>用电脑麦克风录自己的声音</strong>做即时克隆。</p>
+      <span class="badge">$0 · s2.1-pro-free</span>
+      <span class="badge clone">即时声音克隆</span>
     </header>
 
     <section class="card">
       <ol class="steps">
         <li>
           <span class="step-num">1</span>
-          <span>注册 <a href="https://fish.audio/app/api-keys" target="_blank" rel="noopener">fish.audio</a> 免费账号，复制 API Key（本页粘贴，不会保存到服务器磁盘）。</span>
+          <span>注册 <a href="https://fish.audio/app/api-keys" target="_blank" rel="noopener">fish.audio</a>，复制 API Key（仅本次会话，不落盘）。</span>
         </li>
         <li>
-          <span class="step-num">2</span>
-          <span>输入或保留示例文字，点击「生成语音」。</span>
+          <span class="step-num clone">2</span>
+          <span>（可选）勾选「用我自己的声音」→ <strong>开始录音</strong> 10–30 秒，或上传音频。</span>
         </li>
         <li>
           <span class="step-num">3</span>
-          <span>等待几秒，播放器自动出现，点击播放。</span>
+          <span>输入要合成的文字 → 点「生成语音」→ 播放。</span>
         </li>
       </ol>
 
-      <label for="apiKey">API Key（仅本次浏览器会话使用）</label>
-      <input id="apiKey" type="password" placeholder="粘贴你的 Fish Audio API Key" autocomplete="off" />
-      <p class="hint">也可在启动服务前设置环境变量 <code>FISH_AUDIO_API_KEY</code>，则此处可留空。</p>
+      <label for="apiKey">API Key</label>
+      <input id="apiKey" type="password" placeholder="粘贴 Fish Audio API Key" autocomplete="off" />
+      <p class="hint">或启动服务前设置 <code>FISH_AUDIO_API_KEY</code>，此处可留空。</p>
+    </section>
 
-      <label for="textInput" style="margin-top:18px">要合成的文字</label>
+    <section class="card clone-card">
+      <div class="toggle-row">
+        <input id="useClone" type="checkbox" />
+        <label for="useClone">🎤 用我自己的声音（即时克隆）</label>
+      </div>
+      <p class="hint">用电脑麦克风直接录，无需先导出文件。参考音频仅随本次请求发送，不保存到服务器。</p>
+
+      <div id="clonePanel" class="clone-panel">
+        <p class="notice">
+          ⚠️ <strong>仅克隆你有权使用的声音</strong>（本人或已获书面授权）。需要约 <strong>10–30 秒</strong>安静、单人、无背景音乐的录音。
+        </p>
+
+        <label for="refText">参考音频的朗读文字（尽量和录音一致）</label>
+        <textarea id="refText" placeholder="录的时候说了什么，就填什么…"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button id="btnRefScript" class="btn-secondary" type="button">填入朗读提示稿</button>
+          <button id="btnClearRef" class="btn-link" type="button">清除参考音频</button>
+        </div>
+        <p class="hint">点「填入朗读提示稿」后，按稿子对着麦克风读，效果更好。</p>
+
+        <div class="timer-box">
+          <div id="timer" class="timer">00:00</div>
+          <div class="timer-hint">
+            目标 <strong>10–30 秒</strong>。未满 10 秒不能合成。<br />
+            <span id="refStatus">尚未录音</span>
+          </div>
+        </div>
+
+        <div class="row">
+          <button id="btnRecord" class="btn-record" type="button">开始录音</button>
+          <button id="btnStop" class="btn-stop" type="button" disabled>停止录音</button>
+        </div>
+
+        <div class="divider">或上传已有音频（备用）</div>
+
+        <label for="refFile">上传参考音频（wav / mp3 / m4a）</label>
+        <input id="refFile" type="file" accept="audio/*,.wav,.mp3,.m4a,.opus,.webm" />
+        <audio id="refPreview" class="ref-preview" controls></audio>
+      </div>
+    </section>
+
+    <section class="card">
+      <label for="textInput">要合成的文字</label>
       <textarea id="textInput">你好，我是数字员工，这是一条试听。</textarea>
-      <p class="hint">演示最多 500 字。请勿粘贴客户邮件、密钥或生产数据。</p>
+      <p class="hint">最多 500 字。勿粘贴客户邮件、密钥或生产数据。</p>
 
       <div class="row">
         <button id="btnGenerate" class="btn-primary" type="button">生成语音</button>
         <button id="btnSample" class="btn-secondary" type="button">恢复示例文字</button>
-        <button id="btnOfficial" class="btn-link" type="button">打开官方 Free 试听</button>
+        <button id="btnOfficial" class="btn-link" type="button">官方 Free 试听</button>
       </div>
 
       <div id="status" class="status" role="status" aria-live="polite"></div>
@@ -274,21 +440,45 @@
     </section>
 
     <p class="footer-links">
-      官方文档：<a href="https://docs.fish.audio/" target="_blank" rel="noopener">docs.fish.audio</a>
-      · 定价：<a href="https://fish.audio/plan/" target="_blank" rel="noopener">Free 档个人非商用</a>
-      · 模型：<code>s2.1-pro-free</code>
+      文档 <a href="https://docs.fish.audio/" target="_blank" rel="noopener">docs.fish.audio</a>
+      · 模型 <code>s2.1-pro-free</code>
+      · 非商用演示
     </p>
   </div>
 
   <script>
     const SAMPLE = '你好，我是数字员工，这是一条试听。';
+    const REF_SCRIPT = '大家好，我是药李子。我正在测试用自己的声音做语音合成。请保持安静环境，语速自然。今天天气不错，希望大家工作顺利，谢谢。';
+    const MIN_SECONDS = 10;
+    const MAX_SECONDS = 30;
+
     const apiKeyEl = document.getElementById('apiKey');
+    const useCloneEl = document.getElementById('useClone');
+    const clonePanel = document.getElementById('clonePanel');
+    const refTextEl = document.getElementById('refText');
+    const refFileEl = document.getElementById('refFile');
+    const refPreview = document.getElementById('refPreview');
+    const refStatusEl = document.getElementById('refStatus');
+    const timerEl = document.getElementById('timer');
+    const btnRecord = document.getElementById('btnRecord');
+    const btnStop = document.getElementById('btnStop');
+    const btnRefScript = document.getElementById('btnRefScript');
+    const btnClearRef = document.getElementById('btnClearRef');
     const textEl = document.getElementById('textInput');
     const btnGenerate = document.getElementById('btnGenerate');
     const btnSample = document.getElementById('btnSample');
     const btnOfficial = document.getElementById('btnOfficial');
     const statusEl = document.getElementById('status');
     const player = document.getElementById('player');
+
+    let mediaRecorder = null;
+    let mediaStream = null;
+    let recordChunks = [];
+    let recordStartedAt = 0;
+    let timerInterval = null;
+    let referenceWavBlob = null;
+    let referenceDuration = 0;
+    let referenceObjectUrl = null;
 
     function setStatus(kind, message) {
       statusEl.className = 'status show ' + kind;
@@ -299,6 +489,265 @@
       statusEl.className = 'status';
       statusEl.textContent = '';
     }
+
+    function formatTime(seconds) {
+      const s = Math.max(0, Math.floor(seconds));
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return String(m).padStart(2, '0') + ':' + String(r).padStart(2, '0');
+    }
+
+    function updateTimerDisplay(elapsed) {
+      timerEl.textContent = formatTime(elapsed);
+    }
+
+    function setRefStatus(text, ok) {
+      refStatusEl.textContent = text;
+      refStatusEl.style.color = ok ? 'var(--ok)' : 'var(--muted)';
+    }
+
+    function revokeRefUrl() {
+      if (referenceObjectUrl) {
+        URL.revokeObjectURL(referenceObjectUrl);
+        referenceObjectUrl = null;
+      }
+    }
+
+    function setReference(wavBlob, durationSec, label) {
+      referenceWavBlob = wavBlob;
+      referenceDuration = durationSec;
+      revokeRefUrl();
+      referenceObjectUrl = URL.createObjectURL(wavBlob);
+      refPreview.src = referenceObjectUrl;
+      refPreview.classList.add('show');
+      updateTimerDisplay(durationSec);
+      setRefStatus(label + '（' + durationSec.toFixed(1) + ' 秒）', durationSec >= MIN_SECONDS);
+    }
+
+    function clearReference() {
+      referenceWavBlob = null;
+      referenceDuration = 0;
+      revokeRefUrl();
+      refPreview.removeAttribute('src');
+      refPreview.classList.remove('show');
+      refFileEl.value = '';
+      updateTimerDisplay(0);
+      timerEl.classList.remove('recording');
+      setRefStatus('尚未录音', false);
+    }
+
+    async function blobToWav(blob) {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      await audioContext.close();
+
+      const channels = 1;
+      const sampleRate = audioBuffer.sampleRate;
+      const length = audioBuffer.length;
+      const interleaved = new Float32Array(length);
+      const ch0 = audioBuffer.getChannelData(0);
+      const ch1 = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : null;
+      for (let i = 0; i < length; i++) {
+        interleaved[i] = ch1 ? (ch0[i] + ch1[i]) / 2 : ch0[i];
+      }
+
+      const bytesPerSample = 2;
+      const blockAlign = channels * bytesPerSample;
+      const dataSize = length * blockAlign;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+
+      function writeStr(offset, str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+      }
+
+      writeStr(0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, channels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * blockAlign, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, 'data');
+      view.setUint32(40, dataSize, true);
+
+      let offset = 44;
+      for (let i = 0; i < length; i++) {
+        const sample = Math.max(-1, Math.min(1, interleaved[i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += 2;
+      }
+
+      return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function pickRecorderMime() {
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+      ];
+      for (const type of candidates) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
+      }
+      return '';
+    }
+
+    async function getAudioDuration(blob) {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      await audioContext.close();
+      return audioBuffer.duration;
+    }
+
+    useCloneEl.addEventListener('change', () => {
+      clonePanel.classList.toggle('show', useCloneEl.checked);
+      if (!useCloneEl.checked) clearStatus();
+    });
+
+    btnRefScript.addEventListener('click', () => {
+      refTextEl.value = REF_SCRIPT;
+    });
+
+    btnClearRef.addEventListener('click', () => {
+      clearReference();
+      clearStatus();
+    });
+
+    btnRecord.addEventListener('click', async () => {
+      clearStatus();
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus('err', '当前浏览器不支持麦克风录音。请换 Chrome / Safari，或使用上传音频。');
+        return;
+      }
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        const name = err && err.name ? err.name : '';
+        if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+          setStatus('err', '麦克风权限被拒绝。请在浏览器地址栏旁点 🔒，允许麦克风后重试。');
+        } else if (name === 'NotFoundError') {
+          setStatus('err', '未检测到麦克风设备。请连接麦克风或使用上传音频。');
+        } else {
+          setStatus('err', '无法打开麦克风：' + (err.message || '未知错误'));
+        }
+        return;
+      }
+
+      const mimeType = pickRecorderMime();
+      if (!window.MediaRecorder) {
+        setStatus('err', '当前浏览器不支持 MediaRecorder。请换 Chrome / Safari，或使用上传音频。');
+        mediaStream.getTracks().forEach((t) => t.stop());
+        mediaStream = null;
+        return;
+      }
+
+      recordChunks = [];
+      mediaRecorder = mimeType
+        ? new MediaRecorder(mediaStream, { mimeType })
+        : new MediaRecorder(mediaStream);
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const rawBlob = new Blob(recordChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+        mediaStream.getTracks().forEach((t) => t.stop());
+        mediaStream = null;
+        timerEl.classList.remove('recording');
+        clearInterval(timerInterval);
+        timerInterval = null;
+        btnRecord.disabled = false;
+        btnStop.disabled = true;
+
+        try {
+          const wavBlob = await blobToWav(rawBlob);
+          const duration = await getAudioDuration(wavBlob);
+          if (duration < MIN_SECONDS) {
+            clearReference();
+            setStatus('warn', '录音只有 ' + duration.toFixed(1) + ' 秒，至少需要 ' + MIN_SECONDS + ' 秒，请再录一次。');
+            return;
+          }
+          if (duration > MAX_SECONDS + 5) {
+            setStatus('warn', '录音 ' + duration.toFixed(1) + ' 秒，建议 10–30 秒；过长可能影响效果。');
+          }
+          setReference(wavBlob, duration, '✅ 录音已就绪');
+          setStatus('ok', '参考音频已准备好。确认上方朗读文字后，点「生成语音」。');
+        } catch (e) {
+          clearReference();
+          setStatus('err', '处理录音失败：' + (e.message || '请重试'));
+        }
+      };
+
+      mediaRecorder.start(250);
+      recordStartedAt = Date.now();
+      timerEl.classList.add('recording');
+      updateTimerDisplay(0);
+      setRefStatus('正在录音…', false);
+      btnRecord.disabled = true;
+      btnStop.disabled = false;
+
+      timerInterval = setInterval(() => {
+        const elapsed = (Date.now() - recordStartedAt) / 1000;
+        updateTimerDisplay(elapsed);
+        if (elapsed >= MAX_SECONDS && mediaRecorder && mediaRecorder.state === 'recording') {
+          mediaRecorder.stop();
+        }
+      }, 200);
+    });
+
+    btnStop.addEventListener('click', () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    });
+
+    refFileEl.addEventListener('change', async () => {
+      clearStatus();
+      const file = refFileEl.files && refFileEl.files[0];
+      if (!file) return;
+
+      try {
+        let wavBlob;
+        const lower = file.name.toLowerCase();
+        if (lower.endsWith('.wav')) {
+          wavBlob = file;
+        } else {
+          wavBlob = await blobToWav(file);
+        }
+        const duration = await getAudioDuration(wavBlob);
+        if (duration < MIN_SECONDS) {
+          clearReference();
+          setStatus('warn', '音频只有 ' + duration.toFixed(1) + ' 秒，至少需要 ' + MIN_SECONDS + ' 秒。');
+          return;
+        }
+        setReference(wavBlob, duration, '✅ 已上传');
+        if (!refTextEl.value.trim()) {
+          setStatus('info', '请填写参考音频的朗读文字，与录音内容尽量一致。');
+        }
+      } catch (e) {
+        clearReference();
+        setStatus('err', '无法读取音频文件：' + (e.message || '请换 wav/mp3/m4a 重试'));
+      }
+    });
 
     btnSample.addEventListener('click', () => {
       textEl.value = SAMPLE;
@@ -316,19 +765,46 @@
         return;
       }
 
+      const useClone = useCloneEl.checked;
+      if (useClone) {
+        if (!referenceWavBlob) {
+          setStatus('warn', '请先「开始录音」或上传参考音频（至少 ' + MIN_SECONDS + ' 秒）。');
+          return;
+        }
+        if (referenceDuration < MIN_SECONDS) {
+          setStatus('warn', '参考音频太短，至少需要 ' + MIN_SECONDS + ' 秒。');
+          return;
+        }
+        if (!refTextEl.value.trim()) {
+          setStatus('warn', '请填写参考音频的朗读文字（可点「填入朗读提示稿」后按稿朗读）。');
+          return;
+        }
+      }
+
       btnGenerate.disabled = true;
       btnGenerate.innerHTML = '<span class="spinner"></span>合成中…';
       player.classList.remove('show');
-      setStatus('info', '正在请求 Fish Audio（s2.1-pro-free），通常需要几秒…');
+      setStatus('info', useClone
+        ? '正在用你的声音克隆合成（s2.1-pro-free），通常需要十几秒…'
+        : '正在请求 Fish Audio（s2.1-pro-free），通常需要几秒…');
 
       try {
+        const body = {
+          text,
+          api_key: apiKeyEl.value.trim(),
+          use_clone: useClone,
+        };
+
+        if (useClone) {
+          body.reference_audio_b64 = await blobToBase64(referenceWavBlob);
+          body.reference_text = refTextEl.value.trim();
+          body.reference_duration = referenceDuration;
+        }
+
         const res = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text,
-            api_key: apiKeyEl.value.trim(),
-          }),
+          body: JSON.stringify(body),
         });
 
         if (!res.ok) {
@@ -347,7 +823,7 @@
         const url = URL.createObjectURL(blob);
         player.src = url;
         player.classList.add('show');
-        setStatus('ok', '✅ 合成成功！点击下方播放器收听。');
+        setStatus('ok', useClone ? '✅ 已用你的声音合成！点击下方播放。' : '✅ 合成成功！点击下方播放。');
         player.play().catch(() => {});
       } catch (e) {
         setStatus('err', '网络错误：' + (e.message || '请确认演示服务已启动'));

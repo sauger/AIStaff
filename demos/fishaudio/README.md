@@ -15,6 +15,14 @@ Open **http://127.0.0.1:8765** in your browser.
 2. Paste the key into the page (or set `FISH_AUDIO_API_KEY` before starting the server).
 3. Enter Chinese text and click **生成语音** to synthesize and play MP3 audio.
 
+### Voice clone (instant)
+
+1. Check **用我自己的声音**.
+2. Click **填入朗读提示稿**, then **开始录音** for 10–30 seconds (quiet, solo speech), or upload a reference file.
+3. Fill in the transcript that matches the recording, then **生成语音**.
+
+Only clone voices you have the right to use. Reference audio is sent inline per request (not saved to disk).
+
 Optional: `export FISH_AUDIO_API_KEY='your-key'` so the page key field can stay empty.
 
 Health check: `curl http://127.0.0.1:8765/health`
