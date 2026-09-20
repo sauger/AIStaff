@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fish Audio 免费试听 · s2.1-pro-free</title>
+  <style>
+    :root {
+      --bg: #f7f8fc;
+      --card: #ffffff;
+      --text: #1a1d26;
+      --muted: #5c6478;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+      --ok: #059669;
+      --warn: #d97706;
+      --err: #dc2626;
+      --border: #e2e8f0;
+      --radius: 14px;
+      --shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+
+    header {
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 1rem;
+      margin: 0;
+    }
+
+    .badge {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+
+    .steps {
+      display: grid;
+      gap: 10px;
+      margin: 0 0 18px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .steps li {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      font-size: 0.95rem;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.85rem;
+    }
+
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-size: 0.95rem;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-top: 6px;
+    }
+
+    input[type="password"],
+    textarea {
+      width: 100%;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 1rem;
+      font-family: inherit;
+      background: #fff;
+      transition: border-color 0.15s;
+    }
+
+    input[type="password"]:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 12px 20px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: transform 0.1s, opacity 0.15s;
+    }
+
+    button:active { transform: scale(0.98); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      min-width: 140px;
+    }
+
+    .btn-secondary {
+      background: #eef2ff;
+      color: #3730a3;
+    }
+
+    .btn-link {
+      background: transparent;
+      color: var(--accent);
+      text-decoration: underline;
+      padding: 8px 4px;
+    }
+
+    .status {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      display: none;
+    }
+
+    .status.show { display: block; }
+    .status.info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+    .status.ok { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+    .status.warn { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+    .status.err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+
+    audio {
+      width: 100%;
+      margin-top: 14px;
+      display: none;
+    }
+
+    audio.show { display: block; }
+
+    .footer-links {
+      margin-top: 8px;
+      font-size: 0.9rem;
+    }
+
+    .footer-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .footer-links a:hover { text-decoration: underline; }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: -2px;
+      margin-right: 8px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🎙️ Fish Audio 免费试听</h1>
+      <p class="subtitle">输入中文 → 一键合成语音。仅使用免费模型 <code>s2.1-pro-free</code>。</p>
+      <span class="badge">$0 · 开发/试听 · 非商用演示</span>
+    </header>
+
+    <section class="card">
+      <ol class="steps">
+        <li>
+          <span class="step-num">1</span>
+          <span>注册 <a href="https://fish.audio/app/api-keys" target="_blank" rel="noopener">fish.audio</a> 免费账号，复制 API Key（本页粘贴，不会保存到服务器磁盘）。</span>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <span>输入或保留示例文字，点击「生成语音」。</span>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <span>等待几秒，播放器自动出现，点击播放。</span>
+        </li>
+      </ol>
+
+      <label for="apiKey">API Key（仅本次浏览器会话使用）</label>
+      <input id="apiKey" type="password" placeholder="粘贴你的 Fish Audio API Key" autocomplete="off" />
+      <p class="hint">也可在启动服务前设置环境变量 <code>FISH_AUDIO_API_KEY</code>，则此处可留空。</p>
+
+      <label for="textInput" style="margin-top:18px">要合成的文字</label>
+      <textarea id="textInput">你好，我是数字员工，这是一条试听。</textarea>
+      <p class="hint">演示最多 500 字。请勿粘贴客户邮件、密钥或生产数据。</p>
+
+      <div class="row">
+        <button id="btnGenerate" class="btn-primary" type="button">生成语音</button>
+        <button id="btnSample" class="btn-secondary" type="button">恢复示例文字</button>
+        <button id="btnOfficial" class="btn-link" type="button">打开官方 Free 试听</button>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <audio id="player" controls></audio>
+    </section>
+
+    <p class="footer-links">
+      官方文档：<a href="https://docs.fish.audio/" target="_blank" rel="noopener">docs.fish.audio</a>
+      · 定价：<a href="https://fish.audio/plan/" target="_blank" rel="noopener">Free 档个人非商用</a>
+      · 模型：<code>s2.1-pro-free</code>
+    </p>
+  </div>
+
+  <script>
+    const SAMPLE = '你好，我是数字员工，这是一条试听。';
+    const apiKeyEl = document.getElementById('apiKey');
+    const textEl = document.getElementById('textInput');
+    const btnGenerate = document.getElementById('btnGenerate');
+    const btnSample = document.getElementById('btnSample');
+    const btnOfficial = document.getElementById('btnOfficial');
+    const statusEl = document.getElementById('status');
+    const player = document.getElementById('player');
+
+    function setStatus(kind, message) {
+      statusEl.className = 'status show ' + kind;
+      statusEl.textContent = message;
+    }
+
+    function clearStatus() {
+      statusEl.className = 'status';
+      statusEl.textContent = '';
+    }
+
+    btnSample.addEventListener('click', () => {
+      textEl.value = SAMPLE;
+      clearStatus();
+    });
+
+    btnOfficial.addEventListener('click', () => {
+      window.open('https://fish.audio/app', '_blank', 'noopener');
+    });
+
+    btnGenerate.addEventListener('click', async () => {
+      const text = textEl.value.trim();
+      if (!text) {
+        setStatus('warn', '请先输入要合成的文字。');
+        return;
+      }
+
+      btnGenerate.disabled = true;
+      btnGenerate.innerHTML = '<span class="spinner"></span>合成中…';
+      player.classList.remove('show');
+      setStatus('info', '正在请求 Fish Audio（s2.1-pro-free），通常需要几秒…');
+
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            api_key: apiKeyEl.value.trim(),
+          }),
+        });
+
+        if (!res.ok) {
+          let msg = '合成失败';
+          try {
+            const err = await res.json();
+            msg = err.error || msg;
+            if (err.hint) msg += ' — ' + err.hint;
+            if (err.detail) msg += '（' + String(err.detail).slice(0, 120) + '）';
+          } catch (_) {}
+          setStatus('err', msg);
+          return;
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        player.src = url;
+        player.classList.add('show');
+        setStatus('ok', '✅ 合成成功！点击下方播放器收听。');
+        player.play().catch(() => {});
+      } catch (e) {
+        setStatus('err', '网络错误：' + (e.message || '请确认演示服务已启动'));
+      } finally {
+        btnGenerate.disabled = false;
+        btnGenerate.textContent = '生成语音';
+      }
+    });
+  </script>
+</body>
+</html>
