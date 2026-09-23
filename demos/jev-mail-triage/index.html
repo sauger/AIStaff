@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jev 邮件分类试听 · 本地演示</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --card: #ffffff;
+      --text: #141824;
+      --muted: #5a6278;
+      --accent: #0d9488;
+      --accent-soft: #ccfbf1;
+      --warn: #d97706;
+      --err: #dc2626;
+      --ok: #059669;
+      --border: #e2e8f0;
+      --radius: 14px;
+      --shadow: 0 8px 28px rgba(15, 23, 42, 0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 24px 18px 56px; }
+    h1 { margin: 0 0 8px; font-size: 1.65rem; }
+    h2 { margin: 0 0 12px; font-size: 1.12rem; }
+    .subtitle { color: var(--muted); margin: 0 0 16px; }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.82rem;
+      font-weight: 700;
+      margin-right: 8px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .notice {
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #9a3412;
+      font-size: 0.9rem;
+      margin-bottom: 14px;
+    }
+    label { display: block; font-weight: 600; margin: 10px 0 6px; font-size: 0.92rem; }
+    input[type="text"], input[type="password"], input[type="number"], textarea, select {
+      width: 100%;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.95rem;
+      font-family: inherit;
+    }
+    input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    textarea { min-height: 72px; resize: vertical; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+    .hint { color: var(--muted); font-size: 0.82rem; margin-top: 4px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; align-items: center; }
+    button {
+      border: none; border-radius: 10px; padding: 11px 18px;
+      font-size: 0.95rem; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-secondary { background: #e0f2fe; color: #0369a1; }
+    .btn-warn { background: #fef3c7; color: #92400e; }
+    .status {
+      margin-top: 12px; padding: 10px 12px; border-radius: 10px; display: none; font-size: 0.92rem;
+    }
+    .status.show { display: block; }
+    .status.info { background: #eff6ff; color: #1e40af; }
+    .status.ok { background: #ecfdf5; color: #065f46; }
+    .status.err { background: #fef2f2; color: #991b1b; }
+    .mail-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .mail-table th, .mail-table td {
+      border-bottom: 1px solid var(--border);
+      padding: 8px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .mail-table th { color: var(--muted); font-weight: 600; }
+    .mail-snippet { color: var(--muted); max-width: 280px; }
+    .choice-block {
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      background: #fafafa;
+    }
+    .choice-block h3 { margin: 0 0 8px; font-size: 1rem; }
+    .opt-row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; margin-bottom: 6px; }
+    .results { margin-top: 12px; }
+    .result-item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 10px;
+      background: #fff;
+    }
+    .result-item.err { border-color: #fecaca; background: #fef2f2; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #f1f5f9; margin-right: 6px; font-size: 0.82rem; }
+    .inline-check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    .inline-check input { width: 18px; height: 18px; accent-color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>📬 Jev 邮件分类试听</h1>
+      <p class="subtitle">本地拉信 → 三道 Choice（紧急 / 垃圾 / 能否自动）→ 看标签和概率。<strong>不连 OpenClaw，不接入 RapidStaff。</strong></p>
+      <span class="badge">jev-latest</span>
+      <span class="badge">仅本机 127.0.0.1</span>
+    </header>
+
+    <p class="notice">
+      ⚠️ 邮件会送到 <code>api.typesafe.ai</code>。勿用生产密钥邮箱做第一轮；snippet 已截断并脱敏，仍请当机密处理。
+    </p>
+
+    <section class="card">
+      <h2>① TypeSafe</h2>
+      <label for="typesafeKey">API Key</label>
+      <input id="typesafeKey" type="password" placeholder="TYPESAFE_API_KEY（仅本次会话，不落盘）" autocomplete="off" />
+      <p class="hint">或在 <code>.env</code> / 环境变量设置 <code>TYPESAFE_API_KEY</code> 后重启服务。</p>
+    </section>
+
+    <section class="card">
+      <h2>② 邮箱 IMAP</h2>
+      <div class="grid-2">
+        <div>
+          <label for="imapHost">Host</label>
+          <input id="imapHost" type="text" placeholder="imap.example.com" />
+        </div>
+        <div>
+          <label for="imapPort">Port</label>
+          <input id="imapPort" type="number" value="993" />
+        </div>
+        <div>
+          <label for="imapUser">User</label>
+          <input id="imapUser" type="text" placeholder="you@example.com" />
+        </div>
+        <div>
+          <label for="imapPassword">Password</label>
+          <input id="imapPassword" type="password" placeholder="邮箱密码或应用专用密码" autocomplete="off" />
+        </div>
+      </div>
+      <label for="imapFolder">文件夹</label>
+      <input id="imapFolder" type="text" value="INBOX" />
+      <div class="inline-check">
+        <input id="imapSsl" type="checkbox" checked />
+        <label for="imapSsl" style="margin:0;font-weight:600;">使用 SSL</label>
+      </div>
+      <p class="hint">IMAP 密码只存在内存，不会写入 git / data 缓存。</p>
+      <div class="row">
+        <label style="margin:0;font-weight:600;">拉最近</label>
+        <input id="fetchCount" type="number" value="10" min="1" max="200" style="width:88px" />
+        <span>封</span>
+        <button id="btnFetch" class="btn-secondary" type="button">下载到本地缓存</button>
+      </div>
+      <div id="fetchStatus" class="status" role="status"></div>
+    </section>
+
+    <section class="card">
+      <h2>③ 缓存邮件</h2>
+      <div class="row">
+        <button id="btnReload" class="btn-secondary" type="button">刷新列表</button>
+        <button id="btnSelectAll" class="btn-secondary" type="button">全选</button>
+        <button id="btnSelectNone" class="btn-secondary" type="button">全不选</button>
+        <span class="hint" style="margin:0">或填序号范围：</span>
+        <input id="rangeStart" type="number" min="1" placeholder="起" style="width:72px" />
+        <span>–</span>
+        <input id="rangeEnd" type="number" min="1" placeholder="止" style="width:72px" />
+        <button id="btnRange" class="btn-secondary" type="button">选中范围</button>
+      </div>
+      <label for="openclawSkills">openclaw_skills（逗号分隔，进 state）</label>
+      <input id="openclawSkills" type="text" placeholder="archive_receipt, mark_read" />
+      <div style="overflow-x:auto;margin-top:12px">
+        <table class="mail-table" id="mailTable">
+          <thead>
+            <tr>
+              <th></th>
+              <th>#</th>
+              <th>日期</th>
+              <th>发件人</th>
+              <th>主题</th>
+              <th>摘要</th>
+            </tr>
+          </thead>
+          <tbody id="mailBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>④ Choice 题干（可改，存本地 data/）</h2>
+      <div id="choiceEditor"></div>
+      <div class="row">
+        <button id="btnSaveChoices" class="btn-secondary" type="button">保存题干</button>
+        <button id="btnResetChoices" class="btn-warn" type="button">恢复默认</button>
+      </div>
+      <div id="choiceStatus" class="status"></div>
+    </section>
+
+    <section class="card">
+      <h2>⑤ 批量分类</h2>
+      <div class="row">
+        <button id="btnClassify" class="btn-primary" type="button">开始</button>
+        <label style="margin:0">并发</label>
+        <input id="concurrency" type="number" value="2" min="1" max="5" style="width:64px" />
+      </div>
+      <div id="classifyStatus" class="status"></div>
+      <div id="results" class="results"></div>
+    </section>
+  </div>
+
+  <script>
+    let messages = [];
+    let choiceConfig = {};
+
+    function showStatus(el, text, kind) {
+      el.textContent = text;
+      el.className = 'status show ' + (kind || 'info');
+    }
+
+    function imapPayload() {
+      return {
+        host: document.getElementById('imapHost').value.trim(),
+        port: parseInt(document.getElementById('imapPort').value, 10) || 993,
+        user: document.getElementById('imapUser').value.trim(),
+        password: document.getElementById('imapPassword').value,
+        folder: document.getElementById('imapFolder').value.trim() || 'INBOX',
+        ssl: document.getElementById('imapSsl').checked,
+      };
+    }
+
+    function typesafeKey() {
+      return document.getElementById('typesafeKey').value.trim();
+    }
+
+    async function loadMessages() {
+      const res = await fetch('/api/messages');
+      const data = await res.json();
+      messages = data.messages || [];
+      renderMailTable();
+    }
+
+    function renderMailTable() {
+      const tbody = document.getElementById('mailBody');
+      tbody.innerHTML = '';
+      messages.forEach((m, idx) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input type="checkbox" class="mail-cb" data-id="${escapeAttr(m.id)}" /></td>
+          <td>${idx + 1}</td>
+          <td>${escapeHtml(formatDate(m.received_at))}</td>
+          <td>${escapeHtml(m.from || '')}</td>
+          <td>${escapeHtml(m.subject || '')}</td>
+          <td class="mail-snippet">${escapeHtml((m.snippet || '').slice(0, 120))}…</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function escapeAttr(s) {
+      return escapeHtml(s).replace(/'/g, '&#39;');
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      try {
+        return new Date(iso).toLocaleString('zh-CN', { hour12: false });
+      } catch {
+        return iso;
+      }
+    }
+
+    function selectedIds() {
+      return [...document.querySelectorAll('.mail-cb:checked')].map((el) => el.dataset.id);
+    }
+
+    function renderChoiceEditor() {
+      const root = document.getElementById('choiceEditor');
+      root.innerHTML = '';
+      Object.entries(choiceConfig).forEach(([qid, q]) => {
+        const block = document.createElement('div');
+        block.className = 'choice-block';
+        block.dataset.qid = qid;
+        const opts = q.options || {};
+        let optHtml = '';
+        Object.entries(opts).forEach(([key, desc]) => {
+          optHtml += `
+            <div class="opt-row">
+              <input type="text" class="opt-key" value="${escapeAttr(key)}" />
+              <input type="text" class="opt-desc" value="${escapeAttr(desc)}" />
+            </div>`;
+        });
+        block.innerHTML = `
+          <h3>${escapeHtml(q.label || qid)} <code>${escapeHtml(qid)}</code></h3>
+          <label>题干 instructions</label>
+          <textarea class="q-instructions">${escapeHtml(q.instructions || '')}</textarea>
+          <label style="margin-top:10px">选项（键 / 说明）</label>
+          ${optHtml}
+        `;
+        root.appendChild(block);
+      });
+    }
+
+    function readChoiceEditor() {
+      const out = {};
+      document.querySelectorAll('.choice-block').forEach((block) => {
+        const qid = block.dataset.qid;
+        const instructions = block.querySelector('.q-instructions').value;
+        const options = {};
+        block.querySelectorAll('.opt-row').forEach((row) => {
+          const k = row.querySelector('.opt-key').value.trim();
+          const d = row.querySelector('.opt-desc').value.trim();
+          if (k) options[k] = d;
+        });
+        out[qid] = {
+          label: (choiceConfig[qid] && choiceConfig[qid].label) || qid,
+          instructions,
+          options,
+        };
+      });
+      return out;
+    }
+
+    async function loadChoices() {
+      const res = await fetch('/api/choices');
+      const data = await res.json();
+      choiceConfig = data.choices || {};
+      renderChoiceEditor();
+    }
+
+    document.getElementById('btnFetch').addEventListener('click', async () => {
+      const st = document.getElementById('fetchStatus');
+      showStatus(st, '正在 IMAP 拉信…', 'info');
+      try {
+        const res = await fetch('/api/fetch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            count: parseInt(document.getElementById('fetchCount').value, 10) || 10,
+            imap: imapPayload(),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || data.detail || res.statusText);
+        showStatus(st, `已缓存 ${data.fetched} 封（列表共 ${(data.messages || []).length} 封）`, 'ok');
+        messages = data.messages || [];
+        renderMailTable();
+      } catch (e) {
+        showStatus(st, e.message || String(e), 'err');
+      }
+    });
+
+    document.getElementById('btnReload').addEventListener('click', loadMessages);
+    document.getElementById('btnSelectAll').addEventListener('click', () => {
+      document.querySelectorAll('.mail-cb').forEach((cb) => { cb.checked = true; });
+    });
+    document.getElementById('btnSelectNone').addEventListener('click', () => {
+      document.querySelectorAll('.mail-cb').forEach((cb) => { cb.checked = false; });
+    });
+    document.getElementById('btnRange').addEventListener('click', () => {
+      const start = parseInt(document.getElementById('rangeStart').value, 10);
+      const end = parseInt(document.getElementById('rangeEnd').value, 10);
+      if (!start || !end) return;
+      const lo = Math.min(start, end);
+      const hi = Math.max(start, end);
+      document.querySelectorAll('.mail-cb').forEach((cb, i) => {
+        const n = i + 1;
+        cb.checked = n >= lo && n <= hi;
+      });
+    });
+
+    document.getElementById('btnSaveChoices').addEventListener('click', async () => {
+      const st = document.getElementById('choiceStatus');
+      const choices = readChoiceEditor();
+      try {
+        const res = await fetch('/api/choices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ choices }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        choiceConfig = data.choices;
+        renderChoiceEditor();
+        showStatus(st, '题干已保存到本地 data/（不进 git）', 'ok');
+      } catch (e) {
+        showStatus(st, e.message || String(e), 'err');
+      }
+    });
+
+    document.getElementById('btnResetChoices').addEventListener('click', async () => {
+      const st = document.getElementById('choiceStatus');
+      const res = await fetch('/api/choices/reset', { method: 'POST' });
+      const data = await res.json();
+      choiceConfig = data.choices || {};
+      renderChoiceEditor();
+      showStatus(st, '已恢复默认题干', 'ok');
+    });
+
+    function formatAnswer(qid, ans) {
+      if (!ans || ans.type !== 'choice') return `${qid}: —`;
+      const pick = ans.choice || '?';
+      const conf = ans.confidence != null ? ans.confidence.toFixed(2) : '—';
+      const probs = ans.probabilities || {};
+      const probStr = Object.entries(probs)
+        .map(([k, v]) => `${k}:${(Number(v) * 100).toFixed(0)}%`)
+        .join(' ');
+      return `${qid}: ${pick} (conf ${conf}) · ${probStr}`;
+    }
+
+    document.getElementById('btnClassify').addEventListener('click', async () => {
+      const st = document.getElementById('classifyStatus');
+      const resultsEl = document.getElementById('results');
+      const ids = selectedIds();
+      if (!ids.length) {
+        showStatus(st, '请先勾选邮件', 'err');
+        return;
+      }
+      resultsEl.innerHTML = '';
+      showStatus(st, `正在分类 ${ids.length} 封…`, 'info');
+      const skills = document.getElementById('openclawSkills').value.trim();
+      try {
+        const res = await fetch('/api/classify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message_ids: ids,
+            typesafe_api_key: typesafeKey(),
+            concurrency: parseInt(document.getElementById('concurrency').value, 10) || 2,
+            openclaw_skills: skills,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        let okCount = 0;
+        data.results.forEach((r) => {
+          const mail = messages.find((m) => m.id === r.id);
+          const div = document.createElement('div');
+          div.className = 'result-item' + (r.ok ? '' : ' err');
+          if (r.ok) {
+            okCount += 1;
+            const lines = ['urgency', 'spam', 'handling']
+              .filter((q) => r.answers && r.answers[q])
+              .map((q) => formatAnswer(q, r.answers[q]));
+            div.innerHTML = `
+              <strong>${escapeHtml(mail?.subject || r.id)}</strong>
+              <div class="hint">${escapeHtml(mail?.from || '')}</div>
+              ${lines.map((l) => `<div><span class="tag">${escapeHtml(l)}</span></div>`).join('')}
+            `;
+          } else {
+            div.innerHTML = `<strong>${escapeHtml(r.id)}</strong><div>${escapeHtml(r.error || '失败')}</div>
+              <div class="hint">${escapeHtml(r.detail || '')}</div>`;
+          }
+          resultsEl.appendChild(div);
+        });
+        showStatus(st, `完成：${okCount}/${data.results.length} 成功`, okCount === data.results.length ? 'ok' : 'info');
+      } catch (e) {
+        showStatus(st, e.message || String(e), 'err');
+      }
+    });
+
+    loadMessages();
+    loadChoices();
+  </script>
+</body>
+</html>
