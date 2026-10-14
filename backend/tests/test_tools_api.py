@@ -651,6 +651,150 @@ def test_probe_get_tool_sends_sample_arguments_as_query_params(
     }
 
 
+def test_probe_get_tool_substitutes_path_placeholders(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            requested.update({"method": method, "url": url, "params": params, "json": json})
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+
+        result = probe_tool(
+            ToolProbeRequest(
+                tenant_id="tenant_demo",
+                name="bill.lookup",
+                method="GET",
+                url="https://gateway.example/api/platform/organizations/{org_id}/consumption-bills",
+                sample_arguments={"org_id": "42", "period_ym": "2026-09", "page": 1},
+            ),
+            db,
+        )
+
+    assert result.success is True
+    assert requested == {
+        "method": "GET",
+        "url": "https://gateway.example/api/platform/organizations/42/consumption-bills",
+        "params": {"period_ym": "2026-09", "page": 1},
+        "json": None,
+    }
+
+
+def test_probe_post_tool_substitutes_path_and_keeps_leftover_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            requested.update({"method": method, "url": url, "params": params, "json": json})
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+
+        result = probe_tool(
+            ToolProbeRequest(
+                tenant_id="tenant_demo",
+                name="bill.note",
+                method="POST",
+                url="https://gateway.example/orgs/{org_id}/notes",
+                sample_arguments={"org_id": "42", "note": "ok"},
+            ),
+            db,
+        )
+
+    assert result.success is True
+    assert requested == {
+        "method": "POST",
+        "url": "https://gateway.example/orgs/42/notes",
+        "params": None,
+        "json": {"note": "ok"},
+    }
+
+
+def test_probe_rejects_leftover_chinese_placeholder_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("leftover braces must not be sent")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+
+        result = probe_tool(
+            ToolProbeRequest(
+                tenant_id="tenant_demo",
+                name="bill.lookup",
+                method="GET",
+                url="https://gateway.example/orgs/{企业数字ID}/bills",
+                sample_arguments={"企业数字ID": "42"},
+            ),
+            db,
+        )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "URL_PLACEHOLDER"
+    assert "英文字段名" in result.error.message
+
+
+def test_probe_rejects_missing_placeholder_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("missing placeholder must not open an HTTP client")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+
+        result = probe_tool(
+            ToolProbeRequest(
+                tenant_id="tenant_demo",
+                name="bill.lookup",
+                method="GET",
+                url="https://gateway.example/orgs/{org_id}/bills",
+                sample_arguments={"page": 1},
+            ),
+            db,
+        )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "URL_PLACEHOLDER"
+    assert "org_id" in result.error.message
+
+
 def test_probe_mcp_tool_error_is_stable() -> None:
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
