@@ -12,7 +12,7 @@ from app.secrets.errors import SecretError
 from app.secrets.executor import LoginAttempt, LoginExecution, get_login_executor
 from app.secrets.http_session import (
     extract_json_path,
-    looks_like_captcha,
+    login_error_indicates_captcha,
     session_headers_from_login,
 )
 from app.secrets.schema import (
@@ -602,10 +602,9 @@ def _execute_api_login(guide: EmployeeLoginGuide, secret: EmployeeSecret) -> Api
     except json.JSONDecodeError:
         parsed = None
 
-    if looks_like_captcha(parsed, text):
-        return ApiLoginExecution(False, None, True, CAPTCHA_MESSAGE)
-
     if not isinstance(parsed, dict) or parsed.get("success") is not True:
+        if login_error_indicates_captcha(parsed, text if parsed is None else ""):
+            return ApiLoginExecution(False, None, True, CAPTCHA_MESSAGE)
         return ApiLoginExecution(False, None, False, "登录失败，请检查密钥或认证配置。")
 
     token_path = str(config.get("token_path") or "data.token")
