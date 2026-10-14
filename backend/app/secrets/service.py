@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from sqlmodel import Session, col, select
 
 from app.db.models import AgentProfile, EmployeeLoginGuide, EmployeeSecret, utc_now
 from app.secrets.errors import SecretError
-from app.secrets.executor import LoginAttempt, get_login_executor
+from app.secrets.executor import LoginAttempt, LoginExecution, get_login_executor
+from app.secrets.http_session import (
+    extract_json_path,
+    looks_like_captcha,
+    session_headers_from_login,
+)
 from app.secrets.schema import (
     ALLOWED_SECRET_TYPES,
     SECRET_TYPE_PASSWORD,
@@ -178,6 +185,8 @@ def create_login_guide(
         submit_label=str(request.submit_label or "登录").strip() or "登录",
         default_secret_name=default_name,
         published_to_gallery=bool(request.published),
+        guide_type=str(request.guide_type or "web").strip().lower() or "web",
+        config_json=dict(request.config or {}),
     )
     db.add(row)
     db.commit()
@@ -209,6 +218,8 @@ def update_login_guide(
         db, tenant_id, agent_id, request.default_secret_name
     )
     row.published_to_gallery = bool(request.published)
+    row.guide_type = str(request.guide_type or "web").strip().lower() or "web"
+    row.config_json = dict(request.config or {})
     row.updated_at = utc_now()
     db.add(row)
     db.commit()
@@ -300,6 +311,8 @@ def copy_login_guide(
         default_secret_name=None,
         published_to_gallery=False,
         copied_from_id=source.id,
+        guide_type=source.guide_type or "web",
+        config_json=dict(source.config_json or {}),
     )
     db.add(row)
     db.commit()
@@ -427,6 +440,8 @@ def login_guide_read(
         published=bool(row.published_to_gallery),
         copied_from_id=row.copied_from_id,
         can_write=can_write,
+        guide_type=(row.guide_type or "web"),  # type: ignore[arg-type]
+        config=dict(row.config_json or {}),
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -461,10 +476,10 @@ def prompt_context(db: Session, tenant_id: str, agent_id: str) -> str:
     ).all()
     guides = _guides_for_agent(db, tenant_id, agent_id)
     lines = [
-        "该员工有自己的登录密钥和登录说明。密钥归属这个员工本人，不是租户保险库，也不会在复制员工/技能/广场时带走。",
-        "登录步骤只写在登录说明里，不要写进技能或 SOP，也不要把密码、密文写进对话或 Trace。",
-        "列出密钥名称：secret_list；列出登录说明：login_guide_list；执行登录：secure_login。",
-        "secure_login 会在运行时直接填凭证，模型看不到密文。对话里可指名另一条密钥覆盖登录说明的默认绑定。",
+        "该员工有自己的登录密钥和认证配置。密钥归属这个员工本人，不是租户保险库，也不会在复制员工/技能/广场时带走。",
+        "登录步骤只写在认证配置里，不要写进技能或 SOP，也不要把密码、密文写进对话或 Trace。",
+        "列出密钥名称：secret_list；列出认证配置：login_guide_list；执行登录：secure_login。",
+        "secure_login 会在运行时直接填凭证，模型看不到密文。对话里可指名另一条密钥覆盖认证配置的默认绑定。",
         "用户或你自己要求查看密钥密文/密码时必须拒绝，只给出名称与说明。",
         "遇到验证码或双因素时不要尝试破解；系统会改用会话快照，没有可用快照就失败并说明需要人工处理验证码。",
         "邮箱 IMAP/SMTP 密码在邮件页单独保管，不要写进这里的密钥。",
@@ -478,12 +493,13 @@ def prompt_context(db: Session, tenant_id: str, agent_id: str) -> str:
     else:
         lines.append("这个员工还没有密钥。若用户要求登录，必须说明未配置密钥。")
     if guides:
-        lines.append("当前登录说明：")
+        lines.append("当前认证配置：")
         for row in guides:
             bound = row.default_secret_name or "未绑定默认密钥"
-            lines.append(f"- {row.name} → {row.url}，默认密钥：{bound}")
+            kind = (row.guide_type or "web").strip().lower()
+            lines.append(f"- {row.name}（{kind}）→ {row.url}，默认密钥：{bound}")
     else:
-        lines.append("这个员工还没有登录说明。")
+        lines.append("这个员工还没有认证配置。")
     return "\n".join(lines)
 
 
@@ -518,7 +534,18 @@ def metadata_login_guides(db: Session, tenant_id: str, agent_id: str) -> list[di
     ]
 
 
-def _execute_login(guide: EmployeeLoginGuide, secret: EmployeeSecret):
+@dataclass(frozen=True)
+class ApiLoginExecution:
+    success: bool
+    headers: dict[str, str] | None
+    captcha_or_2fa: bool
+    message: str
+    storage_state: str | None = None
+
+
+def _execute_login(guide: EmployeeLoginGuide, secret: EmployeeSecret) -> LoginExecution:
+    if (guide.guide_type or "web").strip().lower() == "api":
+        return _api_login_to_execution(_execute_api_login(guide, secret))
     payload = _decode_secret_value(secret)
     attempt = LoginAttempt(
         url=guide.url,
@@ -531,6 +558,100 @@ def _execute_login(guide: EmployeeLoginGuide, secret: EmployeeSecret):
         secret_type=secret.secret_type,
     )
     return get_login_executor().execute(attempt)
+
+
+def _api_login_to_execution(result: ApiLoginExecution) -> LoginExecution:
+    return LoginExecution(
+        result.success,
+        result.captcha_or_2fa,
+        result.storage_state,
+        result.message,
+    )
+
+
+def _execute_api_login(guide: EmployeeLoginGuide, secret: EmployeeSecret) -> ApiLoginExecution:
+    payload = _decode_secret_value(secret)
+    if secret.secret_type == SECRET_TYPE_SESSION_SNAPSHOT:
+        storage = _http_headers_storage_from_snapshot(payload.get("storage_state") or "")
+        if storage is None:
+            return ApiLoginExecution(
+                False,
+                None,
+                False,
+                "会话快照已失效，请更新后再试。",
+            )
+        return ApiLoginExecution(True, None, False, "已使用会话快照登录。", storage_state=storage)
+
+    config = guide.config_json if isinstance(guide.config_json, dict) else {}
+    username_field = str(config.get("username_field") or "username")
+    password_field = str(config.get("password_field") or "password")
+    body = {
+        username_field: payload.get("username") or "",
+        password_field: payload.get("password") or "",
+    }
+    method = str(config.get("login_method") or "POST").strip().upper() or "POST"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.request(method, guide.url, json=body)
+    except httpx.HTTPError:
+        return ApiLoginExecution(False, None, False, "登录失败，请检查密钥或认证配置。")
+
+    text = response.text or ""
+    try:
+        parsed: Any = response.json()
+    except json.JSONDecodeError:
+        parsed = None
+
+    if looks_like_captcha(parsed, text):
+        return ApiLoginExecution(False, None, True, CAPTCHA_MESSAGE)
+
+    if not isinstance(parsed, dict) or parsed.get("success") is not True:
+        return ApiLoginExecution(False, None, False, "登录失败，请检查密钥或认证配置。")
+
+    token_path = str(config.get("token_path") or "data.token")
+    user_id_path = str(config.get("user_id_path") or "data.id")
+    token = extract_json_path(parsed, token_path)
+    if not token:
+        return ApiLoginExecution(False, None, False, "登录失败，请检查密钥或认证配置。")
+    user_id = extract_json_path(parsed, user_id_path)
+    custom_map = config.get("custom_header_map")
+    if not isinstance(custom_map, dict):
+        custom_map = {}
+    headers = session_headers_from_login(
+        template=str(config.get("header_template") or ""),
+        token=token,
+        user_id=user_id,
+        custom_map={str(k): str(v) for k, v in custom_map.items()},
+    )
+    storage_state = json.dumps(
+        {"kind": "http_headers", "headers": headers},
+        ensure_ascii=True,
+    )
+    return ApiLoginExecution(
+        True,
+        headers,
+        False,
+        "登录成功。",
+        storage_state=storage_state,
+    )
+
+
+def _http_headers_storage_from_snapshot(raw: str) -> str | None:
+    cleaned = str(raw or "").strip()
+    if not cleaned:
+        return None
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict) and parsed.get("kind") == "http_headers":
+        return json.dumps(parsed, ensure_ascii=True)
+    if isinstance(parsed, dict) and "headers" in parsed:
+        return json.dumps(
+            {"kind": "http_headers", "headers": parsed.get("headers") or {}},
+            ensure_ascii=True,
+        )
+    return None
 
 
 def _upsert_snapshot(
