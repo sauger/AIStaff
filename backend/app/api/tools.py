@@ -42,7 +42,7 @@ from app.security.permissions import (
 )
 from app.security.tenant import ensure_tenant
 from app.tools import ToolExecutor
-from app.tools.http_request import prepare_get_request
+from app.tools.http_request import UrlPlaceholderError, prepare_http_request
 from app.tools.mcp_client import (
     MCP_APP_MIME_TYPE,
     MCP_APPS_EXTENSION_ID,
@@ -321,16 +321,19 @@ def probe_tool(
     )
     timeout_seconds = _probe_timeout_seconds(request)
     try:
+        request_url, request_kwargs = prepare_http_request(
+            request.method, url, request.sample_arguments
+        )
+    except UrlPlaceholderError as exc:
+        return ToolProbeResponse(
+            success=False,
+            error=ToolError(code=exc.code, message=str(exc)),
+        )
+    try:
         with httpx.Client(timeout=timeout_seconds) as client:
-            if request.method.upper() == "GET":
-                request_url, request_kwargs = prepare_get_request(url, request.sample_arguments)
-                response = client.request(
-                    request.method.upper(), request_url, headers=headers, **request_kwargs
-                )
-            else:
-                response = client.request(
-                    request.method.upper(), url, headers=headers, json=request.sample_arguments
-                )
+            response = client.request(
+                request.method.upper(), request_url, headers=headers, **request_kwargs
+            )
     except httpx.TimeoutException:
         return ToolProbeResponse(
             success=False,

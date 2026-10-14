@@ -2059,7 +2059,11 @@ function ToolFormFields({
             </SelectContent>
           </UISelect>
         </Field>}
-        <Field label={values.tool_type === 'a2a' ? 'A2A Endpoint URL' : 'URL'} htmlFor="tool-url">
+        <Field
+          label={values.tool_type === 'a2a' ? 'A2A Endpoint URL' : 'URL'}
+          htmlFor="tool-url"
+          hint={values.tool_type === 'http' ? '{name} 由 Input Schema 入参替换。' : undefined}
+        >
           <Input
             id="tool-url"
             placeholder={values.tool_type === 'a2a' ? 'https://agent.example.com/a2a' : '/api/mock/order/query'}

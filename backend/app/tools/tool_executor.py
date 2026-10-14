@@ -20,7 +20,7 @@ from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_serv
 from app.skills.tool_authorization import SopToolAuthorization
 from app.tools.a2a_client import A2AClient, A2AClientError
 from app.tools.external_tasks import callback_token_hash, new_callback_token
-from app.tools.http_request import prepare_get_request
+from app.tools.http_request import UrlPlaceholderError, prepare_http_request
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool, execute_mcp_tool_result
 from app.tools.tool_schema import MCPAppDescriptor, ToolCall, ToolError, ToolResult
 
@@ -152,16 +152,13 @@ class ToolExecutor:
             timeout_seconds_override=timeout_seconds_override,
         )
         try:
+            request_url, request_kwargs = prepare_http_request(
+                tool.method, tool.url, tool_call.arguments
+            )
             with httpx.Client(timeout=policy.timeout_seconds) as client:
-                if tool.method.upper() == "GET":
-                    request_url, request_kwargs = prepare_get_request(tool.url, tool_call.arguments)
-                    response = client.request(
-                        tool.method.upper(), request_url, headers=headers, **request_kwargs
-                    )
-                else:
-                    response = client.request(
-                        tool.method.upper(), tool.url, headers=headers, json=tool_call.arguments
-                    )
+                response = client.request(
+                    tool.method.upper(), request_url, headers=headers, **request_kwargs
+                )
                 response.raise_for_status()
                 return ToolResult(
                     tool_name=tool.name,
@@ -169,6 +166,8 @@ class ToolExecutor:
                     data=self._response_data(response),
                     error=None,
                 )
+        except UrlPlaceholderError as exc:
+            return self._error(tool.name, exc.code, str(exc))
         except httpx.TimeoutException:
             return self._error(
                 tool.name,
@@ -217,16 +216,11 @@ class ToolExecutor:
             timeout_seconds_override=timeout_seconds_override,
         )
         try:
+            request_url, request_kwargs = prepare_http_request(tool.method, tool.url, arguments)
             with httpx.Client(timeout=policy.timeout_seconds) as client:
-                if tool.method.upper() == "GET":
-                    request_url, request_kwargs = prepare_get_request(tool.url, arguments)
-                    response = client.request(
-                        tool.method.upper(), request_url, headers=headers, **request_kwargs
-                    )
-                else:
-                    response = client.request(
-                        tool.method.upper(), tool.url, headers=headers, json=arguments
-                    )
+                response = client.request(
+                    tool.method.upper(), request_url, headers=headers, **request_kwargs
+                )
                 response.raise_for_status()
                 return HttpExecutionResponse(
                     result=ToolResult(
@@ -237,6 +231,8 @@ class ToolExecutor:
                     ),
                     status_code=response.status_code,
                 )
+        except UrlPlaceholderError as exc:
+            return HttpExecutionResponse(result=self._error(tool.name, exc.code, str(exc)))
         except httpx.TimeoutException:
             return HttpExecutionResponse(
                 result=self._error(

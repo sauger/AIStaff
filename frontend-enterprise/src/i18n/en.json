@@ -3479,6 +3479,7 @@
   "RapidStaff 托管异步": "RapidStaff-managed Async Execution",
   "RapidStaff 会生成任务号，在后台执行普通同步 HTTP 请求并保存最终结果；Provider 不需要返回 taskId。": "RapidStaff generates a task ID, runs the regular synchronous HTTP request in the background, and saves the final result. The provider does not need to return a taskId.",
   "状态查询 URL": "Status URL",
+  "{name} 由 Input Schema 入参替换。": "{name} is replaced from Input Schema arguments.",
   "使用 {taskId} 作为 Provider 任务 ID 占位符。": "Use {taskId} as the provider task ID placeholder.",
   "任务 ID 字段": "Task ID Field",
   "状态字段": "Status Field",

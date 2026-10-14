@@ -225,6 +225,199 @@ def test_execute_http_tool_passes_configured_timeout_to_client(monkeypatch) -> N
     assert captured["timeout"] == 20
 
 
+def test_execute_get_tool_substitutes_path_placeholders(monkeypatch) -> None:
+    requested: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            requested.update({"method": method, "url": url, "params": params, "json": json})
+            return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            Tool(
+                tenant_id="tenant_demo",
+                name="bill.lookup",
+                method="GET",
+                url="https://gateway.example/api/platform/organizations/{org_id}/consumption-bills",
+                enabled=True,
+            )
+        )
+        db.commit()
+
+        result = ToolExecutor(db).execute(
+            "tenant_demo",
+            ToolCall(
+                name="bill.lookup",
+                arguments={"org_id": "42", "period_ym": "2026-09", "page": 1},
+            ),
+        )
+
+    assert result.success is True
+    assert requested == {
+        "method": "GET",
+        "url": "https://gateway.example/api/platform/organizations/42/consumption-bills",
+        "params": {"period_ym": "2026-09", "page": 1},
+        "json": None,
+    }
+
+
+def test_execute_post_tool_substitutes_path_and_keeps_leftover_body(monkeypatch) -> None:
+    requested: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            requested.update({"method": method, "url": url, "params": params, "json": json})
+            return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            Tool(
+                tenant_id="tenant_demo",
+                name="bill.create",
+                method="POST",
+                url="https://gateway.example/api/platform/organizations/{org_id}/notes",
+                enabled=True,
+            )
+        )
+        db.commit()
+
+        result = ToolExecutor(db).execute(
+            "tenant_demo",
+            ToolCall(name="bill.create", arguments={"org_id": "42", "note": "ok"}),
+        )
+
+    assert result.success is True
+    assert requested == {
+        "method": "POST",
+        "url": "https://gateway.example/api/platform/organizations/42/notes",
+        "params": None,
+        "json": {"note": "ok"},
+    }
+
+
+def test_execute_http_with_metadata_substitutes_placeholders(monkeypatch) -> None:
+    requested: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            requested.update({"method": method, "url": url, "params": params, "json": json})
+            return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        tool = Tool(
+            tenant_id="tenant_demo",
+            name="bill.detached",
+            method="GET",
+            url="https://gateway.example/orgs/{org_id}/bills",
+            enabled=True,
+        )
+        response = ToolExecutor(db).execute_http_with_metadata(
+            tool,
+            {"org_id": "9", "page": 2},
+        )
+
+    assert response.result.success is True
+    assert requested == {
+        "method": "GET",
+        "url": "https://gateway.example/orgs/9/bills",
+        "params": {"page": 2},
+        "json": None,
+    }
+
+
+def test_execute_rejects_missing_placeholder_without_network(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("missing placeholder must not open an HTTP client")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            Tool(
+                tenant_id="tenant_demo",
+                name="bill.lookup",
+                method="GET",
+                url="https://gateway.example/orgs/{org_id}/bills",
+                enabled=True,
+            )
+        )
+        db.commit()
+
+        result = ToolExecutor(db).execute(
+            "tenant_demo",
+            ToolCall(name="bill.lookup", arguments={"page": 1}),
+        )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "URL_PLACEHOLDER"
+    assert "org_id" in result.error.message
+
+
+def test_execute_rejects_leftover_chinese_placeholder_without_network(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("leftover braces must not be sent")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            Tool(
+                tenant_id="tenant_demo",
+                name="bill.lookup",
+                method="GET",
+                url="https://gateway.example/orgs/{企业数字ID}/bills",
+                enabled=True,
+            )
+        )
+        db.commit()
+
+        result = ToolExecutor(db).execute(
+            "tenant_demo",
+            ToolCall(name="bill.lookup", arguments={"企业数字ID": "42"}),
+        )
+
+    assert result.success is False
+    assert result.error is not None
+    assert result.error.code == "URL_PLACEHOLDER"
+    assert "英文字段名" in result.error.message
+
+
 def test_execute_a2a_tool_sends_standard_send_message_request(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
