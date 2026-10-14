@@ -28,6 +28,7 @@ from app.db.models import (
     AgentEvent,
     AgentProfile,
     AgentResourceBinding,
+    EmployeeLoginGuide,
     MCPServer,
     Tool,
     User,
@@ -140,6 +141,7 @@ def tool_read(row: Tool, metadata: dict[str, Any] | None = None) -> ToolRead:
         allowed_skills=row.allowed_skills_json or [],
         mcp_server_id=row.mcp_server_id,
         capability_scope=normalize_capability_scope(row.capability_scope),
+        login_guide_id=row.login_guide_id,
         enabled=row.enabled,
         metadata=dict(metadata or {}),
         created_at=row.created_at.isoformat(),
@@ -201,6 +203,7 @@ def create_tool(
     if existing:
         raise HTTPException(status_code=409, detail="Tool name already exists for this tenant")
     agent = ensure_agent_scope_manager(db, request.tenant_id, agent_id, current_user)
+    _validate_login_guide(db, request.tenant_id, agent, request.login_guide_id)
     row = Tool(
         tenant_id=request.tenant_id,
         name=request.name,
@@ -217,6 +220,7 @@ def create_tool(
         output_schema=request.output_schema,
         allowed_skills_json=request.allowed_skills,
         capability_scope=request.capability_scope,
+        login_guide_id=request.login_guide_id,
         enabled=request.enabled,
     )
     db.add(row)
@@ -253,6 +257,7 @@ def probe_tool(
     request: ToolProbeRequest,
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
+    agent_id: str | None = Query(default=None),
 ) -> ToolProbeResponse:
     ensure_current_user_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
@@ -314,6 +319,8 @@ def probe_tool(
         )
     url = _normalize_probe_url(request.url)
     executor = ToolExecutor(db)
+    if request.login_guide_id:
+        return _probe_with_auth_config(db, executor, request, url, agent_id, current_user)
     headers = executor._request_headers(
         url,
         executor._resolve_headers(request.headers, request.auth),
@@ -357,6 +364,48 @@ def probe_tool(
         else ToolError(
             code="HTTP_ERROR", message=f"工具探测返回异常状态码：{response.status_code}"
         ),
+    )
+
+
+def _probe_with_auth_config(
+    db: Session,
+    executor: ToolExecutor,
+    request: ToolProbeRequest,
+    url: str,
+    agent_id: str | None,
+    current_user: User,
+) -> ToolProbeResponse:
+    agent = ensure_agent_scope_manager(db, request.tenant_id, agent_id, current_user)
+    _validate_login_guide(db, request.tenant_id, agent, request.login_guide_id)
+    tool = Tool(
+        tenant_id=request.tenant_id,
+        name=request.name,
+        tool_type="http",
+        method=request.method,
+        url=url,
+        headers_json=request.headers,
+        auth_json=request.auth,
+        config_json=_tool_config(request.mcp_config, request.execution_policy),
+        login_guide_id=request.login_guide_id,
+    )
+    response = executor.execute_http_with_auth_config(
+        tool,
+        request.sample_arguments,
+        agent_id=agent.id if agent else None,
+        tenant_id=request.tenant_id,
+        timeout_seconds_override=_probe_timeout_seconds(request),
+    )
+    result = response.result
+    if result.error is not None and response.status_code is None:
+        return ToolProbeResponse(success=False, error=result.error)
+    success = result.success
+    preview = response.payload
+    return ToolProbeResponse(
+        success=success,
+        status_code=response.status_code,
+        data_preview=preview,
+        inferred_output_schema=_infer_json_schema(preview) if success else {},
+        error=result.error,
     )
 
 
@@ -509,6 +558,9 @@ def update_tool(
         row.capability_scope = request.capability_scope
         if row.mcp_server_id:
             row.capability_scope_inherited = False
+    if "login_guide_id" in request.model_fields_set:
+        _validate_login_guide(db, request.tenant_id, agent, request.login_guide_id)
+        row.login_guide_id = request.login_guide_id
     row.enabled = request.enabled
     row.updated_at = utc_now()
     db.add(row)
@@ -730,6 +782,21 @@ def _unique_tool_name(
         candidate = f"{suffix_base}-{suffix}"
         suffix += 1
     return candidate
+
+
+def _validate_login_guide(
+    db: Session,
+    tenant_id: str,
+    agent: AgentProfile | None,
+    login_guide_id: str | None,
+) -> None:
+    if not login_guide_id:
+        return
+    guide = db.get(EmployeeLoginGuide, login_guide_id)
+    if guide is None or guide.tenant_id != tenant_id:
+        raise HTTPException(status_code=400, detail="认证配置不存在。")
+    if agent is None or agent.is_overall or guide.agent_id != agent.id:
+        raise HTTPException(status_code=400, detail="认证配置不属于当前员工。")
 
 
 def _normalize_bucket(value: str | None) -> str:
