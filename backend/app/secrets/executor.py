@@ -122,7 +122,7 @@ class HttpFormLoginExecutor:
             if _looks_like_captcha(result_html):
                 return LoginExecution(False, True, None, "需要人工处理验证码")
             if _still_on_login_form(result_html) and submitted.url == response.url:
-                return LoginExecution(False, False, None, "登录失败，请检查密钥或登录说明。")
+                return LoginExecution(False, False, None, "登录失败，请检查密钥或认证配置。")
             return LoginExecution(
                 True,
                 False,

@@ -201,9 +201,19 @@ class ToolExecutor:
         tool: Tool,
         arguments: dict[str, Any],
         *,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
         timeout_seconds_override: float | None = None,
     ) -> ToolResult:
         """Execute the HTTP request directly for the detached worker."""
+        if tool.login_guide_id and tenant_id and agent_id:
+            return self.execute_http_with_auth_config(
+                tool,
+                arguments,
+                agent_id=agent_id,
+                tenant_id=tenant_id,
+                timeout_seconds_override=timeout_seconds_override,
+            ).result
         return self.execute_http_with_metadata(
             tool,
             arguments,

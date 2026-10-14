@@ -50,7 +50,7 @@ type LoginGuidesPageProps = {
 type GuideTab = 'mine' | 'gallery';
 
 const TABS: UnderlineTabItem<GuideTab>[] = [
-  { value: 'mine', label: '我的说明' },
+  { value: 'mine', label: '我的配置' },
   { value: 'gallery', label: '广场' },
 ];
 
