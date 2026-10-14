@@ -76,6 +76,7 @@ import type {
   CapabilityScope,
   CodexA2AAdapterRead,
   ToolRead,
+  LoginGuideListResponse,
   MCPServerRead,
   MCPServerConnection,
   MCPDiscoverResponse,
@@ -113,6 +114,7 @@ export const TOOL_FORM_INITIAL_VALUES = {
   status_mapping: '{\n  "queued": "accepted",\n  "processing": "working",\n  "succeeded": "completed",\n  "failed": "failed"\n}',
   max_tracking_seconds: 86400,
   capability_scope: 'general' as CapabilityScope,
+  login_guide_id: '',
 };
 
 type ToolFormValues = typeof TOOL_FORM_INITIAL_VALUES & {
@@ -1057,6 +1059,7 @@ function ToolEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' 
   const [values, setValues] = useState<ToolFormValues>({ ...TOOL_FORM_INITIAL_VALUES });
   const [tool, setTool] = useState<ToolRead | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loginGuideOptions, setLoginGuideOptions] = useState<{ id: string; name: string }[]>([]);
   const [bucketOptions, setBucketOptions] = useState<{ value: string; label: string }[]>([{ value: '未分桶', label: '未分桶' }]);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -1069,6 +1072,22 @@ function ToolEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' 
 
   useEffect(() => {
     void loadBucketOptions().then(setBucketOptions);
+  }, []);
+
+  useEffect(() => {
+    const scopedAgentId = readEmployeeScope();
+    if (!scopedAgentId || isTeamScope(scopedAgentId)) {
+      setLoginGuideOptions([]);
+      return;
+    }
+    api
+      .get<LoginGuideListResponse>(
+        `/api/enterprise/login-guides?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(scopedAgentId)}`,
+      )
+      .then((listing) => setLoginGuideOptions(
+        (listing.guides || []).map((guide) => ({ id: guide.id, name: guide.name })),
+      ))
+      .catch(() => setLoginGuideOptions([]));
   }, []);
 
   useEffect(() => {
@@ -1158,7 +1177,13 @@ function ToolEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' 
       {!isEdit && <ToolTypeSwitcher active={values.tool_type} onProtocolChange={(protocol) => setValues((previous) => ({ ...previous, tool_type: protocol, method: 'POST' }))} />}
       <div className="grid grid-cols-1 items-start gap-[20px] xl:grid-cols-2">
         <SectionCard title="工具定义" loading={loading && isEdit && !tool}>
-          <ToolFormFields values={values} setField={setField} bucketOptions={bucketOptions} lockName={isEdit} />
+          <ToolFormFields
+            values={values}
+            setField={setField}
+            bucketOptions={bucketOptions}
+            loginGuideOptions={loginGuideOptions}
+            lockName={isEdit}
+          />
         </SectionCard>
         <div className="flex w-full flex-col gap-[20px]">
           <ToolProbeCard values={values} />
@@ -1978,11 +2003,13 @@ function ToolFormFields({
   values,
   setField,
   bucketOptions,
+  loginGuideOptions,
   lockName = false,
 }: {
   values: ToolFormValues;
   setField: <K extends keyof ToolFormValues>(name: K, value: ToolFormValues[K]) => void;
   bucketOptions: { value: string; label: string }[];
+  loginGuideOptions: { id: string; name: string }[];
   lockName?: boolean;
 }) {
   return (
@@ -2189,6 +2216,28 @@ function ToolFormFields({
         </div>
       )}
 
+      {values.tool_type === 'http' && (
+        <Field
+          label="认证配置"
+          hint="勾选后由认证配置带头，简单工具可留空。"
+        >
+          <UISelect
+            value={values.login_guide_id ? values.login_guide_id : '__none__'}
+            onValueChange={(value) => setField('login_guide_id', value === '__none__' ? '' : value)}
+          >
+            <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>
+              <SelectValue placeholder="不使用（现有 Auth JSON）" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">不使用（现有 Auth JSON）</SelectItem>
+              {loginGuideOptions.map((guide) => (
+                <SelectItem key={guide.id} value={guide.id}>{guide.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </UISelect>
+        </Field>
+      )}
+
       <Field
         label="调用超时上限（秒）"
         htmlFor="tool-timeout-seconds"
@@ -2388,6 +2437,7 @@ function ToolProbeCard({ values }: { values: ToolFormValues }) {
         input_schema: payload.input_schema,
         output_schema: payload.output_schema,
         sample_arguments: sampleArguments,
+        login_guide_id: payload.tool_type === 'http' ? (payload.login_guide_id ?? null) : null,
       });
       setResult(JSON.stringify(response, null, 2));
     } catch (error) {
@@ -2544,6 +2594,7 @@ function toolToFormValues(row: ToolRead): ToolFormValues {
     status_mapping: JSON.stringify(row.execution_policy?.status_mapping || {}, null, 2),
     max_tracking_seconds: row.execution_policy?.max_tracking_seconds ?? 86400,
     capability_scope: normalizeCapabilityScope(row.capability_scope),
+    login_guide_id: row.login_guide_id || '',
   };
 }
 
@@ -2593,6 +2644,9 @@ export function buildToolPayload(values: ToolFormValues) {
       allowed_skills: String(values.allowed_skills || '').split(',').map((item) => item.trim()).filter(Boolean),
       capability_scope: normalizeCapabilityScope(values.capability_scope),
       enabled: values.enabled,
+      login_guide_id: values.tool_type === 'http'
+        ? (String(values.login_guide_id || '').trim() || null)
+        : null,
     };
   } catch {
     notify.error('JSON 配置格式不正确，请检查 Headers、Auth、Schema 或协议配置');
