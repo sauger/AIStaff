@@ -84,7 +84,7 @@ const CAPABILITY_NAV: NavItem[] = [
   { route: EnterpriseRoute.Cabinet, label: '文件柜', Icon: IconCabinet },
   { route: EnterpriseRoute.Mail, label: '邮件', Icon: IconMail },
   { route: EnterpriseRoute.Secrets, label: '密钥', Icon: IconSecret },
-  { route: EnterpriseRoute.LoginGuides, label: '登录说明', Icon: IconLoginGuide },
+  { route: EnterpriseRoute.LoginGuides, label: '认证配置', Icon: IconLoginGuide },
   { route: EnterpriseRoute.GeneralSkills, label: '技能', Icon: IconMagicWand },
   { route: EnterpriseRoute.Skills, label: 'SOP', Icon: IconClipboard },
   { route: EnterpriseRoute.Tools, label: '工具', Icon: IconBriefcase },

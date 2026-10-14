@@ -141,10 +141,35 @@ describe('LoginGuidesPage', () => {
 
     renderGuides(adminUser);
 
-    expect(await screen.findByText('管理员正在查阅其他员工的登录说明，只能看步骤元数据，不能编辑、删除或测试登录。')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '新增登录说明' })).toBeNull();
+    expect(await screen.findByText('管理员正在查阅其他员工的认证配置，只能看步骤元数据，不能编辑、删除或测试登录。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '新增认证配置' })).toBeNull();
     expect(screen.queryByRole('button', { name: '测试登录' })).toBeNull();
     expect(screen.getByText('只读模式：管理员查看其他员工时不可执行测试登录。')).toBeTruthy();
+  });
+
+  it('renders auth config title and switches API form fields', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([ownedAgent]);
+      if (url.includes('/api/enterprise/secrets')) {
+        return jsonResponse({ agent_id: 'agent-1', can_write: true, secrets: [] });
+      }
+      if (url.includes('/api/enterprise/login-guides/gallery')) return jsonResponse([]);
+      if (url.includes('/api/enterprise/login-guides')) return jsonResponse(boundGuide);
+      return jsonResponse([]);
+    }));
+
+    renderGuides(ownerUser);
+
+    expect(await screen.findByText('认证配置')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '新增认证配置' }));
+    expect(screen.getByText('用户名选择器')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'API' }));
+    expect(screen.queryByText('用户名选择器')).toBeNull();
+    expect(screen.getByText('请求头模板')).toBeTruthy();
+    expect(screen.getByText('Token 路径')).toBeTruthy();
+    expect(screen.getByText('用户名字段名')).toBeTruthy();
   });
 
   it('copies a plaza guide without showing source secrets', async () => {

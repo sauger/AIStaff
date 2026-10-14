@@ -1388,6 +1388,18 @@ export type EmployeeSecretListResponse = {
   secrets: EmployeeSecretRead[];
 };
 
+export type LoginGuideType = 'web' | 'api';
+
+export type LoginGuideApiConfig = {
+  login_method?: string;
+  username_field?: string;
+  password_field?: string;
+  token_path?: string;
+  user_id_path?: string;
+  header_template?: string;
+  custom_header_map?: Record<string, string>;
+};
+
 export type LoginGuideRead = {
   id: string;
   agent_id: string;
@@ -1404,6 +1416,8 @@ export type LoginGuideRead = {
   published: boolean;
   copied_from_id?: string | null;
   can_write: boolean;
+  guide_type?: LoginGuideType;
+  config?: LoginGuideApiConfig;
   created_at: string;
   updated_at: string;
 };
