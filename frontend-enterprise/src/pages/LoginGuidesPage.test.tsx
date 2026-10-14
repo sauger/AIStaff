@@ -227,4 +227,88 @@ describe('LoginGuidesPage', () => {
     await userEvent.click(screen.getByRole('button', { name: '复制到当前员工' }));
     expect(await screen.findByText(/密钥绑定为空/)).toBeTruthy();
   });
+
+  it('posts web save with empty config and api save with config fields', async () => {
+    const postBodies: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([ownedAgent]);
+      if (url.includes('/api/enterprise/secrets')) {
+        return jsonResponse({ agent_id: 'agent-1', can_write: true, secrets: [] });
+      }
+      if (url.includes('/api/enterprise/login-guides/gallery')) return jsonResponse([]);
+      if (url.includes('/api/enterprise/login-guides') && init?.method === 'POST') {
+        postBodies.push(JSON.parse(String(init.body || '{}')));
+        return jsonResponse({ ...boundGuide.guides[0], id: 'elogin-new' });
+      }
+      if (url.includes('/api/enterprise/login-guides')) return jsonResponse({ ...boundGuide, guides: [] });
+      return jsonResponse([]);
+    }));
+
+    renderGuides(ownerUser);
+    await userEvent.click(await screen.findByRole('button', { name: '新增认证配置' }));
+    await userEvent.type(screen.getByLabelText('名称').closest('label')!.querySelector('input')!, '网页登录');
+    await userEvent.type(screen.getByLabelText('登录地址').closest('label')!.querySelector('input')!, 'https://web.example/login');
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0]).toMatchObject({
+      guide_type: 'web',
+      config: {},
+      name: '网页登录',
+      url: 'https://web.example/login',
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: '新增认证配置' }));
+    await userEvent.type(screen.getByLabelText('名称').closest('label')!.querySelector('input')!, 'API 登录');
+    await userEvent.type(screen.getByLabelText('登录地址').closest('label')!.querySelector('input')!, 'https://api.example/login');
+    await userEvent.click(screen.getByRole('button', { name: 'API' }));
+    await userEvent.selectOptions(screen.getByLabelText('登录方法').closest('label')!.querySelector('select')!, 'PUT');
+    await userEvent.selectOptions(screen.getByLabelText('请求头模板').closest('label')!.querySelector('select')!, 'bearer');
+    await userEvent.clear(screen.getByLabelText('用户名字段名').closest('label')!.querySelector('input')!);
+    await userEvent.type(screen.getByLabelText('用户名字段名').closest('label')!.querySelector('input')!, 'email');
+    await userEvent.clear(screen.getByLabelText('Token 路径').closest('label')!.querySelector('input')!);
+    await userEvent.type(screen.getByLabelText('Token 路径').closest('label')!.querySelector('input')!, 'access_token');
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(postBodies).toHaveLength(2);
+    expect(postBodies[1]).toMatchObject({
+      guide_type: 'api',
+      name: 'API 登录',
+      url: 'https://api.example/login',
+      config: {
+        login_method: 'PUT',
+        username_field: 'email',
+        password_field: 'password',
+        token_path: 'access_token',
+        user_id_path: 'data.id',
+        header_template: 'bearer',
+        custom_header_map: {},
+      },
+    });
+  });
+
+  it('shows custom header map editor only for custom template', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([ownedAgent]);
+      if (url.includes('/api/enterprise/secrets')) {
+        return jsonResponse({ agent_id: 'agent-1', can_write: true, secrets: [] });
+      }
+      if (url.includes('/api/enterprise/login-guides/gallery')) return jsonResponse([]);
+      if (url.includes('/api/enterprise/login-guides')) return jsonResponse(boundGuide);
+      return jsonResponse([]);
+    }));
+
+    renderGuides(ownerUser);
+    await userEvent.click(await screen.findByRole('button', { name: '新增认证配置' }));
+    await userEvent.click(screen.getByRole('button', { name: 'API' }));
+    expect(screen.queryByText('自定义请求头')).toBeNull();
+
+    await userEvent.selectOptions(screen.getByLabelText('请求头模板').closest('label')!.querySelector('select')!, 'custom');
+    expect(screen.getByText('自定义请求头')).toBeTruthy();
+
+    await userEvent.selectOptions(screen.getByLabelText('请求头模板').closest('label')!.querySelector('select')!, 'new_api');
+    expect(screen.queryByText('自定义请求头')).toBeNull();
+  });
 });
