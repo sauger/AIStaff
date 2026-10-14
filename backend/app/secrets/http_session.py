@@ -55,6 +55,20 @@ def is_unauthenticated_response(status_code: int, payload: Any) -> bool:
     return any(marker.lower() in message for marker in UNAUTH_MESSAGE_MARKERS)
 
 
-def looks_like_captcha(payload: Any, text: str = "") -> bool:
-    blob = f"{payload} {text}".lower()
+_LOGIN_ERROR_TEXT_KEYS = ("message", "msg", "error", "detail", "error_message", "err_msg")
+
+
+def login_error_indicates_captcha(payload: Any, text: str = "") -> bool:
+    """Detect captcha/2FA hints from login error text only (never session tokens)."""
+    parts: list[str] = []
+    if isinstance(payload, dict):
+        for key in _LOGIN_ERROR_TEXT_KEYS:
+            value = payload.get(key)
+            if value is not None:
+                parts.append(str(value))
+    elif text:
+        parts.append(text)
+    if not parts:
+        return False
+    blob = " ".join(parts).lower()
     return any(marker.lower() in blob for marker in CAPTCHA_MARKERS)
