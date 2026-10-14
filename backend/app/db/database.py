@@ -137,6 +137,7 @@ def _migrate_sqlite_skill_schema() -> None:
         _migrate_capability_scope_schema(conn, inspector, tables)
         _migrate_harness_v2_schema(conn, inspector, tables)
         _migrate_employee_inbound_mail_schema(conn, inspector, tables)
+        _migrate_employee_auth_config_schema(conn, inspector, tables)
 
         if "api_jobs" in tables:
             job_columns = {column["name"] for column in inspector.get_columns("api_jobs")}
@@ -1412,6 +1413,53 @@ def _migrate_employee_inbound_mail_schema(conn, inspector, tables: set[str]) -> 
             "ON employee_mail_triage_rules(tenant_id, agent_id, from_address)"
         )
     )
+
+
+def _migrate_employee_auth_config_schema(conn, inspector, tables: set[str]) -> None:
+    """Add login-guide auth config columns and optional HTTP tool binding."""
+    if "employee_login_guides" in tables:
+        guide_columns = {
+            column["name"] for column in inspector.get_columns("employee_login_guides")
+        }
+        if "guide_type" not in guide_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE employee_login_guides "
+                    "ADD COLUMN guide_type VARCHAR DEFAULT 'web'"
+                )
+            )
+        if "config_json" not in guide_columns:
+            conn.execute(
+                text("ALTER TABLE employee_login_guides ADD COLUMN config_json JSON")
+            )
+            conn.execute(
+                text(
+                    "UPDATE employee_login_guides SET config_json = '{}' "
+                    "WHERE config_json IS NULL"
+                )
+            )
+        conn.execute(
+            text(
+                "UPDATE employee_login_guides SET guide_type = 'web' "
+                "WHERE guide_type IS NULL"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_employee_login_guides_guide_type "
+                "ON employee_login_guides(guide_type)"
+            )
+        )
+    if "tools" in tables:
+        tool_columns = {column["name"] for column in inspector.get_columns("tools")}
+        if "login_guide_id" not in tool_columns:
+            conn.execute(text("ALTER TABLE tools ADD COLUMN login_guide_id VARCHAR"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_tools_login_guide_id "
+                "ON tools(login_guide_id)"
+            )
+        )
 
 
 def _migrate_channel_inbound_run_schema(conn, tables: set[str]) -> None:

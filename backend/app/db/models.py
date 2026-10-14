@@ -950,6 +950,8 @@ class EmployeeLoginGuide(SQLModel, table=True):
     default_secret_name: Optional[str] = None
     published_to_gallery: bool = Field(default=False, index=True)
     copied_from_id: Optional[str] = None
+    guide_type: str = Field(default="web", index=True)
+    config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -974,6 +976,7 @@ class Tool(SQLModel, table=True):
     output_schema: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     allowed_skills_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     mcp_server_id: Optional[str] = Field(default=None, index=True)
+    login_guide_id: Optional[str] = Field(default=None, index=True)
     capability_scope: str = Field(default="general", index=True)
     capability_scope_inherited: bool = True
     enabled: bool = True
