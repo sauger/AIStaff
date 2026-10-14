@@ -89,6 +89,12 @@ const HEADER_TEMPLATE_OPTIONS: { value: string; label: string }[] = [
 
 const LOGIN_METHOD_OPTIONS = ['POST', 'GET', 'PUT', 'PATCH'] as const;
 
+const CUSTOM_HEADER_SOURCE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'token', label: 'Token' },
+  { value: 'user_id', label: '用户 ID' },
+  { value: 'cookie', label: 'Cookie' },
+];
+
 const EMPTY_DRAFT: GuideDraft = {
   name: '',
   url: '',
@@ -629,6 +635,17 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
                   placeholder="data.id"
                 />
               </Field>
+              {(draft.config.header_template || 'new_api') === 'custom' ? (
+                <div className="col-span-2 max-[640px]:col-span-1">
+                  <CustomHeaderMapEditor
+                    map={normalizeApiConfig(draft.config).custom_header_map || {}}
+                    onChange={(nextMap) => setDraft((current) => current ? {
+                      ...current,
+                      config: { ...normalizeApiConfig(current.config), custom_header_map: nextMap },
+                    } : current)}
+                  />
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-[8px] max-[640px]:grid-cols-1">
@@ -688,6 +705,90 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
         onConfirm={() => void confirmDelete()}
       />
     </div>
+  );
+}
+
+function CustomHeaderMapEditor({
+  map,
+  onChange,
+}: {
+  map: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const [extraBlankRows, setExtraBlankRows] = useState(0);
+  const entries = Object.entries(map);
+  const blankRows = Array.from({ length: extraBlankRows }, () => ['', 'token'] as [string, string]);
+  const rows: [string, string][] = entries.length > 0
+    ? [...entries, ...blankRows]
+    : [['', 'token'], ...blankRows];
+
+  function commitRows(nextRows: [string, string][]) {
+    const nextMap: Record<string, string> = {};
+    for (const [name, src] of nextRows) {
+      const key = name.trim();
+      if (!key) continue;
+      nextMap[key] = src;
+    }
+    onChange(nextMap);
+  }
+
+  function setRow(index: number, headerName: string, source: string) {
+    const nextRows = rows.map(([name, src], i) => (i === index ? [headerName, source] : [name, src])) as [string, string][];
+    commitRows(nextRows);
+  }
+
+  function removeRow(index: number) {
+    if (index >= entries.length) {
+      setExtraBlankRows((count) => Math.max(0, count - 1));
+      return;
+    }
+    const nextRows = rows.filter((_, i) => i !== index) as [string, string][];
+    commitRows(nextRows);
+  }
+
+  function addRow() {
+    setExtraBlankRows((count) => count + 1);
+  }
+
+  return (
+    <Field label="自定义请求头">
+      <div className="flex flex-col gap-[8px]">
+        {rows.map(([headerName, source], index) => (
+          <div key={`${index}-${headerName}`} className="flex flex-wrap items-center gap-[8px]">
+            <Input
+              className="min-w-[120px] flex-1"
+              value={headerName}
+              onChange={(event) => setRow(index, event.target.value, source)}
+              placeholder="请求头名称"
+              aria-label="请求头名称"
+            />
+            <span className="text-[12px] text-[#858b9c]">←</span>
+            <select
+              className="h-[40px] min-w-[120px] flex-1 rounded-[8px] border border-[#e3e7f1] bg-white px-[12px] text-[14px]"
+              value={source}
+              onChange={(event) => setRow(index, headerName, event.target.value)}
+              aria-label="请求头来源"
+            >
+              {CUSTOM_HEADER_SOURCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <UIButton
+              type="button"
+              variant="outline"
+              className={cn(OUTLINE_ACTION_BUTTON_CLASS, 'h-[34px] shrink-0')}
+              onClick={() => removeRow(index)}
+              disabled={rows.length <= 1 && !headerName.trim()}
+            >
+              删除
+            </UIButton>
+          </div>
+        ))}
+        <UIButton type="button" variant="outline" className={cn(OUTLINE_ACTION_BUTTON_CLASS, 'h-[34px] w-fit')} onClick={addRow}>
+          添加请求头
+        </UIButton>
+      </div>
+    </Field>
   );
 }
 
