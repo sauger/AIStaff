@@ -3577,6 +3577,8 @@
   "请求头来源": "Header source",
   "添加请求头": "Add header",
   "自定义请求头": "Custom headers",
+  "不使用（现有 Auth JSON）": "Do not use (keep existing Auth JSON)",
+  "勾选后由认证配置带头，简单工具可留空。": "When selected, the auth config supplies session headers; simple tools can leave this empty.",
   "New API 两头": "New API (token + user id)",
   "自定义": "Custom",
   "（已从密码密钥切换为会话快照）": "(switched from password secret to session snapshot)",

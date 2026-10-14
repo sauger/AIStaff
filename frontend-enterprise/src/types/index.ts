@@ -430,6 +430,7 @@ export type ToolRead = {
   output_schema: Record<string, unknown>;
   allowed_skills: string[];
   mcp_server_id?: string | null;
+  login_guide_id?: string | null;
   enabled: boolean;
   metadata?: Record<string, unknown>;
   created_at: string;

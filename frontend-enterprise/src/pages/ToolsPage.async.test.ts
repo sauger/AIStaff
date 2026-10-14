@@ -30,6 +30,24 @@ describe('detached HTTP tool configuration', () => {
     });
   });
 
+  it('sends null login_guide_id when auth config is not selected', () => {
+    const payload = buildToolPayload({
+      ...values(),
+      login_guide_id: '',
+    });
+
+    expect(payload?.login_guide_id).toBeNull();
+  });
+
+  it('sends login_guide_id when an auth config is selected', () => {
+    const payload = buildToolPayload({
+      ...values(),
+      login_guide_id: 'elogin-gateway',
+    });
+
+    expect(payload?.login_guide_id).toBe('elogin-gateway');
+  });
+
   it('does not persist provider status URLs for RapidStaff-managed tasks', () => {
     const payload = buildToolPayload({
       ...values(),
