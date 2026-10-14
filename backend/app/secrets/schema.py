@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+GuideType = Literal["web", "api"]
 
 SecretType = Literal["password", "session_snapshot"]
 
@@ -61,6 +63,8 @@ class LoginGuideWriteRequest(BaseModel):
     submit_label: str = "登录"
     default_secret_name: str | None = None
     published: bool = False
+    guide_type: GuideType = "web"
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class LoginGuideRead(BaseModel):
@@ -79,6 +83,8 @@ class LoginGuideRead(BaseModel):
     published: bool = False
     copied_from_id: str | None = None
     can_write: bool = False
+    guide_type: GuideType = "web"
+    config: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
 

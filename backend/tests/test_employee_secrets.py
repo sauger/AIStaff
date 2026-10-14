@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.pool import StaticPool
@@ -45,7 +46,7 @@ from app.secrets.schema import (
     LoginGuideWriteRequest,
     SecretCreateRequest,
 )
-from app.secrets.service import prompt_context
+from app.secrets.service import perform_secure_login, prompt_context
 from app.security.encryption import decrypt_secret
 
 PASSWORD = "super-secret-password"
@@ -129,6 +130,31 @@ def _create_password(db: Session, user: User, agent_id: str, name: str = "主账
             secret_type="password",
             username=USERNAME,
             value=PASSWORD,
+        ),
+        agent_id=agent_id,
+        db=db,
+        current_user=user,
+    )
+
+
+def _create_api_guide(
+    db: Session,
+    user: User,
+    agent_id: str,
+    *,
+    name: str = "API 登录",
+    default_secret_name: str | None = "主账号",
+    published: bool = False,
+) -> object:
+    return post_login_guide(
+        LoginGuideWriteRequest(
+            tenant_id="tenant_demo",
+            name=name,
+            url="https://example.test/login",
+            default_secret_name=default_secret_name,
+            published=published,
+            guide_type="api",
+            config=API_LOGIN_GUIDE_CONFIG,
         ),
         agent_id=agent_id,
         db=db,
@@ -614,6 +640,125 @@ def test_employee_login_guide_api_config_round_trip(secret_db) -> None:
     assert loaded is not None
     assert loaded.guide_type == "api"
     assert loaded.config_json == API_LOGIN_GUIDE_CONFIG
+
+
+def test_api_login_writes_http_session_snapshot(secret_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    guide = _create_api_guide(db, owner, agent_a.id)
+    before = _secret_row(db, "主账号").value_encrypted
+
+    def handler(request):
+        assert request.method == "POST"
+        body = json.loads(request.content.decode())
+        assert body == {"username": USERNAME, "password": PASSWORD}
+        return httpx.Response(
+            200,
+            json={"success": True, "data": {"token": "t1", "id": 3}},
+            request=request,
+        )
+
+    from app.secrets import service as secrets_service
+
+    real_client = secrets_service.httpx.Client
+
+    def fake_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(secrets_service.httpx, "Client", fake_client)
+
+    result = perform_secure_login(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        login_guide_id=guide.id,
+        persist_snapshot=True,
+    )
+    assert result.success is True
+    assert "t1" not in result.message
+    assert PASSWORD not in result.message
+    assert _secret_row(db, "主账号").value_encrypted == before
+
+    snapshots = db.exec(
+        select(EmployeeSecret).where(EmployeeSecret.secret_type == "session_snapshot")
+    ).all()
+    assert len(snapshots) == 1
+    payload = json.loads(decrypt_secret(snapshots[0].value_encrypted))
+    inner = json.loads(payload["storage_state"])
+    assert inner == {
+        "kind": "http_headers",
+        "headers": {"Authorization": "t1", "New-Api-User": "3"},
+    }
+
+
+def test_api_login_captcha_skips_snapshot(secret_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    guide = _create_api_guide(db, owner, agent_a.id)
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"success": False, "message": "需要输入验证码"},
+            request=request,
+        )
+
+    from app.secrets import service as secrets_service
+
+    real_client = secrets_service.httpx.Client
+
+    def fake_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(secrets_service.httpx, "Client", fake_client)
+
+    result = perform_secure_login(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        login_guide_id=guide.id,
+        persist_snapshot=True,
+    )
+    assert result.success is False
+    assert result.captcha_or_2fa is True
+    assert "验证码" in result.message or result.code == "LOGIN_CAPTCHA_REQUIRED"
+    snapshots = db.exec(
+        select(EmployeeSecret).where(EmployeeSecret.secret_type == "session_snapshot")
+    ).all()
+    assert snapshots == []
+
+
+def test_api_guide_copy_preserves_type_and_config(secret_db) -> None:
+    db, (owner, other, _admin, agent_a, agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    guide = _create_api_guide(db, owner, agent_a.id, published=True)
+    copied = copy_published_login_guide(
+        guide.id,
+        LoginGuideCopyRequest(tenant_id="tenant_demo", target_agent_id=agent_b.id),
+        db=db,
+        current_user=other,
+    )
+    assert copied.guide_type == "api"
+    assert copied.config == API_LOGIN_GUIDE_CONFIG
+    assert copied.default_secret_name is None
+    assert db.exec(select(EmployeeSecret).where(EmployeeSecret.agent_id == agent_b.id)).all() == []
+    row = db.get(EmployeeLoginGuide, copied.id)
+    assert row is not None
+    assert row.guide_type == "api"
+    assert row.config_json == API_LOGIN_GUIDE_CONFIG
+
+
+def test_prompt_context_lists_auth_config_types(secret_db) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    _create_guide(db, owner, agent_a.id)
+    _create_api_guide(db, owner, agent_a.id, name="API 通道")
+    prompt = prompt_context(db, "tenant_demo", agent_a.id)
+    assert "认证配置" in prompt
+    assert "当前认证配置" in prompt
+    assert "(web)" in prompt or "（web）" in prompt
+    assert "(api)" in prompt or "（api）" in prompt
+    assert PASSWORD not in prompt
 
 
 def test_tool_login_guide_id_optional(secret_db) -> None:
