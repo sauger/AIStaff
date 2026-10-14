@@ -397,7 +397,12 @@ def _execute_local_task(db: Session, task: ExternalBusinessTask) -> None:
         if strategy == PROVIDER_TASK_STRATEGY:
             _submit_provider_task(db, task, tool)
         else:
-            result = ToolExecutor(db).execute_sync_http(tool, task.request_json)
+            result = ToolExecutor(db).execute_sync_http(
+                tool,
+                task.request_json,
+                tenant_id=task.tenant_id,
+                agent_id=task.agent_id,
+            )
             if result.success:
                 apply_task_event(
                     db,

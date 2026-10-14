@@ -278,7 +278,7 @@ export default function SecretsPage({ currentUser, onLogout }: SecretsPageProps 
                   </span>
                   {secret.linked_login_guide_name ? (
                     <span className="rounded-full bg-[#fff6e6] px-[9px] py-[3px] text-[#b45309]">
-                      关联登录说明：{secret.linked_login_guide_name}
+                      关联认证配置：{secret.linked_login_guide_name}
                     </span>
                   ) : null}
                   <span className="rounded-full border border-dashed border-[#ded7cc] px-[9px] py-[3px] text-[#858b9c]">
@@ -399,7 +399,7 @@ export default function SecretsPage({ currentUser, onLogout }: SecretsPageProps 
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         title={`删除「${deleteTarget?.name || ''}」？`}
-        description="删除后无法恢复密文。绑定了这条密钥的登录说明会变成未绑定。"
+        description="删除后无法恢复密文。绑定了这条密钥的认证配置会变成未绑定。"
         onConfirm={() => void confirmDelete()}
       />
     </div>

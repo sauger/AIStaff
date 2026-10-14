@@ -11,6 +11,7 @@ from sqlmodel import Session
 from test_employee_secrets import (  # noqa: F401
     PASSWORD,
     _create_api_guide,
+    _create_guide,
     _create_password,
     secret_db,
 )
@@ -379,3 +380,46 @@ def test_tool_api_rejects_unknown_or_foreign_guide(secret_db) -> None:
             current_user=owner,
         )
     assert exc.value.status_code == 400
+
+
+def test_probe_bound_guide_without_agent_id_rejected(secret_db, network) -> None:
+    db, owner, agent_a, guide = _setup(secret_db)
+
+    with pytest.raises(HTTPException) as exc:
+        probe_tool(
+            ToolProbeRequest(
+                tenant_id="tenant_demo",
+                name="probe.report",
+                method="GET",
+                url=BUSINESS_URL,
+                login_guide_id=guide.id,
+            ),
+            agent_id=None,
+            db=db,
+            current_user=owner,
+        )
+
+    assert exc.value.status_code == 400
+    assert "不属于当前员工" in str(exc.value.detail)
+
+
+def test_tool_api_rejects_web_guide_binding(secret_db) -> None:
+    db, owner, agent_a, _api_guide = _setup(secret_db)
+    web_guide = _create_guide(db, owner, agent_a.id, name="网页后台")
+
+    with pytest.raises(HTTPException) as exc:
+        create_tool(
+            ToolCreateRequest(
+                tenant_id="tenant_demo",
+                name="report.web-bind",
+                method="GET",
+                url=BUSINESS_URL,
+                login_guide_id=web_guide.id,
+            ),
+            agent_id=agent_a.id,
+            db=db,
+            current_user=owner,
+        )
+
+    assert exc.value.status_code == 400
+    assert "API" in str(exc.value.detail)

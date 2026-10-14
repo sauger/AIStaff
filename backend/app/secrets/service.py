@@ -11,6 +11,7 @@ from app.db.models import AgentProfile, EmployeeLoginGuide, EmployeeSecret, utc_
 from app.secrets.errors import SecretError
 from app.secrets.executor import LoginAttempt, LoginExecution, get_login_executor
 from app.secrets.http_session import (
+    cookie_header_from_login_response,
     extract_json_path,
     login_error_indicates_captcha,
     session_headers_from_login,
@@ -36,6 +37,11 @@ from app.security.permissions import agent_owned_by_user, is_admin_user
 CAPTCHA_MESSAGE = "需要人工处理验证码"
 
 
+def captcha_message_for_guide(guide_name: str | None) -> str:
+    label = str(guide_name or "").strip() or "认证配置"
+    return f"认证配置「{label}」需要人工处理验证码"
+
+
 def get_agent(db: Session, tenant_id: str, agent_id: str) -> AgentProfile:
     row = db.get(AgentProfile, agent_id)
     if row is None or row.tenant_id != tenant_id:
@@ -55,7 +61,7 @@ def ensure_reader(db: Session, tenant_id: str, agent_id: str, user: Any) -> Agen
     agent = get_agent(db, tenant_id, agent_id)
     if can_read_secrets(agent, user):
         return agent
-    raise SecretError("LOGIN_FORBIDDEN", "不能打开该员工的密钥或登录说明。", status_code=403)
+    raise SecretError("LOGIN_FORBIDDEN", "不能打开该员工的密钥或认证配置。", status_code=403)
 
 
 def ensure_writer(db: Session, tenant_id: str, agent_id: str, user: Any) -> AgentProfile:
@@ -64,7 +70,7 @@ def ensure_writer(db: Session, tenant_id: str, agent_id: str, user: Any) -> Agen
         return agent
     raise SecretError(
         "LOGIN_WRITE_FORBIDDEN",
-        "没有权限编辑该员工的密钥或登录说明。",
+        "没有权限编辑该员工的密钥或认证配置。",
         status_code=403,
     )
 
@@ -292,9 +298,9 @@ def copy_login_guide(
 ) -> LoginGuideRead:
     source = db.get(EmployeeLoginGuide, source_guide_id)
     if source is None or source.tenant_id != tenant_id:
-        raise SecretError("LOGIN_GUIDE_NOT_FOUND", "登录说明不存在。", status_code=404)
+        raise SecretError("LOGIN_GUIDE_NOT_FOUND", "认证配置不存在。", status_code=404)
     if not source.published_to_gallery and not is_admin_user(user):
-        raise SecretError("LOGIN_FORBIDDEN", "只能复制已发布到广场的登录说明。", status_code=403)
+        raise SecretError("LOGIN_FORBIDDEN", "只能复制已发布到广场的认证配置。", status_code=403)
     ensure_writer(db, tenant_id, request.target_agent_id, user)
     name = _unique_copied_name(db, tenant_id, request.target_agent_id, source.name)
     row = EmployeeLoginGuide(
@@ -360,7 +366,7 @@ def perform_secure_login(
                 secret_type_used=used.secret_type,
                 captcha_or_2fa=True,
                 code="LOGIN_CAPTCHA_REQUIRED",
-                message=CAPTCHA_MESSAGE,
+                message=captcha_message_for_guide(guide.name),
             )
     if not execution.success:
         code = "LOGIN_SNAPSHOT_INVALID" if used.secret_type == SECRET_TYPE_SESSION_SNAPSHOT else "LOGIN_FAILED"
@@ -374,7 +380,7 @@ def perform_secure_login(
             switched_to_snapshot=switched,
             captcha_or_2fa=execution.captcha_or_2fa,
             code=code,
-            message=execution.message if not execution.captcha_or_2fa else CAPTCHA_MESSAGE,
+            message=execution.message if not execution.captcha_or_2fa else captcha_message_for_guide(guide.name),
         )
     snapshot_created = False
     snapshot_updated = False
@@ -479,6 +485,7 @@ def prompt_context(db: Session, tenant_id: str, agent_id: str) -> str:
         "该员工有自己的登录密钥和认证配置。密钥归属这个员工本人，不是租户保险库，也不会在复制员工/技能/广场时带走。",
         "登录步骤只写在认证配置里，不要写进技能或 SOP，也不要把密码、密文写进对话或 Trace。",
         "列出密钥名称：secret_list；列出认证配置：login_guide_list；执行登录：secure_login。",
+        "已绑定认证配置的 HTTP 工具在调用与控制台探测时会自动登录并复用会话，技能不必先调用 secure_login。",
         "secure_login 会在运行时直接填凭证，模型看不到密文。对话里可指名另一条密钥覆盖认证配置的默认绑定。",
         "用户或你自己要求查看密钥密文/密码时必须拒绝，只给出名称与说明。",
         "遇到验证码或双因素时不要尝试破解；系统会改用会话快照，没有可用快照就失败并说明需要人工处理验证码。",
@@ -604,7 +611,7 @@ def _execute_api_login(guide: EmployeeLoginGuide, secret: EmployeeSecret) -> Api
 
     if not isinstance(parsed, dict) or parsed.get("success") is not True:
         if login_error_indicates_captcha(parsed, text if parsed is None else ""):
-            return ApiLoginExecution(False, None, True, CAPTCHA_MESSAGE)
+            return ApiLoginExecution(False, None, True, captcha_message_for_guide(guide.name))
         return ApiLoginExecution(False, None, False, "登录失败，请检查密钥或认证配置。")
 
     token_path = str(config.get("token_path") or "data.token")
@@ -616,11 +623,14 @@ def _execute_api_login(guide: EmployeeLoginGuide, secret: EmployeeSecret) -> Api
     custom_map = config.get("custom_header_map")
     if not isinstance(custom_map, dict):
         custom_map = {}
+    cookie_value = cookie_header_from_login_response(response)
     headers = session_headers_from_login(
         template=str(config.get("header_template") or ""),
         token=token,
         user_id=user_id,
         custom_map={str(k): str(v) for k, v in custom_map.items()},
+        cookie=cookie_value,
+        login_data=parsed,
     )
     storage_state = json.dumps(
         {"kind": "http_headers", "headers": headers},
@@ -676,7 +686,7 @@ def _upsert_snapshot(
         tenant_id=tenant_id,
         agent_id=agent_id,
         name=name,
-        description=f"测试登录成功后自动创建/更新，关联登录说明「{guide.name}」",
+        description=f"测试登录成功后自动创建/更新，关联认证配置「{guide.name}」",
         secret_type=SECRET_TYPE_SESSION_SNAPSHOT,
         value_encrypted=encrypt_secret(blob),
         linked_login_guide_id=guide.id,
@@ -725,7 +735,7 @@ def _resolve_guide(
         return _require_guide(db, tenant_id, agent_id, guide_id)
     name = str(guide_name or "").strip()
     if not name:
-        raise SecretError("LOGIN_GUIDE_REQUIRED", "请指定要使用的登录说明。")
+        raise SecretError("LOGIN_GUIDE_REQUIRED", "请指定要使用的认证配置。")
     row = db.exec(
         select(EmployeeLoginGuide).where(
             EmployeeLoginGuide.tenant_id == tenant_id,
@@ -734,7 +744,7 @@ def _resolve_guide(
         )
     ).first()
     if row is None:
-        raise SecretError("LOGIN_GUIDE_NOT_FOUND", f"找不到登录说明「{name}」。", status_code=404)
+        raise SecretError("LOGIN_GUIDE_NOT_FOUND", f"找不到认证配置「{name}」。", status_code=404)
     return row
 
 
@@ -750,7 +760,7 @@ def _resolve_secret(
     if not name:
         raise SecretError(
             "LOGIN_SECRET_REQUIRED",
-            f"登录说明「{required_for}」尚未绑定默认密钥，请先指定密钥。",
+            f"认证配置「{required_for}」尚未绑定密码密钥，请先绑定密码密钥。",
         )
     row = db.exec(
         select(EmployeeSecret).where(
@@ -778,7 +788,7 @@ def _require_guide(
 ) -> EmployeeLoginGuide:
     row = db.get(EmployeeLoginGuide, guide_id)
     if row is None or row.tenant_id != tenant_id or row.agent_id != agent_id:
-        raise SecretError("LOGIN_GUIDE_NOT_FOUND", "登录说明不存在。", status_code=404)
+        raise SecretError("LOGIN_GUIDE_NOT_FOUND", "认证配置不存在。", status_code=404)
     return row
 
 
@@ -884,7 +894,7 @@ def _ensure_unique_guide_name(
         )
     ).first()
     if row is not None and row.id != exclude_id:
-        raise SecretError("LOGIN_GUIDE_EXISTS", f"已有同名登录说明「{name}」。")
+        raise SecretError("LOGIN_GUIDE_EXISTS", f"已有同名认证配置「{name}」。")
 
 
 def _unique_copied_name(db: Session, tenant_id: str, agent_id: str, name: str) -> str:

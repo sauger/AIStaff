@@ -1085,7 +1085,9 @@ function ToolEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' 
         `/api/enterprise/login-guides?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(scopedAgentId)}`,
       )
       .then((listing) => setLoginGuideOptions(
-        (listing.guides || []).map((guide) => ({ id: guide.id, name: guide.name })),
+        (listing.guides || [])
+          .filter((guide) => (guide.guide_type || 'web') === 'api')
+          .map((guide) => ({ id: guide.id, name: guide.name })),
       ))
       .catch(() => setLoginGuideOptions([]));
   }, []);
@@ -2216,7 +2218,7 @@ function ToolFormFields({
         </div>
       )}
 
-      {values.tool_type === 'http' && (
+      {values.tool_type === 'http' && values.execution_mode !== 'detached' && (
         <Field
           label="认证配置"
           hint="勾选后由认证配置带头，简单工具可留空。"
@@ -2236,6 +2238,9 @@ function ToolFormFields({
             </SelectContent>
           </UISelect>
         </Field>
+      )}
+      {values.tool_type === 'http' && values.execution_mode === 'detached' && (
+        <p className={HINT_CLASS}>异步跟踪模式不支持认证配置会话注入；请使用同步 HTTP 或保留 Auth JSON。</p>
       )}
 
       <Field
@@ -2422,7 +2427,7 @@ function ToolProbeCard({ values }: { values: ToolFormValues }) {
     }
     setLoading(true);
     try {
-      const response = await api.post('/api/enterprise/tools/probe', {
+      const response = await api.post(buildToolProbeRequestUrl(), {
         tenant_id: TENANT_ID,
         name: payload.name,
         display_name: payload.display_name,
@@ -2569,6 +2574,11 @@ async function loadBucketOptions() {
 function currentAgentQuery() {
   const agentId = readEmployeeScope();
   return agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
+}
+
+export function buildToolProbeRequestUrl(): string {
+  const agentQuery = currentAgentQuery();
+  return `/api/enterprise/tools/probe${agentQuery ? `?${agentQuery.slice(1)}` : ''}`;
 }
 
 function toolToFormValues(row: ToolRead): ToolFormValues {

@@ -24,6 +24,7 @@ def session_headers_from_login(
     user_id: str | None,
     custom_map: dict[str, str],
     cookie: str | None = None,
+    login_data: Any | None = None,
 ) -> dict[str, str]:
     kind = (template or "").strip().lower()
     if kind == "new_api":
@@ -38,10 +39,30 @@ def session_headers_from_login(
     headers: dict[str, str] = {}
     values = {"token": token, "user_id": user_id or "", "cookie": cookie or token}
     for header_name, source in (custom_map or {}).items():
-        value = values.get(source) or extract_json_path(values, source)
+        value = values.get(source)
+        if not value and login_data is not None:
+            value = extract_json_path(login_data, source)
         if value:
             headers[str(header_name)] = value
     return headers
+
+
+def cookie_header_from_login_response(response: Any) -> str | None:
+    """Build a Cookie header value from httpx response cookies or Set-Cookie."""
+    cookies = getattr(response, "cookies", None)
+    if cookies:
+        try:
+            keys = list(cookies.keys())
+        except Exception:
+            keys = []
+        if keys:
+            return "; ".join(f"{name}={cookies[name]}" for name in keys)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        raw = headers.get("set-cookie") if hasattr(headers, "get") else None
+        if raw:
+            return str(raw).split(";")[0] if ";" in str(raw) else str(raw)
+    return None
 
 
 def is_unauthenticated_response(status_code: int, payload: Any) -> bool:

@@ -797,6 +797,8 @@ def _validate_login_guide(
         raise HTTPException(status_code=400, detail="认证配置不存在。")
     if agent is None or agent.is_overall or guide.agent_id != agent.id:
         raise HTTPException(status_code=400, detail="认证配置不属于当前员工。")
+    if (guide.guide_type or "web") != "api":
+        raise HTTPException(status_code=400, detail="HTTP 工具只能绑定 API 类型的认证配置。")
 
 
 def _normalize_bucket(value: str | None) -> str:
