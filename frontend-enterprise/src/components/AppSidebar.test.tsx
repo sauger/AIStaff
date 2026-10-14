@@ -134,7 +134,7 @@ describe('AppSidebar agent switcher team group', () => {
     expect(screen.getByText('文件柜')).toBeTruthy();
     expect(screen.getByText('邮件')).toBeTruthy();
     expect(screen.getByText('密钥')).toBeTruthy();
-    expect(screen.getByText('登录说明')).toBeTruthy();
+    expect(screen.getByText('认证配置')).toBeTruthy();
   });
 
   it('falls back to a bare team label when the selected team is unknown', () => {

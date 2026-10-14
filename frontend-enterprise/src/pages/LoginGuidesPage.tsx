@@ -34,9 +34,11 @@ import type {
   AgentProfileRead,
   EmployeeSecretListResponse,
   EmployeeSecretRead,
+  LoginGuideApiConfig,
   LoginGuideGalleryItem,
   LoginGuideListResponse,
   LoginGuideRead,
+  LoginGuideType,
   LoginResult,
 } from '../types';
 
@@ -56,6 +58,8 @@ type GuideDraft = {
   id?: string;
   name: string;
   url: string;
+  guide_type: LoginGuideType;
+  config: LoginGuideApiConfig;
   username_selector: string;
   username_label: string;
   password_selector: string;
@@ -66,9 +70,30 @@ type GuideDraft = {
   published: boolean;
 };
 
+const EMPTY_API_CONFIG: LoginGuideApiConfig = {
+  login_method: 'POST',
+  username_field: 'username',
+  password_field: 'password',
+  token_path: 'data.token',
+  user_id_path: 'data.id',
+  header_template: 'new_api',
+  custom_header_map: {},
+};
+
+const HEADER_TEMPLATE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'new_api', label: 'New API 两头' },
+  { value: 'bearer', label: 'Bearer' },
+  { value: 'cookie', label: 'Cookie' },
+  { value: 'custom', label: '自定义' },
+];
+
+const LOGIN_METHOD_OPTIONS = ['POST', 'GET', 'PUT', 'PATCH'] as const;
+
 const EMPTY_DRAFT: GuideDraft = {
   name: '',
   url: '',
+  guide_type: 'web',
+  config: { ...EMPTY_API_CONFIG },
   username_selector: '',
   username_label: '用户名',
   password_selector: '',
@@ -79,6 +104,29 @@ const EMPTY_DRAFT: GuideDraft = {
   published: false,
 };
 
+function normalizeApiConfig(config?: LoginGuideApiConfig | null): LoginGuideApiConfig {
+  const source = config || {};
+  const customMap = source.custom_header_map;
+  return {
+    login_method: source.login_method || 'POST',
+    username_field: source.username_field || 'username',
+    password_field: source.password_field || 'password',
+    token_path: source.token_path || 'data.token',
+    user_id_path: source.user_id_path || 'data.id',
+    header_template: source.header_template || 'new_api',
+    custom_header_map: customMap && typeof customMap === 'object' ? { ...customMap } : {},
+  };
+}
+
+function guideTypeLabel(type?: LoginGuideType | null): string {
+  return (type || 'web') === 'api' ? 'API' : '网页';
+}
+
+function headerTemplateLabel(template?: string | null): string {
+  const match = HEADER_TEMPLATE_OPTIONS.find((item) => item.value === (template || '').trim());
+  return match?.label || template || '—';
+}
+
 function apiErrorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
@@ -86,10 +134,13 @@ function apiErrorMessage(error: unknown): string {
 }
 
 function toDraft(guide: LoginGuideRead): GuideDraft {
+  const guideType = (guide.guide_type || 'web') === 'api' ? 'api' : 'web';
   return {
     id: guide.id,
     name: guide.name,
     url: guide.url,
+    guide_type: guideType,
+    config: normalizeApiConfig(guide.config),
     username_selector: guide.username_selector,
     username_label: guide.username_label,
     password_selector: guide.password_selector,
@@ -213,6 +264,8 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
       notify.error('请填写名称和登录地址');
       return;
     }
+    const guideType = draft.guide_type === 'api' ? 'api' : 'web';
+    const apiConfig = normalizeApiConfig(draft.config);
     const payload = {
       tenant_id: TENANT_ID,
       name: draft.name.trim(),
@@ -225,6 +278,8 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
       submit_label: draft.submit_label.trim() || '登录',
       default_secret_name: draft.default_secret_name.trim() || null,
       published: draft.published,
+      guide_type: guideType,
+      config: guideType === 'api' ? apiConfig : {},
     };
     try {
       if (draft.id) {
@@ -232,13 +287,13 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
           `/api/enterprise/login-guides/${encodeURIComponent(draft.id)}?agent_id=${encodeURIComponent(agentId)}`,
           payload,
         );
-        notify.success('已更新登录说明');
+        notify.success('已更新认证配置');
       } else {
         await api.post(
           `/api/enterprise/login-guides?agent_id=${encodeURIComponent(agentId)}`,
           payload,
         );
-        notify.success('已保存登录说明');
+        notify.success('已保存认证配置');
       }
       setDraft(null);
       await loadMine();
@@ -254,7 +309,7 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
       await api.delete(
         `/api/enterprise/login-guides/${encodeURIComponent(deleteTarget.id)}?tenant_id=${encodeURIComponent(TENANT_ID)}&agent_id=${encodeURIComponent(agentId)}`,
       );
-      notify.success('已删除登录说明');
+      notify.success('已删除认证配置');
       setDeleteTarget(null);
       await loadMine();
     } catch (error) {
@@ -300,7 +355,7 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
       );
       setCopiedId(copied.id);
       setTab('mine');
-      notify.success('已复制登录说明，请重新绑定默认密钥');
+      notify.success('已复制认证配置，请重新绑定默认密钥');
       await loadMine();
     } catch (error) {
       notify.error(apiErrorMessage(error));
@@ -315,10 +370,10 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
         <AppHeader
           onLogout={onLogout}
           userName={currentUser?.username}
-          title="登录说明"
-          description="结构化记录登录步骤，并绑定一条默认密钥。登录说明可以分享，密钥永远不跟着走。"
+          title="认证配置"
+          description="配置网页或 API 登录方式，并绑定一条默认密钥。认证配置可以分享，密钥永远不跟着走。"
         />
-        <EmptyState text="请先选择一个数字员工，再管理登录说明。" />
+        <EmptyState text="请先选择一个数字员工，再管理认证配置。" />
       </div>
     );
   }
@@ -331,31 +386,31 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
       <AppHeader
         onLogout={onLogout}
         userName={currentUser?.username}
-        title="登录说明"
-        description="结构化记录登录步骤：地址、用户名/密码字段选择器、提交按钮，并绑定一条默认密钥。登录说明可以分享，密钥永远不跟着走。"
+        title="认证配置"
+        description="配置网页选择器或 API 登录接口、响应提取与请求头模板，并绑定一条默认密钥。认证配置可以分享，密钥永远不跟着走。"
       />
 
       {!canWrite ? (
         <p className="mt-[16px] rounded-[10px] bg-[#f6f7fa] px-[12px] py-[8px] text-[12px] text-[#697085]">
-          管理员正在查阅其他员工的登录说明，只能看步骤元数据，不能编辑、删除或测试登录。
+          管理员正在查阅其他员工的认证配置，只能看步骤元数据，不能编辑、删除或测试登录。
         </p>
       ) : null}
 
       <div className="mt-[20px] mb-[16px] flex flex-wrap items-center justify-between gap-[12px]">
-        <UnderlineTabs items={TABS} value={tab} onChange={setTab} aria-label="登录说明分区" />
+        <UnderlineTabs items={TABS} value={tab} onChange={setTab} aria-label="认证配置分区" />
         {tab === 'mine' && canWrite ? (
           <UIButton
             className={cn(DIALOG_PRIMARY_BUTTON_CLASS, 'h-[34px]')}
-            onClick={() => setDraft({ ...EMPTY_DRAFT })}
+            onClick={() => setDraft({ ...EMPTY_DRAFT, config: { ...EMPTY_API_CONFIG } })}
           >
-            新增登录说明
+            新增认证配置
           </UIButton>
         ) : null}
       </div>
 
       {tab === 'gallery' ? (
         gallery.length === 0 ? (
-          <EmptyState text="广场还没有已发布的登录说明。" />
+          <EmptyState text="广场还没有已发布的认证配置。" />
         ) : (
           <div className="flex flex-col gap-[12px]">
             {gallery.map((item) => (
@@ -378,7 +433,7 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
           </div>
         )
       ) : empty ? (
-        <EmptyState text="还没有登录说明。" />
+        <EmptyState text="还没有认证配置。" />
       ) : (
         <div className="flex flex-col gap-[12px]">
           {guides.map((guide) => {
@@ -412,14 +467,35 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
                   </p>
                 ) : null}
                 <dl className="mt-[12px] mb-0 grid grid-cols-[100px_1fr] gap-x-[12px] gap-y-[6px] text-[12px]">
+                  <dt className="text-[#858b9c]">类型</dt>
+                  <dd className="m-0">{guideTypeLabel(guide.guide_type)}</dd>
                   <dt className="text-[#858b9c]">登录地址</dt>
                   <dd className="m-0 break-all font-mono">{guide.url}</dd>
-                  <dt className="text-[#858b9c]">用户名字段</dt>
-                  <dd className="m-0 font-mono">{guide.username_selector || '—'} · {guide.username_label}</dd>
-                  <dt className="text-[#858b9c]">密码字段</dt>
-                  <dd className="m-0 font-mono">{guide.password_selector || '—'} · {guide.password_label}</dd>
-                  <dt className="text-[#858b9c]">提交按钮</dt>
-                  <dd className="m-0 font-mono">{guide.submit_selector || '—'} · {guide.submit_label}</dd>
+                  {(guide.guide_type || 'web') === 'api' ? (
+                    <>
+                      <dt className="text-[#858b9c]">登录方法</dt>
+                      <dd className="m-0 font-mono">{normalizeApiConfig(guide.config).login_method}</dd>
+                      <dt className="text-[#858b9c]">用户名字段</dt>
+                      <dd className="m-0 font-mono">{normalizeApiConfig(guide.config).username_field}</dd>
+                      <dt className="text-[#858b9c]">密码字段</dt>
+                      <dd className="m-0 font-mono">{normalizeApiConfig(guide.config).password_field}</dd>
+                      <dt className="text-[#858b9c]">Token 路径</dt>
+                      <dd className="m-0 font-mono">{normalizeApiConfig(guide.config).token_path}</dd>
+                      <dt className="text-[#858b9c]">用户 ID 路径</dt>
+                      <dd className="m-0 font-mono">{normalizeApiConfig(guide.config).user_id_path}</dd>
+                      <dt className="text-[#858b9c]">请求头模板</dt>
+                      <dd className="m-0">{headerTemplateLabel(normalizeApiConfig(guide.config).header_template)}</dd>
+                    </>
+                  ) : (
+                    <>
+                      <dt className="text-[#858b9c]">用户名字段</dt>
+                      <dd className="m-0 font-mono">{guide.username_selector || '—'} · {guide.username_label}</dd>
+                      <dt className="text-[#858b9c]">密码字段</dt>
+                      <dd className="m-0 font-mono">{guide.password_selector || '—'} · {guide.password_label}</dd>
+                      <dt className="text-[#858b9c]">提交按钮</dt>
+                      <dd className="m-0 font-mono">{guide.submit_selector || '—'} · {guide.submit_label}</dd>
+                    </>
+                  )}
                   <dt className="text-[#858b9c]">默认密钥</dt>
                   <dd className={cn('m-0', guide.default_secret_name ? '' : 'font-semibold text-[#dc2626]')}>
                     {guide.default_secret_name || '未绑定'}
@@ -461,33 +537,121 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
 
       <Dialog open={Boolean(draft)} onOpenChange={(open) => !open && setDraft(null)}>
         <DialogContent className="max-h-[88vh] overflow-y-auto">
-          <DialogTitle>{draft?.id ? '编辑登录说明' : '新增登录说明'}</DialogTitle>
+          <DialogTitle>{draft?.id ? '编辑认证配置' : '新增认证配置'}</DialogTitle>
           <Field label="名称">
             <Input value={draft?.name || ''} onChange={(event) => setDraft((current) => current ? { ...current, name: event.target.value } : current)} />
+          </Field>
+          <Field label="类型">
+            <div className="flex flex-wrap gap-[8px]">
+              {(['web', 'api'] as LoginGuideType[]).map((kind) => (
+                <UIButton
+                  key={kind}
+                  type="button"
+                  variant={draft?.guide_type === kind ? 'default' : 'outline'}
+                  className={cn('h-[34px]', draft?.guide_type === kind ? DIALOG_PRIMARY_BUTTON_CLASS : OUTLINE_ACTION_BUTTON_CLASS)}
+                  onClick={() => setDraft((current) => current ? { ...current, guide_type: kind } : current)}
+                >
+                  {kind === 'web' ? '网页' : 'API'}
+                </UIButton>
+              ))}
+            </div>
           </Field>
           <Field label="登录地址">
             <Input value={draft?.url || ''} onChange={(event) => setDraft((current) => current ? { ...current, url: event.target.value } : current)} placeholder="https://" />
           </Field>
-          <div className="grid grid-cols-2 gap-[8px] max-[640px]:grid-cols-1">
-            <Field label="用户名选择器">
-              <Input value={draft?.username_selector || ''} onChange={(event) => setDraft((current) => current ? { ...current, username_selector: event.target.value } : current)} placeholder="#username" />
-            </Field>
-            <Field label="用户名标签">
-              <Input value={draft?.username_label || ''} onChange={(event) => setDraft((current) => current ? { ...current, username_label: event.target.value } : current)} />
-            </Field>
-            <Field label="密码选择器">
-              <Input value={draft?.password_selector || ''} onChange={(event) => setDraft((current) => current ? { ...current, password_selector: event.target.value } : current)} placeholder="#password" />
-            </Field>
-            <Field label="密码标签">
-              <Input value={draft?.password_label || ''} onChange={(event) => setDraft((current) => current ? { ...current, password_label: event.target.value } : current)} />
-            </Field>
-            <Field label="提交按钮选择器">
-              <Input value={draft?.submit_selector || ''} onChange={(event) => setDraft((current) => current ? { ...current, submit_selector: event.target.value } : current)} placeholder="button[type=submit]" />
-            </Field>
-            <Field label="提交按钮标签">
-              <Input value={draft?.submit_label || ''} onChange={(event) => setDraft((current) => current ? { ...current, submit_label: event.target.value } : current)} />
-            </Field>
-          </div>
+          {draft?.guide_type === 'api' ? (
+            <div className="grid grid-cols-2 gap-[8px] max-[640px]:grid-cols-1">
+              <Field label="登录方法">
+                <select
+                  className="h-[40px] w-full rounded-[8px] border border-[#e3e7f1] bg-white px-[12px] text-[14px]"
+                  value={draft.config.login_method || 'POST'}
+                  onChange={(event) => setDraft((current) => current ? {
+                    ...current,
+                    config: { ...normalizeApiConfig(current.config), login_method: event.target.value },
+                  } : current)}
+                >
+                  {LOGIN_METHOD_OPTIONS.map((method) => (
+                    <option key={method} value={method}>{method}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="请求头模板">
+                <select
+                  className="h-[40px] w-full rounded-[8px] border border-[#e3e7f1] bg-white px-[12px] text-[14px]"
+                  value={draft.config.header_template || 'new_api'}
+                  onChange={(event) => setDraft((current) => current ? {
+                    ...current,
+                    config: { ...normalizeApiConfig(current.config), header_template: event.target.value },
+                  } : current)}
+                >
+                  {HEADER_TEMPLATE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="用户名字段名">
+                <Input
+                  value={draft.config.username_field || ''}
+                  onChange={(event) => setDraft((current) => current ? {
+                    ...current,
+                    config: { ...normalizeApiConfig(current.config), username_field: event.target.value },
+                  } : current)}
+                  placeholder="username"
+                />
+              </Field>
+              <Field label="密码字段名">
+                <Input
+                  value={draft.config.password_field || ''}
+                  onChange={(event) => setDraft((current) => current ? {
+                    ...current,
+                    config: { ...normalizeApiConfig(current.config), password_field: event.target.value },
+                  } : current)}
+                  placeholder="password"
+                />
+              </Field>
+              <Field label="Token 路径">
+                <Input
+                  value={draft.config.token_path || ''}
+                  onChange={(event) => setDraft((current) => current ? {
+                    ...current,
+                    config: { ...normalizeApiConfig(current.config), token_path: event.target.value },
+                  } : current)}
+                  placeholder="data.token"
+                />
+              </Field>
+              <Field label="用户 ID 路径">
+                <Input
+                  value={draft.config.user_id_path || ''}
+                  onChange={(event) => setDraft((current) => current ? {
+                    ...current,
+                    config: { ...normalizeApiConfig(current.config), user_id_path: event.target.value },
+                  } : current)}
+                  placeholder="data.id"
+                />
+              </Field>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-[8px] max-[640px]:grid-cols-1">
+              <Field label="用户名选择器">
+                <Input value={draft?.username_selector || ''} onChange={(event) => setDraft((current) => current ? { ...current, username_selector: event.target.value } : current)} placeholder="#username" />
+              </Field>
+              <Field label="用户名标签">
+                <Input value={draft?.username_label || ''} onChange={(event) => setDraft((current) => current ? { ...current, username_label: event.target.value } : current)} />
+              </Field>
+              <Field label="密码选择器">
+                <Input value={draft?.password_selector || ''} onChange={(event) => setDraft((current) => current ? { ...current, password_selector: event.target.value } : current)} placeholder="#password" />
+              </Field>
+              <Field label="密码标签">
+                <Input value={draft?.password_label || ''} onChange={(event) => setDraft((current) => current ? { ...current, password_label: event.target.value } : current)} />
+              </Field>
+              <Field label="提交按钮选择器">
+                <Input value={draft?.submit_selector || ''} onChange={(event) => setDraft((current) => current ? { ...current, submit_selector: event.target.value } : current)} placeholder="button[type=submit]" />
+              </Field>
+              <Field label="提交按钮标签">
+                <Input value={draft?.submit_label || ''} onChange={(event) => setDraft((current) => current ? { ...current, submit_label: event.target.value } : current)} />
+              </Field>
+            </div>
+          )}
           <Field label="默认密钥">
             <select
               className="h-[40px] w-full rounded-[8px] border border-[#e3e7f1] bg-white px-[12px] text-[14px]"
@@ -520,7 +684,7 @@ export default function LoginGuidesPage({ currentUser, onLogout }: LoginGuidesPa
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         title={`删除「${deleteTarget?.name || ''}」？`}
-        description="只删除登录步骤。关联的会话快照密钥会保留，但不再绑定这条说明。"
+        description="只删除认证配置。关联的会话快照密钥会保留，但不再绑定这条配置。"
         onConfirm={() => void confirmDelete()}
       />
     </div>
