@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import inspect, text
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -13,6 +14,7 @@ from app.core.capability_manifest import (
     RESERVED_HARNESS_CAPABILITY_NAMES,
     CapabilityManifestBuilder,
 )
+from app.db.database import _migrate_employee_auth_config_schema
 from app.db.models import (
     AgentProfile,
     AgentResourceBinding,
@@ -21,6 +23,7 @@ from app.db.models import (
     GeneralSkill,
     Skill,
     Tenant,
+    Tool,
     User,
 )
 from app.secrets.api import (
@@ -580,3 +583,107 @@ def test_manifest_includes_secure_login(secret_db) -> None:
     names = {item.name for item in manifest.available}
     assert {"secret_list", "login_guide_list", "secure_login"} <= names
     assert "secure_login" in RESERVED_HARNESS_CAPABILITY_NAMES
+
+
+API_LOGIN_GUIDE_CONFIG = {
+    "login_method": "POST",
+    "username_field": "username",
+    "password_field": "password",
+    "token_path": "data.token",
+    "user_id_path": "data.id",
+    "header_template": "new_api",
+    "custom_header_map": {},
+}
+
+
+def test_employee_login_guide_api_config_round_trip(secret_db) -> None:
+    db, (_owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    row = EmployeeLoginGuide(
+        tenant_id="tenant_demo",
+        agent_id=agent_a.id,
+        name="API 登录",
+        url="https://example.test/login",
+        guide_type="api",
+        config_json=API_LOGIN_GUIDE_CONFIG,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    loaded = db.get(EmployeeLoginGuide, row.id)
+    assert loaded is not None
+    assert loaded.guide_type == "api"
+    assert loaded.config_json == API_LOGIN_GUIDE_CONFIG
+
+
+def test_tool_login_guide_id_optional(secret_db) -> None:
+    db, (_owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    tool = Tool(
+        tenant_id="tenant_demo",
+        name="http.example",
+        method="GET",
+        url="https://example.test/api",
+        login_guide_id=None,
+    )
+    db.add(tool)
+    db.commit()
+    db.refresh(tool)
+
+    loaded = db.get(Tool, tool.id)
+    assert loaded is not None
+    assert loaded.login_guide_id is None
+
+
+def test_employee_auth_config_migration_backfills_legacy_rows(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'employee-auth-config.db'}")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE employee_login_guides (
+                    id VARCHAR PRIMARY KEY,
+                    tenant_id VARCHAR,
+                    agent_id VARCHAR,
+                    name VARCHAR,
+                    url VARCHAR
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO employee_login_guides (id, tenant_id, agent_id, name, url)
+                VALUES ('elogin_legacy', 'tenant_demo', 'agent_a', '旧版', 'https://example.test')
+                """
+            )
+        )
+        conn.execute(text("CREATE TABLE tools (id VARCHAR PRIMARY KEY, tenant_id VARCHAR, name VARCHAR)"))
+        conn.execute(
+            text("INSERT INTO tools (id, tenant_id, name) VALUES ('tool_legacy', 'tenant_demo', 'legacy.http')")
+        )
+
+    table_names = {"employee_login_guides", "tools"}
+    with engine.begin() as conn:
+        _migrate_employee_auth_config_schema(conn, inspect(engine), table_names)
+
+    with engine.begin() as conn:
+        assert (
+            conn.execute(
+                text("SELECT guide_type FROM employee_login_guides WHERE id = 'elogin_legacy'")
+            ).scalar_one()
+            == "web"
+        )
+        assert (
+            conn.execute(
+                text("SELECT config_json FROM employee_login_guides WHERE id = 'elogin_legacy'")
+            ).scalar_one()
+            == "{}"
+        )
+        assert (
+            conn.execute(text("SELECT login_guide_id FROM tools WHERE id = 'tool_legacy'")).scalar_one()
+            is None
+        )
+
+    with engine.begin() as conn:
+        _migrate_employee_auth_config_schema(conn, inspect(engine), table_names)
