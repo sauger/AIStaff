@@ -16,6 +16,9 @@ from sqlmodel import Session, select
 from app.agents.branching import visible_tool_rows
 from app.config import get_settings
 from app.db.models import ChatSession, ExternalBusinessTask, MCPServer, Tool, utc_now
+from app.secrets.errors import SecretError
+from app.secrets.http_session import is_unauthenticated_response
+from app.secrets.service import _decode_secret_value, _linked_snapshot, perform_secure_login
 from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
 from app.skills.tool_authorization import SopToolAuthorization
 from app.tools.a2a_client import A2AClient, A2AClientError
@@ -45,6 +48,7 @@ class ToolExecutionPolicy:
 class HttpExecutionResponse:
     result: ToolResult
     status_code: int | None = None
+    payload: Any = None
 
 
 class ToolExecutor:
@@ -143,6 +147,15 @@ class ToolExecutor:
                 timeout_seconds_override=timeout_seconds_override,
             )
 
+        if tool.login_guide_id:
+            return self.execute_http_with_auth_config(
+                tool,
+                tool_call.arguments,
+                agent_id=agent_id,
+                tenant_id=tenant_id,
+                timeout_seconds_override=timeout_seconds_override,
+            ).result
+
         headers = self._request_headers(
             tool.url,
             self._resolve_headers(tool.headers_json or {}, tool.auth_json or {}),
@@ -210,7 +223,7 @@ class ToolExecutor:
             tool.url,
             self._resolve_headers(tool.headers_json or {}, tool.auth_json or {}),
         )
-        headers.update(additional_headers or {})
+        _override_headers(headers, additional_headers)
         policy = self._execution_policy(
             tool,
             timeout_seconds_override=timeout_seconds_override,
@@ -230,6 +243,7 @@ class ToolExecutor:
                         error=None,
                     ),
                     status_code=response.status_code,
+                    payload=self._response_data(response),
                 )
         except UrlPlaceholderError as exc:
             return HttpExecutionResponse(result=self._error(tool.name, exc.code, str(exc)))
@@ -249,11 +263,90 @@ class ToolExecutor:
                     f"工具返回异常状态码：{exc.response.status_code}",
                 ),
                 status_code=exc.response.status_code,
+                payload=self._response_data(exc.response),
             )
         except Exception as exc:
             return HttpExecutionResponse(
                 result=self._error(tool.name, "EXECUTION_ERROR", str(exc))
             )
+
+    def execute_http_with_auth_config(
+        self,
+        tool: Tool,
+        arguments: dict[str, Any],
+        *,
+        agent_id: str | None,
+        tenant_id: str,
+        timeout_seconds_override: float | None = None,
+    ) -> HttpExecutionResponse:
+        """Run an HTTP tool, injecting the bound auth-config session.
+
+        Tools without ``login_guide_id`` behave exactly like the plain executor. Bound
+        tools get the stored session headers and, when the response shows an expired
+        session, log in at most once and retry once.
+        """
+        if not tool.login_guide_id:
+            return self.execute_http_with_metadata(
+                tool, arguments, timeout_seconds_override=timeout_seconds_override
+            )
+        refreshed = False
+        while True:
+            session_headers = (
+                self._auth_config_headers(tenant_id, agent_id, tool.login_guide_id)
+                if agent_id
+                else {}
+            )
+            response = self.execute_http_with_metadata(
+                tool,
+                arguments,
+                timeout_seconds_override=timeout_seconds_override,
+                additional_headers=session_headers,
+            )
+            if (
+                refreshed
+                or not agent_id
+                or not is_unauthenticated_response(response.status_code or 0, response.payload)
+            ):
+                return response
+            login_error = self._refresh_auth_config_session(
+                tool, tenant_id, agent_id, tool.login_guide_id
+            )
+            if login_error is not None:
+                return HttpExecutionResponse(
+                    result=self._error(tool.name, login_error[0], login_error[1]),
+                    status_code=response.status_code,
+                )
+            refreshed = True
+
+    def _refresh_auth_config_session(
+        self, tool: Tool, tenant_id: str, agent_id: str, guide_id: str
+    ) -> tuple[str, str] | None:
+        try:
+            login = perform_secure_login(self.db, tenant_id, agent_id, login_guide_id=guide_id)
+        except SecretError as exc:
+            return exc.code, exc.message
+        except Exception:
+            return "LOGIN_FAILED", "自动登录失败，请检查认证配置。"
+        if not login.success:
+            return login.code or "LOGIN_FAILED", login.message
+        return None
+
+    def _auth_config_headers(
+        self, tenant_id: str, agent_id: str, guide_id: str
+    ) -> dict[str, str]:
+        snapshot = _linked_snapshot(self.db, tenant_id, agent_id, guide_id)
+        if snapshot is None:
+            return {}
+        try:
+            state = json.loads(_decode_secret_value(snapshot).get("storage_state") or "")
+        except Exception:
+            return {}
+        if not isinstance(state, dict) or state.get("kind") != "http_headers":
+            return {}
+        headers = state.get("headers")
+        if not isinstance(headers, dict):
+            return {}
+        return {str(k): str(v) for k, v in headers.items() if v is not None}
 
     def _execute_detached_http(
         self,
@@ -655,6 +748,13 @@ class ToolExecutor:
             data=None,
             error=ToolError(code=code, message=message),
         )
+
+
+def _override_headers(headers: dict[str, str], overrides: dict[str, str] | None) -> None:
+    for name, value in (overrides or {}).items():
+        for existing in [key for key in headers if key.lower() == name.lower()]:
+            del headers[existing]
+        headers[name] = value
 
 
 def _default_port(scheme: str) -> int | None:
