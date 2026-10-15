@@ -616,14 +616,14 @@ def _execute_api_login(guide: EmployeeLoginGuide, secret: EmployeeSecret) -> Api
 
     token_path = str(config.get("token_path") or "data.token")
     user_id_path = str(config.get("user_id_path") or "data.id")
-    token = extract_json_path(parsed, token_path)
-    if not token:
-        return ApiLoginExecution(False, None, False, "登录失败，请检查密钥或认证配置。")
+    token = extract_json_path(parsed, token_path) or ""
     user_id = extract_json_path(parsed, user_id_path)
     custom_map = config.get("custom_header_map")
     if not isinstance(custom_map, dict):
         custom_map = {}
     cookie_value = cookie_header_from_login_response(response)
+    if not token and not cookie_value:
+        return ApiLoginExecution(False, None, False, "登录失败，请检查密钥或认证配置。")
     headers = session_headers_from_login(
         template=str(config.get("header_template") or ""),
         token=token,

@@ -2111,13 +2111,10 @@ function ToolFormFields({
               value={values.execution_mode}
                   onValueChange={(value) => {
                     const mode = value as 'sync' | 'detached';
-                    setValues((previous) => ({
-                      ...previous,
-                      execution_mode: mode,
-                      login_guide_id: mode === 'detached' && previous.async_strategy === 'provider_task'
-                        ? ''
-                        : previous.login_guide_id,
-                    }));
+                    setField('execution_mode', mode);
+                    if (mode === 'detached' && values.async_strategy === 'provider_task') {
+                      setField('login_guide_id', '');
+                    }
                   }}
                 >
               <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>
@@ -2136,11 +2133,10 @@ function ToolFormFields({
                   value={values.async_strategy}
                   onValueChange={(value) => {
                     const strategy = value as 'staffdeck_worker' | 'provider_task';
-                    setValues((previous) => ({
-                      ...previous,
-                      async_strategy: strategy,
-                      login_guide_id: strategy === 'provider_task' ? '' : previous.login_guide_id,
-                    }));
+                    setField('async_strategy', strategy);
+                    if (strategy === 'provider_task') {
+                      setField('login_guide_id', '');
+                    }
                   }}
                 >
                   <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>

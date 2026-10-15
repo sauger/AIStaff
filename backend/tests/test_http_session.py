@@ -1,4 +1,9 @@
+from types import SimpleNamespace
+
+import httpx
+
 from app.secrets.http_session import (
+    cookie_header_from_login_response,
     extract_json_path,
     is_unauthenticated_response,
     session_headers_from_login,
@@ -19,6 +24,17 @@ def test_new_api_template_headers() -> None:
         custom_map={},
     )
     assert headers == {"Authorization": "abc", "New-Api-User": "7"}
+
+
+def test_new_api_cookie_session_without_token() -> None:
+    headers = session_headers_from_login(
+        template="new_api",
+        token="",
+        user_id="7",
+        custom_map={},
+        cookie="session=sess-1",
+    )
+    assert headers == {"Cookie": "session=sess-1", "New-Api-User": "7"}
 
 
 def test_bearer_template_headers() -> None:
@@ -45,6 +61,52 @@ def test_business_400_is_not_unauthenticated() -> None:
     assert is_unauthenticated_response(
         400, {"success": False, "message": "period_ym 无效"}
     ) is False
+
+
+def test_duplicate_cookie_names_keep_first_value() -> None:
+    class _Cookie:
+        def __init__(self, name: str, value: str) -> None:
+            self.name = name
+            self.value = value
+
+    class _Jar:
+        def __iter__(self):
+            return iter([
+                _Cookie("session", "one"),
+                _Cookie("session", "two"),
+                _Cookie("sid", "x"),
+            ])
+
+    class _Cookies:
+        jar = _Jar()
+
+        def keys(self):
+            return ["session", "sid"]
+
+        def __getitem__(self, name: str) -> str:
+            raise httpx.CookieConflict(name)
+
+    response = SimpleNamespace(cookies=_Cookies(), headers={})
+
+    assert cookie_header_from_login_response(response) == "session=one; sid=x"
+
+
+def test_cookie_conflict_falls_back_to_set_cookie_header() -> None:
+    class _Cookies:
+        jar = None
+
+        def keys(self):
+            return ["session"]
+
+        def __getitem__(self, name: str) -> str:
+            raise httpx.CookieConflict(name)
+
+    response = SimpleNamespace(
+        cookies=_Cookies(),
+        headers={"set-cookie": "session=sess-1; Path=/; HttpOnly"},
+    )
+
+    assert cookie_header_from_login_response(response) == "session=sess-1"
 
 
 def test_cookie_template_uses_set_cookie() -> None:
