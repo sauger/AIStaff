@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -1043,14 +1043,19 @@ def _json_list(value: Any) -> list[Any]:
 
 
 def _parse_datetime(value: Any) -> datetime | None:
+    parsed: datetime | None
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, str) and value.strip():
+        parsed = value
+    elif isinstance(value, str) and value.strip():
         try:
-            return datetime.fromisoformat(value.strip())
+            parsed = datetime.fromisoformat(value.strip())
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _apply_payload(row: Any, payload: JsonDict) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -386,3 +387,8 @@ def test_staffdeck_seed_archives_legacy_default_agent() -> None:
         assert row.metadata_json.get("hidden_from_staffdeck") is True
         assert row.metadata_json.get("is_default_employee") is True
         assert "agent_tenant_demo_default" not in listed_ids
+
+
+def test_seed_datetime_from_legacy_text_is_utc() -> None:
+    parsed = staffdeck_seed._parse_datetime("2026-07-08 04:55:51.383893")
+    assert parsed == datetime(2026, 7, 8, 4, 55, 51, 383893, tzinfo=UTC)
