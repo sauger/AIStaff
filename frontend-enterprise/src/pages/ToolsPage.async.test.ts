@@ -39,6 +39,18 @@ describe('detached HTTP tool configuration', () => {
     expect(payload?.login_guide_id).toBeNull();
   });
 
+  it('omits login_guide_id for provider-managed detached tools', () => {
+    const payload = buildToolPayload({
+      ...values(),
+      login_guide_id: 'elogin-gateway',
+      execution_mode: 'detached',
+      async_strategy: 'provider_task',
+      status_url: 'https://provider.test/tasks/{taskId}',
+    });
+
+    expect(payload?.login_guide_id).toBeNull();
+  });
+
   it('sends login_guide_id when an auth config is selected', () => {
     const payload = buildToolPayload({
       ...values(),

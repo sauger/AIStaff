@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -310,5 +310,42 @@ describe('LoginGuidesPage', () => {
 
     await userEvent.selectOptions(screen.getByLabelText('请求头模板').closest('label')!.querySelector('select')!, 'new_api');
     expect(screen.queryByText('自定义请求头')).toBeNull();
+  });
+
+  it('saves custom header map with json paths', async () => {
+    const postBodies: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([ownedAgent]);
+      if (url.includes('/api/enterprise/secrets')) {
+        return jsonResponse({ agent_id: 'agent-1', can_write: true, secrets: [] });
+      }
+      if (url.includes('/api/enterprise/login-guides/gallery')) return jsonResponse([]);
+      if (url.includes('/api/enterprise/login-guides') && init?.method === 'POST') {
+        postBodies.push(JSON.parse(String(init.body || '{}')));
+        return jsonResponse({ ...boundGuide.guides[0], id: 'elogin-custom' });
+      }
+      if (url.includes('/api/enterprise/login-guides')) return jsonResponse({ ...boundGuide, guides: [] });
+      return jsonResponse([]);
+    }));
+
+    renderGuides(ownerUser);
+    await userEvent.click(await screen.findByRole('button', { name: '新增认证配置' }));
+    await userEvent.type(screen.getByLabelText('名称').closest('label')!.querySelector('input')!, '自定义头');
+    await userEvent.type(screen.getByLabelText('登录地址').closest('label')!.querySelector('input')!, 'https://api.example/login');
+    await userEvent.click(screen.getByRole('button', { name: 'API' }));
+    await userEvent.selectOptions(screen.getByLabelText('请求头模板').closest('label')!.querySelector('select')!, 'custom');
+    fireEvent.change(screen.getByLabelText('请求头名称'), { target: { value: 'X-Role' } });
+    fireEvent.change(screen.getByLabelText('JSON 路径或来源'), { target: { value: 'data.role' } });
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0]).toMatchObject({
+      guide_type: 'api',
+      config: {
+        header_template: 'custom',
+        custom_header_map: { 'X-Role': 'data.role' },
+      },
+    });
   });
 });

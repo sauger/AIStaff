@@ -2109,8 +2109,17 @@ function ToolFormFields({
           <Field label="执行模式">
             <UISelect
               value={values.execution_mode}
-              onValueChange={(value) => setField('execution_mode', value as 'sync' | 'detached')}
-            >
+                  onValueChange={(value) => {
+                    const mode = value as 'sync' | 'detached';
+                    setValues((previous) => ({
+                      ...previous,
+                      execution_mode: mode,
+                      login_guide_id: mode === 'detached' && previous.async_strategy === 'provider_task'
+                        ? ''
+                        : previous.login_guide_id,
+                    }));
+                  }}
+                >
               <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>
                 <SelectValue />
               </SelectTrigger>
@@ -2125,7 +2134,14 @@ function ToolFormFields({
               <Field label="异步策略">
                 <UISelect
                   value={values.async_strategy}
-                  onValueChange={(value) => setField('async_strategy', value as 'staffdeck_worker' | 'provider_task')}
+                  onValueChange={(value) => {
+                    const strategy = value as 'staffdeck_worker' | 'provider_task';
+                    setValues((previous) => ({
+                      ...previous,
+                      async_strategy: strategy,
+                      login_guide_id: strategy === 'provider_task' ? '' : previous.login_guide_id,
+                    }));
+                  }}
                 >
                   <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-full')}>
                     <SelectValue />
@@ -2218,10 +2234,11 @@ function ToolFormFields({
         </div>
       )}
 
-      {values.tool_type === 'http' && values.execution_mode !== 'detached' && (
+      {values.tool_type === 'http'
+        && !(values.execution_mode === 'detached' && values.async_strategy === 'provider_task') && (
         <Field
           label="认证配置"
-          hint="勾选后由认证配置带头，简单工具可留空。"
+          hint="勾选后由认证配置带头（同步 HTTP 与 RapidStaff 托管异步均会注入会话），简单工具可留空。"
         >
           <UISelect
             value={values.login_guide_id ? values.login_guide_id : '__none__'}
@@ -2239,8 +2256,10 @@ function ToolFormFields({
           </UISelect>
         </Field>
       )}
-      {values.tool_type === 'http' && values.execution_mode === 'detached' && (
-        <p className={HINT_CLASS}>异步跟踪模式不支持认证配置会话注入；请使用同步 HTTP 或保留 Auth JSON。</p>
+      {values.tool_type === 'http'
+        && values.execution_mode === 'detached'
+        && values.async_strategy === 'provider_task' && (
+        <p className={HINT_CLASS}>Provider 原生异步任务不会注入认证配置会话；请改用同步 HTTP 或 RapidStaff 托管异步。</p>
       )}
 
       <Field
@@ -2655,6 +2674,7 @@ export function buildToolPayload(values: ToolFormValues) {
       capability_scope: normalizeCapabilityScope(values.capability_scope),
       enabled: values.enabled,
       login_guide_id: values.tool_type === 'http'
+        && !(values.execution_mode === 'detached' && values.async_strategy === 'provider_task')
         ? (String(values.login_guide_id || '').trim() || null)
         : null,
     };

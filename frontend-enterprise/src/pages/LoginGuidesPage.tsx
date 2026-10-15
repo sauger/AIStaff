@@ -89,12 +89,6 @@ const HEADER_TEMPLATE_OPTIONS: { value: string; label: string }[] = [
 
 const LOGIN_METHOD_OPTIONS = ['POST', 'GET', 'PUT', 'PATCH'] as const;
 
-const CUSTOM_HEADER_SOURCE_OPTIONS: { value: string; label: string }[] = [
-  { value: 'token', label: 'Token' },
-  { value: 'user_id', label: '用户 ID' },
-  { value: 'cookie', label: 'Cookie' },
-];
-
 const EMPTY_DRAFT: GuideDraft = {
   name: '',
   url: '',
@@ -763,16 +757,19 @@ function CustomHeaderMapEditor({
               aria-label="请求头名称"
             />
             <span className="text-[12px] text-[#858b9c]">←</span>
-            <select
-              className="h-[40px] min-w-[120px] flex-1 rounded-[8px] border border-[#e3e7f1] bg-white px-[12px] text-[14px]"
+            <Input
+              className="min-w-[160px] flex-[1.2]"
               value={source}
               onChange={(event) => setRow(index, headerName, event.target.value)}
-              aria-label="请求头来源"
-            >
-              {CUSTOM_HEADER_SOURCE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
+              placeholder="JSON 路径，如 data.role"
+              aria-label="JSON 路径或来源"
+              list={`custom-header-source-hints-${index}`}
+            />
+            <datalist id={`custom-header-source-hints-${index}`}>
+              <option value="token">Token</option>
+              <option value="user_id">用户 ID</option>
+              <option value="cookie">Cookie</option>
+            </datalist>
             <UIButton
               type="button"
               variant="outline"
@@ -784,6 +781,9 @@ function CustomHeaderMapEditor({
             </UIButton>
           </div>
         ))}
+        <p className="m-0 text-[11px] leading-[1.5] text-[#858b9c]">
+          来源可填登录响应 JSON 路径（如 data.token），或快捷值 token、user_id、cookie。
+        </p>
         <UIButton type="button" variant="outline" className={cn(OUTLINE_ACTION_BUTTON_CLASS, 'h-[34px] w-fit')} onClick={addRow}>
           添加请求头
         </UIButton>
