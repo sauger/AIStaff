@@ -691,6 +691,191 @@ def test_api_login_writes_http_session_snapshot(secret_db, monkeypatch) -> None:
     }
 
 
+def test_api_login_cookie_session_without_json_token(secret_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    guide = _create_api_guide(db, owner, agent_a.id)
+    row = db.get(EmployeeLoginGuide, guide.id)
+    assert row is not None
+    row.config_json = {
+        **API_LOGIN_GUIDE_CONFIG,
+        "token_path": "data.access_token",
+        "user_id_path": "data.user.id",
+    }
+    db.add(row)
+    db.commit()
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "message": "",
+                "data": {
+                    "id": 1,
+                    "username": "ada",
+                    "display_name": "Ada",
+                    "role": 100,
+                    "status": 1,
+                    "group": "default",
+                },
+            },
+            headers={"set-cookie": "session=sess-1; Path=/; HttpOnly"},
+            request=request,
+        )
+
+    from app.secrets import service as secrets_service
+
+    real_client = secrets_service.httpx.Client
+
+    def fake_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(secrets_service.httpx, "Client", fake_client)
+
+    result = perform_secure_login(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        login_guide_id=guide.id,
+        persist_snapshot=True,
+    )
+    assert result.success is True
+    assert result.captcha_or_2fa is False
+    assert "sess-1" not in result.message
+    snapshots = db.exec(
+        select(EmployeeSecret).where(EmployeeSecret.secret_type == "session_snapshot")
+    ).all()
+    assert len(snapshots) == 1
+    payload = json.loads(decrypt_secret(snapshots[0].value_encrypted))
+    inner = json.loads(payload["storage_state"])
+    assert inner == {
+        "kind": "http_headers",
+        "headers": {"Cookie": "session=sess-1"},
+    }
+
+
+def test_api_login_success_without_token_or_cookie_fails(secret_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    guide = _create_api_guide(db, owner, agent_a.id)
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"success": True, "message": "", "data": {"id": 1}},
+            request=request,
+        )
+
+    from app.secrets import service as secrets_service
+
+    real_client = secrets_service.httpx.Client
+
+    def fake_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(secrets_service.httpx, "Client", fake_client)
+
+    result = perform_secure_login(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        login_guide_id=guide.id,
+        persist_snapshot=True,
+    )
+    assert result.success is False
+    assert result.code == "LOGIN_FAILED"
+    snapshots = db.exec(
+        select(EmployeeSecret).where(EmployeeSecret.secret_type == "session_snapshot")
+    ).all()
+    assert snapshots == []
+
+
+def test_api_login_cookie_session_stores_user_id_header(secret_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    guide = _create_api_guide(db, owner, agent_a.id)
+    row = db.get(EmployeeLoginGuide, guide.id)
+    assert row is not None
+    row.config_json = {
+        **API_LOGIN_GUIDE_CONFIG,
+        "token_path": "data.access_token",
+        "user_id_path": "data.id",
+    }
+    db.add(row)
+    db.commit()
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"success": True, "data": {"id": 7, "username": "ada"}},
+            headers={"set-cookie": "session=sess-1; Path=/; HttpOnly"},
+            request=request,
+        )
+
+    from app.secrets import service as secrets_service
+
+    real_client = secrets_service.httpx.Client
+
+    def fake_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(secrets_service.httpx, "Client", fake_client)
+
+    result = perform_secure_login(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        login_guide_id=guide.id,
+        persist_snapshot=True,
+    )
+    assert result.success is True
+    snapshots = db.exec(
+        select(EmployeeSecret).where(EmployeeSecret.secret_type == "session_snapshot")
+    ).all()
+    payload = json.loads(decrypt_secret(snapshots[0].value_encrypted))
+    inner = json.loads(payload["storage_state"])
+    assert inner["headers"] == {"Cookie": "session=sess-1", "New-Api-User": "7"}
+
+
+def test_api_login_json_token_wins_over_session_cookie(secret_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
+    _create_password(db, owner, agent_a.id)
+    guide = _create_api_guide(db, owner, agent_a.id)
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"success": True, "data": {"token": "t1", "id": 3}},
+            headers={"set-cookie": "session=sess-1; Path=/; HttpOnly"},
+            request=request,
+        )
+
+    from app.secrets import service as secrets_service
+
+    real_client = secrets_service.httpx.Client
+
+    def fake_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(secrets_service.httpx, "Client", fake_client)
+
+    result = perform_secure_login(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        login_guide_id=guide.id,
+        persist_snapshot=True,
+    )
+    assert result.success is True
+    snapshots = db.exec(
+        select(EmployeeSecret).where(EmployeeSecret.secret_type == "session_snapshot")
+    ).all()
+    payload = json.loads(decrypt_secret(snapshots[0].value_encrypted))
+    inner = json.loads(payload["storage_state"])
+    assert inner["headers"] == {"Authorization": "t1", "New-Api-User": "3"}
+
+
 def test_api_login_success_token_with_2fa_substring_writes_snapshot(secret_db, monkeypatch) -> None:
     db, (owner, _other, _admin, agent_a, _agent_b), _fake = secret_db
     _create_password(db, owner, agent_a.id)
