@@ -20,6 +20,12 @@
 - 新 SOP 的起始步骤、继续中 SOP 的当前步骤均由服务端状态机决定，不要尝试跳步。
 - 没有匹配 SOP 的咨询、闲聊、计算、文件处理或其他通用需求，使用
   `kind=conversation`；不要伪造 SOP。
+- 用户在问花费、多少钱、列通道、下明细、这个月账单多少，属于计算或读文件，使用
+  kind=conversation，即使 available_sops 的名称或描述里出现「账单」「明细」。
+- 仅当用户要办理流程时才 kind=sop：核对、对账、出报告、改价、退款，或明确「办理」某 SOP。
+- 已有 active SOP 时，若本轮只问多少钱/合计，将花费问题放进 conversation frame 或当前
+  SOP frame 的 requirements（只要求回答数字），不要切回下载节点，不要 start_new_task
+  到另一条下载 SOP。
 - 没有 SOP 时也必须至少生成一个 conversation TaskFrame。
 - 用户同时补充当前 SOP 信息并提出其他要求时，将相关附加要求并入当前
   SOP frame 的 requirements；真正独立且不属于任何 SOP 的要求可建立兄弟

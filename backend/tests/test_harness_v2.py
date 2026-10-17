@@ -60,7 +60,7 @@ from app.core.task_request_compiler import (
     TaskRequestCompiler,
     TaskRequirement,
 )
-from app.core.turn_planner import TurnPlanner
+from app.core.turn_planner import PROMPT_PATH, TurnPlanner
 from app.db.models import (
     AgentEvent,
     AgentProfile,
@@ -872,6 +872,14 @@ def test_turn_planner_exposes_sops_but_not_runtime_capabilities(monkeypatch) -> 
     ]
     assert "available_skills" not in payloads[0]
     assert plan.task_frames[0].target_skill_id == "refund"
+
+
+def test_turn_planner_prompt_keeps_spend_and_list_questions_in_conversation() -> None:
+    text = PROMPT_PATH.read_text(encoding="utf-8")
+    assert "不要伪造 SOP" in text
+    for needle in ("花费", "多少钱", "列通道", "下明细"):
+        assert needle in text
+    assert "核对" in text and "对账" in text
 
 
 def test_turn_planner_discards_an_unknown_sop_target() -> None:
