@@ -19,6 +19,16 @@ def ensure_user_visible_reply(result: TaskExecutionResult) -> str:
     return _from_work_done(result) or EMPTY_FALLBACK
 
 
+def sanitize_assistant_reply(reply: str, *, status: str = "completed") -> str:
+    return ensure_user_visible_reply(
+        TaskExecutionResult(
+            task_frame_id="finalize",
+            status=status,
+            reply_fragment=reply,
+        )
+    )
+
+
 def _looks_like_internal_payload(text: str) -> bool:
     if not text:
         return False

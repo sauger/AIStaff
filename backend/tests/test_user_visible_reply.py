@@ -128,3 +128,11 @@ def test_harness_action_budget_path_includes_cabinet_path(monkeypatch) -> None:
     assert result.status == "action_budget"
     assert BUDGET in result.reply_fragment
     assert "bill.json" in result.reply_fragment
+
+
+def test_sanitize_assistant_reply_blocks_empty_and_json() -> None:
+    from app.core.user_visible_reply import sanitize_assistant_reply
+
+    assert sanitize_assistant_reply("").strip()
+    assert not sanitize_assistant_reply('{"ok":false}').lstrip().startswith("{")
+    assert sanitize_assistant_reply("合计 10 元") == "合计 10 元"

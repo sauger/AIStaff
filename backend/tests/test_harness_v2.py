@@ -489,8 +489,19 @@ def test_single_task_reply_synthesizes_incomplete_structured_projection() -> Non
     markdown = incomplete.model_copy(update={"reply_fragment": "完整结果如下。"})
 
     assert _single_task_reply([incomplete]) is None
-    assert _single_task_reply([matching]) == matching.reply_fragment
+    assert _single_task_reply([matching]) is None
     assert _single_task_reply([markdown]) == "完整结果如下。"
+
+
+def test_single_task_reply_rejects_json_even_when_it_matches_structured_result() -> None:
+    payload = {"ok": False, "exit_code": 1}
+    matching = TaskExecutionResult(
+        task_frame_id="task_json",
+        status="completed",
+        reply_fragment=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        structured_result=payload,
+    )
+    assert _single_task_reply([matching]) is None
 
 
 def test_response_task_payload_keeps_structured_result_for_synthesis() -> None:

@@ -1801,21 +1801,18 @@ def _single_task_reply(results: list[TaskExecutionResult]) -> str | None:
 
 
 def _structured_reply_requires_synthesis(reply: str, structured_result: Any) -> bool:
-    """Reject an obviously partial JSON projection when complete data is available."""
+    """Force synthesis whenever the harness reply is JSON-shaped."""
 
-    if structured_result is None or not reply:
+    if not reply:
         return False
-    looks_like_json = reply.startswith("{") or (
-        reply.startswith("[")
-        and (len(reply) == 1 or reply[1:2] in {"{", "[", '"'})
-    )
-    if not looks_like_json:
+    stripped = reply.lstrip()
+    if stripped[:1] not in "{[":
         return False
     try:
-        projected = json.loads(reply)
+        json.loads(reply)
     except (json.JSONDecodeError, TypeError):
         return True
-    return projected != structured_result
+    return True
 
 
 def _response_task_payload(
