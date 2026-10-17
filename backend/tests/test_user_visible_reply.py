@@ -136,3 +136,12 @@ def test_sanitize_assistant_reply_blocks_empty_and_json() -> None:
     assert sanitize_assistant_reply("").strip()
     assert not sanitize_assistant_reply('{"ok":false}').lstrip().startswith("{")
     assert sanitize_assistant_reply("合计 10 元") == "合计 10 元"
+
+
+def test_sanitize_assistant_reply_keeps_prefix_markdown_and_citations() -> None:
+    from app.core.user_visible_reply import sanitize_assistant_reply
+
+    markdown = "[账单](https://example.com)"
+    citation = "[1] 合计 10 元"
+    assert sanitize_assistant_reply(markdown) == markdown
+    assert sanitize_assistant_reply(citation) == citation

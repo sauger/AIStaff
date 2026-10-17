@@ -32,13 +32,13 @@ def sanitize_assistant_reply(reply: str, *, status: str = "completed") -> str:
 def _looks_like_internal_payload(text: str) -> bool:
     if not text:
         return False
-    if text[0] not in "{[":
-        return False
+    if text.startswith("{"):
+        return True
     try:
-        json.loads(text)
+        parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
-        return text.startswith(("{", "["))
-    return True
+        return False
+    return isinstance(parsed, (dict, list))
 
 
 def _budget_reply(result: TaskExecutionResult, raw: str) -> str:
