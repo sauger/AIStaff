@@ -60,7 +60,7 @@ from app.core.task_request_compiler import (
     TaskRequestCompiler,
     TaskRequirement,
 )
-from app.core.turn_planner import TurnPlanner
+from app.core.turn_planner import PROMPT_PATH, TurnPlanner
 from app.db.models import (
     AgentEvent,
     AgentProfile,
@@ -489,8 +489,19 @@ def test_single_task_reply_synthesizes_incomplete_structured_projection() -> Non
     markdown = incomplete.model_copy(update={"reply_fragment": "完整结果如下。"})
 
     assert _single_task_reply([incomplete]) is None
-    assert _single_task_reply([matching]) == matching.reply_fragment
+    assert _single_task_reply([matching]) is None
     assert _single_task_reply([markdown]) == "完整结果如下。"
+
+
+def test_single_task_reply_rejects_json_even_when_it_matches_structured_result() -> None:
+    payload = {"ok": False, "exit_code": 1}
+    matching = TaskExecutionResult(
+        task_frame_id="task_json",
+        status="completed",
+        reply_fragment=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        structured_result=payload,
+    )
+    assert _single_task_reply([matching]) is None
 
 
 def test_response_task_payload_keeps_structured_result_for_synthesis() -> None:
@@ -861,6 +872,14 @@ def test_turn_planner_exposes_sops_but_not_runtime_capabilities(monkeypatch) -> 
     ]
     assert "available_skills" not in payloads[0]
     assert plan.task_frames[0].target_skill_id == "refund"
+
+
+def test_turn_planner_prompt_keeps_spend_and_list_questions_in_conversation() -> None:
+    text = PROMPT_PATH.read_text(encoding="utf-8")
+    assert "不要伪造 SOP" in text
+    for needle in ("花费", "多少钱", "列通道", "下明细"):
+        assert needle in text
+    assert "核对" in text and "对账" in text
 
 
 def test_turn_planner_discards_an_unknown_sop_target() -> None:

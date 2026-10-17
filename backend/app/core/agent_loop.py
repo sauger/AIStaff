@@ -38,6 +38,7 @@ from app.core.response_generator import (
 from app.core.skill_runtime import SkillRuntime
 from app.core.slash_commands import SlashCommandError
 from app.core.turn_finalizer import TurnFinalizer
+from app.core.user_visible_reply import sanitize_assistant_reply
 from app.db.models import (
     AgentProfile,
     ChannelBinding,
@@ -1669,6 +1670,7 @@ class AgentLoop:
         metadata = self._assistant_message_metadata(step_result, chat_session, source_message)
         if assistant_metadata_override:
             metadata = {**metadata, **dict(assistant_metadata_override)}
+        reply = sanitize_assistant_reply(reply)
         reply = restore_truncated_atomic_references(reply, metadata.get("knowledge_citations"))
         reply = self._normalize_reply_citation_labels(reply, metadata.get("knowledge_citations"))
         reply = self._strip_trailing_citation_summary(reply)

@@ -19,6 +19,7 @@ from app.core.task_request_compiler import (
     TaskExecutionResult,
     TaskRequirement,
 )
+from app.core.user_visible_reply import ACTION_BUDGET_SENTENCE, ensure_user_visible_reply
 from app.db.models import ModelConfig
 from app.llm import LLMClient, LLMError
 from app.observability.spans import llm_operation
@@ -646,10 +647,10 @@ class HarnessTaskAgent:
                         ),
                     },
                 )
-        return finish(TaskExecutionResult(
+        budget = TaskExecutionResult(
             task_frame_id=requirement.task_frame_id,
             status="action_budget",
-            reply_fragment="当前任务已达到本轮自动执行上限，需要下一轮继续。",
+            reply_fragment=ACTION_BUDGET_SENTENCE,
             citations=citations,
             evidence_results=evidence_results,
             capability_results=capability_results,
@@ -657,7 +658,9 @@ class HarnessTaskAgent:
             task_summary="Harness 达到 action budget。",
             action_count=max_actions,
             error={"code": "ACTION_BUDGET_EXHAUSTED"},
-        ))
+        )
+        budget.reply_fragment = ensure_user_visible_reply(budget)
+        return finish(budget)
 
 
 def _requirement_step_id(requirement: TaskRequirement) -> str:
