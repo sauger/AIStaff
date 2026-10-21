@@ -1374,6 +1374,20 @@ export function mergeTraceLine(existing: TraceLine, incoming: TraceLine): TraceL
     existing.state !== 'running' && incoming.state === 'running'
       ? existing.state
       : incoming.state;
+  const startedAt =
+    incoming.startedAt
+    ?? existing.startedAt
+    ?? (nextState === 'running' ? Date.now() : undefined);
+  let durationMs = incoming.durationMs ?? existing.durationMs;
+  const modelDurationMs = incoming.modelDurationMs ?? existing.modelDurationMs;
+  if (
+    durationMs == null
+    && existing.state === 'running'
+    && nextState !== 'running'
+    && typeof startedAt === 'number'
+  ) {
+    durationMs = Math.max(0, Date.now() - startedAt);
+  }
   return {
     ...existing,
     ...incoming,
@@ -1386,7 +1400,73 @@ export function mergeTraceLine(existing: TraceLine, incoming: TraceLine): TraceL
     outputTitle: incoming.outputTitle ?? existing.outputTitle,
     state: nextState,
     provisional: incoming.provisional === true && existing.provisional === true,
+    startedAt,
+    durationMs,
+    modelDurationMs,
   };
+}
+
+/** Map durable /trace line payloads into the chat ExecutionRecord model. */
+export function mapTraceLineRead(line: {
+  id: string;
+  kind: TraceLine['kind'];
+  text: string;
+  detail?: string | null;
+  code?: string | null;
+  language?: string | null;
+  output?: string | null;
+  outputLanguage?: string | null;
+  outputTitle?: string | null;
+  state: TraceLine['state'];
+  collapsible?: boolean | null;
+  duration_ms?: number | null;
+  model_duration_ms?: number | null;
+  depth?: number | null;
+}): TraceLine {
+  return {
+    id: line.id,
+    kind: line.kind,
+    text: line.text,
+    detail: line.detail || undefined,
+    code: line.code || undefined,
+    language: line.language || undefined,
+    output: line.output || undefined,
+    outputLanguage: line.outputLanguage || undefined,
+    outputTitle: line.outputTitle || undefined,
+    state: line.state,
+    depth: typeof line.depth === 'number' ? line.depth : undefined,
+    collapsible: Boolean(line.collapsible || line.code || line.output),
+    durationMs: typeof line.duration_ms === 'number' ? line.duration_ms : undefined,
+    modelDurationMs: typeof line.model_duration_ms === 'number' ? line.model_duration_ms : undefined,
+  };
+}
+
+/** Quiet secondary label for a completed ExecutionRecord line (`320ms`). */
+export function formatTraceLineDuration(line: TraceLine): string | null {
+  if (line.state === 'running') return null;
+  const ms = typeof line.durationMs === 'number'
+    ? line.durationMs
+    : typeof line.modelDurationMs === 'number'
+      ? line.modelDurationMs
+      : null;
+  if (ms == null || !Number.isFinite(ms)) return null;
+  if (ms < 1) return '<1ms';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function durationMsFromTracePayload(data: Record<string, unknown>): number | undefined {
+  const direct = data.duration_ms;
+  if (typeof direct === 'number' && Number.isFinite(direct)) {
+    return Math.max(0, direct);
+  }
+  const result = isPlainRecord(data.result) ? data.result : undefined;
+  const nested = result?.duration_ms;
+  if (typeof nested === 'number' && Number.isFinite(nested)) {
+    return Math.max(0, nested);
+  }
+  return undefined;
 }
 
 export function mergeTurnTraceSnapshot(existing: TurnTrace | undefined, incoming: TurnTrace): TurnTrace {
@@ -1582,6 +1662,7 @@ export function harnessEventTraceLine(
       typeof error.message === 'string' ? error.message : '',
     ].filter(Boolean).join(' · ') || undefined;
     const output = formatTracePayload(data.result);
+    const durationMs = durationMsFromTracePayload(data);
     return {
       id: `harness_action_${frameId}_${iteration || 'current'}`,
       kind: 'tool',
@@ -1596,6 +1677,7 @@ export function harnessEventTraceLine(
       mcpApp,
       state: success ? 'completed' : 'failed',
       icon: 'tool',
+      durationMs,
     };
   }
   return null;

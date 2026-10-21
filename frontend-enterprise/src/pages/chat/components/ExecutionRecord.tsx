@@ -26,12 +26,14 @@ import {
   CHAT_TRACE_LINE_DETAIL_CLASS,
   CHAT_TRACE_LINE_TEXT_CLASS,
   CHAT_TRACE_LINE_TEXT_FAILED_CLASS,
+  CHAT_TRACE_LINE_TIMING_CLASS,
+  CHAT_TRACE_LINE_TITLE_ROW_CLASS,
   CHAT_TRACE_SUMMARY_CLASS,
   CHAT_TRACE_SUMMARY_FAILED_CLASS,
   CHAT_TRACE_SUMMARY_RUNNING_CLASS,
   CHAT_TRACE_WRAP_CLASS,
 } from '../chatPageStyles';
-import { traceLineIconName, traceSummaryIconName } from '../chatHelpers';
+import { formatTraceLineDuration, traceLineIconName, traceSummaryIconName } from '../chatHelpers';
 import type { CotTraceIconName, TraceLine } from '../chatTypes';
 import MCPAppView from './MCPAppView';
 
@@ -94,40 +96,46 @@ export default function ExecutionRecord({
       </button>
       {expanded && details.length > 0 && (
         <div className={CHAT_TRACE_DETAILS_CLASS}>
-          {details.map((line) => (
-            <div
-              key={line.id}
-              className={CHAT_TRACE_LINE_CLASS}
-              style={line.depth ? { marginLeft: `${Math.min(line.depth, 3) * 20}px` } : undefined}
-            >
-              <CotTraceIcon name={traceLineIconName(line)} />
-              <span className={CHAT_TRACE_LINE_CONTENT_CLASS}>
-                <span
-                  className={cn(
-                    CHAT_TRACE_LINE_TEXT_CLASS,
-                    line.state === 'running' && CHAT_TRACE_FLOW_TEXT_CLASS,
-                    line.state === 'failed' && CHAT_TRACE_LINE_TEXT_FAILED_CLASS,
+          {details.map((line) => {
+            const timingLabel = formatTraceLineDuration(line);
+            return (
+              <div
+                key={line.id}
+                className={CHAT_TRACE_LINE_CLASS}
+                style={line.depth ? { marginLeft: `${Math.min(line.depth, 3) * 20}px` } : undefined}
+              >
+                <CotTraceIcon name={traceLineIconName(line)} />
+                <span className={CHAT_TRACE_LINE_CONTENT_CLASS}>
+                  <span className={CHAT_TRACE_LINE_TITLE_ROW_CLASS}>
+                    <span
+                      className={cn(
+                        CHAT_TRACE_LINE_TEXT_CLASS,
+                        line.state === 'running' && CHAT_TRACE_FLOW_TEXT_CLASS,
+                        line.state === 'failed' && CHAT_TRACE_LINE_TEXT_FAILED_CLASS,
+                      )}
+                    >
+                      {t(line.text)}
+                    </span>
+                    {timingLabel && <span className={CHAT_TRACE_LINE_TIMING_CLASS}>{timingLabel}</span>}
+                  </span>
+                  {line.detail && <span className={CHAT_TRACE_LINE_DETAIL_CLASS}>{t(line.detail)}</span>}
+                  {line.code && (
+                    <details className={CHAT_TRACE_CODE_DETAILS_CLASS}>
+                      <summary className={CHAT_TRACE_CODE_SUMMARY_CLASS}>查看代码</summary>
+                      <CodeBlock className={CHAT_TRACE_CODE_BLOCK_CLASS} code={line.code} language={line.language || 'python'} />
+                    </details>
                   )}
-                >
-                  {t(line.text)}
+                  {line.output && (
+                    <details className={CHAT_TRACE_CODE_DETAILS_CLASS}>
+                      <summary className={CHAT_TRACE_CODE_SUMMARY_CLASS}>{t(line.outputTitle || '查看输出')}</summary>
+                      <CodeBlock className={CHAT_TRACE_CODE_BLOCK_CLASS} code={line.output} language={line.outputLanguage || 'text'} />
+                    </details>
+                  )}
+                  {line.mcpApp && <MCPAppView descriptor={line.mcpApp} />}
                 </span>
-                {line.detail && <span className={CHAT_TRACE_LINE_DETAIL_CLASS}>{t(line.detail)}</span>}
-                {line.code && (
-                  <details className={CHAT_TRACE_CODE_DETAILS_CLASS}>
-                    <summary className={CHAT_TRACE_CODE_SUMMARY_CLASS}>查看代码</summary>
-                    <CodeBlock className={CHAT_TRACE_CODE_BLOCK_CLASS} code={line.code} language={line.language || 'python'} />
-                  </details>
-                )}
-                {line.output && (
-                  <details className={CHAT_TRACE_CODE_DETAILS_CLASS}>
-                    <summary className={CHAT_TRACE_CODE_SUMMARY_CLASS}>{t(line.outputTitle || '查看输出')}</summary>
-                    <CodeBlock className={CHAT_TRACE_CODE_BLOCK_CLASS} code={line.output} language={line.outputLanguage || 'text'} />
-                  </details>
-                )}
-                {line.mcpApp && <MCPAppView descriptor={line.mcpApp} />}
-              </span>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

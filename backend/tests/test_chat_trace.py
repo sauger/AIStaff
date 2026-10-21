@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -15,6 +15,7 @@ from app.api.chat import (
     _relay_event_payload,
     _resolve_step_label,
     list_chat_session_spans,
+    list_chat_session_trace,
     message_read,
 )
 from app.channels.feishu_trace import _SinkEvent
@@ -77,6 +78,130 @@ def test_event_log_binds_all_execution_events_to_current_turn() -> None:
             "user_message_id": "msg_user",
             "client_turn_id": "client_turn",
         }
+
+
+def test_session_trace_endpoint_includes_line_duration_ms() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    started_at = datetime(2026, 8, 2, 10, 0, 0, tzinfo=UTC)
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        user = User(
+            id="user_demo",
+            tenant_id="tenant_demo",
+            username="demo",
+            password_hash="hashed",
+        )
+        db.add(user)
+        db.add(
+            ChatSession(
+                id="session_timing",
+                tenant_id="tenant_demo",
+                user_id=user.id,
+            )
+        )
+        db.add(
+            Message(
+                id="msg_user",
+                tenant_id="tenant_demo",
+                session_id="session_timing",
+                role="user",
+                content="查询制度",
+                created_at=started_at,
+            )
+        )
+        db.add(
+            Message(
+                id="msg_assistant",
+                tenant_id="tenant_demo",
+                session_id="session_timing",
+                role="assistant",
+                content="查询完成",
+                created_at=started_at + timedelta(milliseconds=3000),
+            )
+        )
+        turn_payload = {
+            "turn_id": "msg_user",
+            "user_message_id": "msg_user",
+            "client_turn_id": "turn_client",
+        }
+        db.add(
+            AgentEvent(
+                tenant_id="tenant_demo",
+                session_id="session_timing",
+                event_type="user_message_received",
+                payload_json={**turn_payload, "message_id": "msg_user", "message": "查询制度"},
+                created_at=started_at,
+            )
+        )
+        db.add(
+            AgentEvent(
+                tenant_id="tenant_demo",
+                session_id="session_timing",
+                event_type="llm_call_finished",
+                payload_json={
+                    "turn_id": "msg_user",
+                    "operation": "turn_planner.plan",
+                    "started_at": (started_at + timedelta(milliseconds=200)).isoformat(),
+                    "duration_ms": 1200,
+                    "model_name": "GLM Test",
+                },
+                created_at=started_at + timedelta(milliseconds=1400),
+            )
+        )
+        db.add(
+            AgentEvent(
+                tenant_id="tenant_demo",
+                session_id="session_timing",
+                event_type="stream_status",
+                payload_json={
+                    **turn_payload,
+                    "phase": "routing",
+                    "text": "正在判断用户意图",
+                },
+                created_at=started_at + timedelta(milliseconds=100),
+            )
+        )
+        db.add(
+            AgentEvent(
+                tenant_id="tenant_demo",
+                session_id="session_timing",
+                event_type="router_decision_created",
+                payload_json={**turn_payload, "decision": "answer_only", "user_intent": "查询制度"},
+                created_at=started_at + timedelta(milliseconds=1500),
+            )
+        )
+        db.add(
+            AgentEvent(
+                tenant_id="tenant_demo",
+                session_id="session_timing",
+                event_type="assistant_message_created",
+                payload_json={
+                    **turn_payload,
+                    "message_id": "msg_assistant",
+                    "reply": "查询完成",
+                },
+                created_at=started_at + timedelta(milliseconds=3000),
+            )
+        )
+        db.commit()
+
+        traces = list_chat_session_trace(
+            "session_timing",
+            tenant_id="tenant_demo",
+            current_user=user,
+            db=db,
+        )
+
+    assert len(traces) == 1
+    lines = {line["id"]: line for line in traces[0]["lines"]}
+    assert traces[0]["duration_ms"] == 3000
+    assert lines["decision_router"]["duration_ms"] >= 1200
+    assert lines["decision_router"]["model_duration_ms"] == 1200
 
 
 def test_session_spans_endpoint_returns_internal_spans_without_relaying_them() -> None:

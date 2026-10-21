@@ -97,6 +97,7 @@ import {
   knowledgeTraceText,
   latestUserMessageForTurn,
   loadSessionReadTimes,
+  mapTraceLineRead,
   mergeTraceLine,
   mergeTurnTraceSnapshot,
   modelStorageKey,
@@ -946,9 +947,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
 
   const upsertTraceLine = useCallback((turnId: string, line: TraceLine) => {
     const trace = getTurnTrace(turnId);
-    const nextLine = trace.completedAt && line.state === 'running'
-      ? { ...line, state: 'completed' as const }
+    const stamped = line.state === 'running' && line.startedAt == null
+      ? { ...line, startedAt: Date.now() }
       : line;
+    const nextLine = trace.completedAt && stamped.state === 'running'
+      ? { ...stamped, state: 'completed' as const }
+      : stamped;
     const index = trace.lines.findIndex((item) => item.id === line.id);
     if (index >= 0) {
       trace.lines = [...trace.lines];
@@ -961,11 +965,18 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
 
   const finishTrace = useCallback((turnId: string, failed = false) => {
     const trace = getTurnTrace(turnId);
-    trace.completedAt = Date.now();
-    trace.lines = trace.lines.map((line) => ({
-      ...line,
-      state: failed && line.state === 'running' ? 'failed' : line.state === 'running' ? 'completed' : line.state,
-    }));
+    const finishedAt = Date.now();
+    trace.completedAt = finishedAt;
+    trace.lines = trace.lines.map((line) => {
+      if (line.state !== 'running') return line;
+      const durationMs = line.durationMs
+        ?? (typeof line.startedAt === 'number' ? Math.max(0, finishedAt - line.startedAt) : undefined);
+      return {
+        ...line,
+        state: failed ? 'failed' as const : 'completed' as const,
+        durationMs,
+      };
+    });
     notifyTrace();
   }, [getTurnTrace, notifyTrace]);
 
@@ -1292,20 +1303,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
         rows.forEach((row) => {
           const hasFinalAssistant = hasAssistantMessageForTurn(slot, row.turn_id);
           const hasAssistantCarrier = hasAssistantCarrierForTurn(slot, row.turn_id);
-          const traceLines = row.lines.map((line) => ({
-            id: line.id,
-            kind: line.kind,
-            text: line.text,
-            detail: line.detail || undefined,
-            code: line.code || undefined,
-            language: line.language || undefined,
-            output: line.output || undefined,
-            outputLanguage: line.outputLanguage || undefined,
-            outputTitle: line.outputTitle || undefined,
-            state: line.state,
-            depth: typeof line.depth === 'number' ? line.depth : undefined,
-            collapsible: Boolean(line.collapsible || line.code || line.output),
-          }));
+          const traceLines = row.lines.map((line) => mapTraceLineRead(line));
           let mergedTrace = mergeTurnTraceSnapshot(turnTraceRef.current.get(row.turn_id), {
             lines: traceLines,
             startedAt: parseMessageTime(row.started_at) || Date.now(),
@@ -1332,12 +1330,21 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
             && !hasAssistantCarrier
           );
           if (staleOpenTrace) {
+            const finishedAt = Date.now();
             mergedTrace = {
               ...mergedTrace,
-              lines: mergedTrace.lines.map((line) => (
-                line.state === 'running' ? { ...line, state: 'completed' as const } : line
-              )),
-              completedAt: parseMessageTime(row.started_at) || Date.now(),
+              lines: mergedTrace.lines.map((line) => {
+                if (line.state !== 'running') return line;
+                return {
+                  ...line,
+                  state: 'completed' as const,
+                  durationMs: line.durationMs
+                    ?? (typeof line.startedAt === 'number'
+                      ? Math.max(0, finishedAt - line.startedAt)
+                      : undefined),
+                };
+              }),
+              completedAt: parseMessageTime(row.started_at) || finishedAt,
             };
           }
           turnTraceRef.current.set(row.turn_id, mergedTrace);

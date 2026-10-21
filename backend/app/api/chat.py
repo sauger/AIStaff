@@ -51,6 +51,7 @@ from app.harness import (
     open_harness_artifact,
 )
 from app.llm import LLMClient, LLMError
+from app.observability.session_timings import enrich_turn_traces_with_timings
 from app.observability.spans import (
     bind_span_sink,
     llm_operation,
@@ -2499,7 +2500,13 @@ def list_chat_session_trace(
         ]
     skills = db.exec(select(Skill).where(Skill.tenant_id == tenant_id)).all()
     skill_names = {skill.skill_id: skill.name for skill in skills}
-    return _build_turn_traces(messages, events, skill_names)
+    # Same timing projection as enterprise conversation logs: wall-clock and
+    # model durations from durable events, without relaying llm_call_* spans
+    # over the chat SSE path.
+    return enrich_turn_traces_with_timings(
+        _build_turn_traces(messages, events, skill_names),
+        events,
+    )
 
 
 @router.get("/sessions/{session_id}/spans")
