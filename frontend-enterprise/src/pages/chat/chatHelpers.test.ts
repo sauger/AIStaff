@@ -8,15 +8,19 @@ import {
   STREAM_TERMINAL_EVENTS,
   MarkdownMessage,
   canRateMessage,
+  formatTraceLineDuration,
   harnessEventTraceLine,
   harnessWorkspaceArtifacts,
   knowledgeCitations,
+  mapTraceLineRead,
+  mergeTraceLine,
   messageAttachments,
   renderInlineMarkdown,
   scheduledDraftForMessage,
   shouldDeferPersistedEventToLiveStream,
   stripTrailingCitationSummary,
 } from './chatHelpers';
+import type { TraceLine } from './chatTypes';
 
 function message(patch: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -410,5 +414,71 @@ describe('chat history consumer contract', () => {
       detail: '状态 awaiting_user · 步骤 collect_user_name · 执行 1 个动作',
       state: 'running',
     });
+  });
+
+  it('maps /trace duration fields and formats quiet per-line timings', () => {
+    const mapped = mapTraceLineRead({
+      id: 'decision_router',
+      kind: 'decision',
+      text: '判断意图',
+      state: 'completed',
+      duration_ms: 320.4,
+      model_duration_ms: 280,
+    });
+    expect(mapped).toMatchObject({
+      durationMs: 320.4,
+      modelDurationMs: 280,
+    });
+    expect(formatTraceLineDuration(mapped)).toBe('320ms');
+    expect(formatTraceLineDuration({
+      id: 'slow',
+      kind: 'tool',
+      text: '调用能力',
+      state: 'completed',
+      durationMs: 2450,
+    })).toBe('2.45s');
+    expect(formatTraceLineDuration({
+      id: 'running',
+      kind: 'tool',
+      text: '调用能力',
+      state: 'running',
+      durationMs: 100,
+    })).toBeNull();
+    expect(formatTraceLineDuration({
+      id: 'model_only',
+      kind: 'thinking',
+      text: '第 1 轮决定调用能力',
+      state: 'completed',
+      modelDurationMs: 900,
+    })).toBe('900ms');
+  });
+
+  it('estimates live duration when a running line completes without /trace enrichment', () => {
+    const running: TraceLine = {
+      id: 'harness_action_task-1_1',
+      kind: 'tool',
+      text: '调用能力 weather',
+      state: 'running',
+      startedAt: Date.now() - 450,
+    };
+    const completed = mergeTraceLine(running, {
+      id: 'harness_action_task-1_1',
+      kind: 'tool',
+      text: '能力调用完成 weather',
+      state: 'completed',
+    });
+    expect(completed.durationMs).toBeGreaterThanOrEqual(400);
+    expect(formatTraceLineDuration(completed)).toMatch(/ms$|s$/);
+  });
+
+  it('prefers capability result duration_ms on harness_tool_completed', () => {
+    const completed = harnessEventTraceLine('harness_tool_completed', {
+      task_frame_id: 'task-weather',
+      iteration: 1,
+      tool_name: 'bash',
+      success: true,
+      result: { success: true, duration_ms: 187 },
+    });
+    expect(completed?.durationMs).toBe(187);
   });
 });

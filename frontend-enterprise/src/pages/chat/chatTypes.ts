@@ -67,6 +67,12 @@ export type TraceLine = {
   provisional?: boolean;
   depth?: number;
   mcpApp?: MCPAppViewDescriptor;
+  /** Wall-clock duration for a completed line, from /trace enrichment or live timing. */
+  durationMs?: number;
+  /** Model-only duration when wall-clock is unavailable (e.g. projected harness model rows). */
+  modelDurationMs?: number;
+  /** Client clock when the line entered running; used to estimate live duration. */
+  startedAt?: number;
 };
 
 export type TurnTrace = {

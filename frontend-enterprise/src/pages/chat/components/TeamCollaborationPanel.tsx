@@ -20,11 +20,12 @@ import {
   MarkdownMessage,
   harnessWorkspaceArtifacts,
   knowledgeCitations,
+  mapTraceLineRead,
   stripTrailingCitationSummary,
   traceDetails,
   traceSummary,
 } from '../chatHelpers';
-import type { TraceLine, TurnTrace } from '../chatTypes';
+import type { TurnTrace } from '../chatTypes';
 import ExecutionRecord from './ExecutionRecord';
 import HarnessArtifactDownloads from './HarnessArtifactDownloads';
 import KnowledgeCitationList from './KnowledgeCitationList';
@@ -35,20 +36,7 @@ function collaborationTrace(rows: TurnTraceRead[]): { turnId: string; trace: Tur
   );
   const latest = ordered[ordered.length - 1];
   if (!latest) return null;
-  const lines: TraceLine[] = latest.lines.map((line) => ({
-    id: line.id,
-    kind: line.kind,
-    text: line.text,
-    detail: line.detail || undefined,
-    code: line.code || undefined,
-    language: line.language || undefined,
-    output: line.output || undefined,
-    outputLanguage: line.outputLanguage || undefined,
-    outputTitle: line.outputTitle || undefined,
-    state: line.state,
-    collapsible: Boolean(line.collapsible || line.code || line.output),
-    depth: typeof line.depth === 'number' ? line.depth : undefined,
-  }));
+  const lines = latest.lines.map((line) => mapTraceLineRead(line));
   return {
     turnId: latest.turn_id,
     trace: {
