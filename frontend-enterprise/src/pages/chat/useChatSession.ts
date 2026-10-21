@@ -1330,12 +1330,21 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
             && !hasAssistantCarrier
           );
           if (staleOpenTrace) {
+            const finishedAt = Date.now();
             mergedTrace = {
               ...mergedTrace,
-              lines: mergedTrace.lines.map((line) => (
-                line.state === 'running' ? { ...line, state: 'completed' as const } : line
-              )),
-              completedAt: parseMessageTime(row.started_at) || Date.now(),
+              lines: mergedTrace.lines.map((line) => {
+                if (line.state !== 'running') return line;
+                return {
+                  ...line,
+                  state: 'completed' as const,
+                  durationMs: line.durationMs
+                    ?? (typeof line.startedAt === 'number'
+                      ? Math.max(0, finishedAt - line.startedAt)
+                      : undefined),
+                };
+              }),
+              completedAt: parseMessageTime(row.started_at) || finishedAt,
             };
           }
           turnTraceRef.current.set(row.turn_id, mergedTrace);
