@@ -74,8 +74,10 @@ from app.tools.tool_schema import ToolCall
 
 _INLINE_JSON_TOOL_RESULT_MAX_CHARS = 2_000
 _INTERNAL_TOOL_RESULT_DIRECTORY = ".harness/tool-results"
+_EXPORTED_TOOL_RESULT_DIRECTORY = "exports"
 _GENERAL_SKILL_PACKAGE_DIRECTORY = ".harness/skill-packages"
 _SANDBOX_JSON_FILE_KIND = "sandbox_json_file"
+_SANDBOX_TEXT_FILE_KIND = "sandbox_text_file"
 
 
 class HarnessCapabilityInvoker:
@@ -1213,9 +1215,17 @@ class HarnessCapabilityInvoker:
         *,
         call_id: str,
     ) -> dict[str, Any]:
-        """Keep large knowledge/tool JSON out of the isolated model transcript."""
+        """Keep large tool/knowledge bodies out of the isolated model transcript.
+
+        JSON dict/list results spill to ``.harness/tool-results/*.json`` (existing
+        reference kind). Large plain-text bodies — including HTTP CSV exports —
+        spill to a visible ``exports/`` workspace file so agents can glob/read
+        them instead of looping on inline CSV that never became a file.
+        """
 
         data = payload.get("data")
+        if isinstance(data, str):
+            return self._persist_large_text_result(payload, call_id=call_id, text=data)
         if not isinstance(data, (dict, list)):
             return payload
         try:
@@ -1270,6 +1280,84 @@ class HarnessCapabilityInvoker:
         app_descriptor = payload.get("mcp_app")
         if isinstance(app_descriptor, dict):
             app_descriptor["initial_result"] = dict(reference)
+        return payload
+
+    def _persist_large_text_result(
+        self,
+        payload: dict[str, Any],
+        *,
+        call_id: str,
+        text: str,
+    ) -> dict[str, Any]:
+        if len(text) <= _INLINE_JSON_TOOL_RESULT_MAX_CHARS:
+            return payload
+        extension, content_type = _text_tool_result_extension(text)
+        safe_call_id = _safe_artifact_name(call_id) or "tool-result"
+        relative_path = f"{_EXPORTED_TOOL_RESULT_DIRECTORY}/{safe_call_id}.{extension}"
+        stored = self._file_executor.execute(
+            self._file_context,
+            HarnessToolCall(
+                call_id=f"{call_id}-text-result",
+                name="write_file",
+                arguments={
+                    "path": relative_path,
+                    "content": text,
+                    "create_parents": True,
+                },
+            ),
+        )
+        if not stored.success:
+            return _failure(
+                "TOOL_RESULT_PERSIST_FAILED",
+                "能力已返回结果，但完整文本无法写入当前 TaskFrame 沙箱。",
+                cause={
+                    "code": (
+                        stored.error.code
+                        if stored.error is not None
+                        else "FILE_TOOL_ERROR"
+                    ),
+                    "message": (
+                        stored.error.message
+                        if stored.error is not None
+                        else "沙箱文件写入失败。"
+                    ),
+                },
+            )
+        stored_data = dict(stored.data or {})
+        written_path = str(stored_data.get("path") or relative_path).strip()
+        preview_limit = 800
+        line_count = text.count("\n") + (0 if text.endswith("\n") else 1 if text else 0)
+        reference = {
+            "kind": _SANDBOX_TEXT_FILE_KIND,
+            "path": written_path,
+            "sandbox_path": _sandbox_path(written_path),
+            "size": stored_data.get("size"),
+            "sha256": stored_data.get("sha256"),
+            "content_type": content_type,
+            "line_count": line_count,
+            "preview": text[:preview_limit],
+            "preview_truncated": len(text) > preview_limit,
+            "guidance": (
+                "Full response body is saved as a workspace file. "
+                "Use read_file / glob on the path (or cabinet_save to the file cabinet). "
+                "Do not re-invoke the export tool just to obtain the file."
+            ),
+        }
+        payload["data"] = reference
+        artifact = {
+            "type": "workspace_file",
+            "task_frame_id": self.task_frame_id,
+            "path": written_path,
+            "sandbox_path": _sandbox_path(written_path),
+            "sha256": stored_data.get("sha256"),
+            "size": stored_data.get("size"),
+            "display_name": Path(written_path).name,
+            "description": "Persisted HTTP/tool text result",
+            "content_type": content_type,
+            "operation": "tool_result_persist",
+            "source": "http_tool",
+        }
+        payload["artifacts"] = [*(payload.get("artifacts") or []), artifact]
         return payload
 
     def _resolve_json_tool_result_references(
@@ -1658,6 +1746,19 @@ def _audit_result(result: dict[str, Any]) -> dict[str, Any]:
             if isinstance(item, dict)
         ]
     return audited
+
+
+def _text_tool_result_extension(text: str) -> tuple[str, str]:
+    """Pick a file extension for spilled text/CSV tool bodies."""
+
+    sample = text.lstrip("\ufeff")[:4096]
+    first_line = sample.splitlines()[0] if sample else ""
+    if "," in first_line or "\t" in first_line:
+        # UTF-8 BOM CSV exports (e.g. platform usage-details) and TSV alike.
+        if "\t" in first_line and "," not in first_line:
+            return "tsv", "text/tab-separated-values; charset=utf-8"
+        return "csv", "text/csv; charset=utf-8"
+    return "txt", "text/plain; charset=utf-8"
 
 
 def _sandbox_path(relative_path: str) -> str:

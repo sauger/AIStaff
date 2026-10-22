@@ -2132,7 +2132,7 @@ def test_large_external_json_result_uses_sandbox_reference_and_auto_resolves(
     }
     sink_arguments: list[dict[str, object]] = []
 
-    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):
         if tool_call.name == large_tool.name:
             return ToolResult(tool_name=tool_call.name, success=True, data=large_data)
         if tool_call.name == small_tool.name:
@@ -2219,6 +2219,90 @@ def test_large_external_json_result_uses_sandbox_reference_and_auto_resolves(
     assert artifacts == []
 
 
+def test_large_external_csv_text_result_persists_to_exports_workspace_file(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    export_tool = Tool(
+        id="tool-export-csv",
+        tenant_id="tenant-demo",
+        name="export_platform_usage_details",
+        method="GET",
+        url="https://example.test/usage-details/export",
+    )
+    header = "\ufeff调用时间,调用序列号,企业,总 Token,单次费用(元)"
+    rows = [
+        f"2026-10-21 10:0{index},req-{index},迅傲测试,{1000 + index},{0.01 * index:.4f}"
+        for index in range(80)
+    ]
+    csv_body = header + "\n" + "\n".join(rows) + "\n"
+    assert len(csv_body) > 2000
+
+    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):
+        return ToolResult(tool_name=tool_call.name, success=True, data=csv_body)
+
+    monkeypatch.setattr(
+        "app.core.harness_capability_invoker.ToolExecutor.execute",
+        fake_execute,
+    )
+    engine = _test_engine()
+    with Session(engine) as db:
+        db.add(export_tool)
+        db.commit()
+        invoker = HarnessCapabilityInvoker(
+            db,
+            tenant_id="tenant-demo",
+            session=_chat_session(),
+            task_frame_id="task-csv-export",
+            model_config=_model_config(),
+            manifest=CapabilityManifest(available=[]),
+            active_skill=None,
+            active_step_id=None,
+            agent_id=None,
+        )
+        result = invoker._invoke_external_tool(
+            export_tool.id,
+            {
+                "source_tool_name": export_tool.name,
+                "content_digest": tool_snapshot_digest(db, export_tool),
+            },
+            export_tool.name,
+            {},
+            call_id="hcall-csv",
+        )
+        reference = result["data"]
+        read_result = invoker._invoke_file(
+            "read_file",
+            {"path": reference["sandbox_path"]},
+            call_id="hcall-read-csv",
+        )
+        glob_result = invoker._invoke_file(
+            "glob",
+            {"pattern": "**/*.csv"},
+            call_id="hcall-glob-csv",
+        )
+
+    assert result["success"] is True
+    assert reference["kind"] == "sandbox_text_file"
+    assert reference["path"] == "exports/hcall-csv.csv"
+    assert reference["sandbox_path"] == "/workspace/exports/hcall-csv.csv"
+    assert reference["content_type"].startswith("text/csv")
+    assert reference["preview_truncated"] is True
+    assert "guidance" in reference
+    assert read_result["success"] is True
+    assert read_result["data"]["content"] == csv_body
+    glob_matches = (glob_result.get("data") or {}).get("matches") or []
+    assert any(
+        str(item.get("path") or "").endswith("exports/hcall-csv.csv")
+        or str(item.get("path") or "").endswith("hcall-csv.csv")
+        for item in glob_matches
+        if isinstance(item, dict)
+    )
+    artifacts = result.get("artifacts") or []
+    assert any(item.get("path") == "exports/hcall-csv.csv" for item in artifacts)
+
+
 def test_mcp_app_descriptor_is_host_only_and_emitted_as_trace(
     tmp_path,
     monkeypatch,
@@ -2241,7 +2325,7 @@ def test_mcp_app_descriptor_is_host_only_and_emitted_as_trace(
         "initial_meta": {"ui": {"render": True}},
     }
 
-    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):
         return ToolResult(
             tool_name=tool_call.name,
             success=True,
