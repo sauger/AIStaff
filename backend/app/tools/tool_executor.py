@@ -23,7 +23,12 @@ from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_serv
 from app.skills.tool_authorization import SopToolAuthorization
 from app.tools.a2a_client import A2AClient, A2AClientError
 from app.tools.external_tasks import callback_token_hash, new_callback_token
-from app.tools.http_request import UrlPlaceholderError, prepare_http_request
+from app.tools.http_request import (
+    RequestTransformError,
+    UrlPlaceholderError,
+    prepare_http_request,
+    resolve_request_transforms,
+)
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool, execute_mcp_tool_result
 from app.tools.tool_schema import MCPAppDescriptor, ToolCall, ToolError, ToolResult
 
@@ -166,7 +171,10 @@ class ToolExecutor:
         )
         try:
             request_url, request_kwargs = prepare_http_request(
-                tool.method, tool.url, tool_call.arguments
+                tool.method,
+                tool.url,
+                tool_call.arguments,
+                transforms=resolve_request_transforms(tool.config_json, tool.input_schema),
             )
             with httpx.Client(timeout=policy.timeout_seconds) as client:
                 response = client.request(
@@ -179,7 +187,7 @@ class ToolExecutor:
                     data=self._response_data(response),
                     error=None,
                 )
-        except UrlPlaceholderError as exc:
+        except (UrlPlaceholderError, RequestTransformError) as exc:
             return self._error(tool.name, exc.code, str(exc))
         except httpx.TimeoutException:
             return self._error(
@@ -239,7 +247,12 @@ class ToolExecutor:
             timeout_seconds_override=timeout_seconds_override,
         )
         try:
-            request_url, request_kwargs = prepare_http_request(tool.method, tool.url, arguments)
+            request_url, request_kwargs = prepare_http_request(
+                tool.method,
+                tool.url,
+                arguments,
+                transforms=resolve_request_transforms(tool.config_json, tool.input_schema),
+            )
             with httpx.Client(timeout=policy.timeout_seconds) as client:
                 response = client.request(
                     tool.method.upper(), request_url, headers=headers, **request_kwargs
@@ -255,7 +268,7 @@ class ToolExecutor:
                     status_code=response.status_code,
                     payload=self._response_data(response),
                 )
-        except UrlPlaceholderError as exc:
+        except (UrlPlaceholderError, RequestTransformError) as exc:
             return HttpExecutionResponse(result=self._error(tool.name, exc.code, str(exc)))
         except httpx.TimeoutException:
             return HttpExecutionResponse(

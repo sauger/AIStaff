@@ -4,11 +4,31 @@ import pytest
 
 from app.tools.http_request import (
     UNREPLACED_PLACEHOLDER_MESSAGE,
+    RequestTransformError,
     UrlPlaceholderError,
+    apply_request_argument_transforms,
     apply_url_placeholders,
     prepare_get_request,
     prepare_http_request,
+    resolve_request_transforms,
 )
+
+EXPORT_DATE_TRANSFORMS = [
+    {
+        "type": "calendar_date_to_unix",
+        "source": "date_from",
+        "target": "from",
+        "timezone": "Asia/Shanghai",
+        "bound": "start",
+    },
+    {
+        "type": "calendar_date_to_unix",
+        "source": "date_to",
+        "target": "to",
+        "timezone": "Asia/Shanghai",
+        "bound": "end_exclusive",
+    },
+]
 
 BILL_URL = "https://gateway.example/api/platform/organizations/{org_id}/consumption-bills"
 BILL_ARGS = {"org_id": "42", "period_ym": "2026-09", "page": 1}
@@ -123,3 +143,77 @@ def test_prepare_get_request_still_merges_existing_query() -> None:
 
     assert request_url == "https://gateway.example/bills?source=console&page=1"
     assert request_kwargs == {}
+
+
+def test_calendar_date_to_unix_uses_shanghai_day_bounds() -> None:
+    shaped = apply_request_argument_transforms(
+        {
+            "organization_id": 10,
+            "date_from": "2026-10-22",
+            "date_to": "2026-10-22",
+            "channel_ids": "12",
+        },
+        EXPORT_DATE_TRANSFORMS,
+    )
+
+    assert shaped == {
+        "organization_id": 10,
+        "from": 1792598400,
+        "to": 1792684800,
+        "channel_ids": "12",
+    }
+
+
+def test_prepare_http_request_applies_date_transforms_before_query() -> None:
+    request_url, request_kwargs = prepare_http_request(
+        "GET",
+        "https://www.numwayai.com/api/platform/usage-details/export",
+        {
+            "organization_id": 10,
+            "date_from": "2026-10-22",
+            "date_to": "2026-10-22",
+        },
+        transforms=EXPORT_DATE_TRANSFORMS,
+    )
+
+    assert request_url.endswith("/usage-details/export")
+    assert request_kwargs == {
+        "params": {
+            "organization_id": 10,
+            "from": 1792598400,
+            "to": 1792684800,
+        }
+    }
+
+
+def test_calendar_date_to_unix_rejects_bad_date() -> None:
+    with pytest.raises(RequestTransformError, match="须为 YYYY-MM-DD") as exc_info:
+        apply_request_argument_transforms(
+            {"date_from": "10/22/2026"},
+            EXPORT_DATE_TRANSFORMS[:1],
+        )
+
+    assert exc_info.value.code == "REQUEST_TRANSFORM"
+
+
+def test_calendar_date_to_unix_skips_missing_source() -> None:
+    shaped = apply_request_argument_transforms(
+        {"organization_id": 10, "date_to": "2026-10-22"},
+        EXPORT_DATE_TRANSFORMS,
+    )
+
+    assert shaped == {"organization_id": 10, "to": 1792684800}
+
+
+def test_resolve_request_transforms_prefers_config_then_schema() -> None:
+    from_config = resolve_request_transforms(
+        {"request_transforms": EXPORT_DATE_TRANSFORMS},
+        {"x-request-transforms": [{"type": "other"}]},
+    )
+    from_schema = resolve_request_transforms(
+        {"execution": {"timeout_seconds": 8}},
+        {"x-request-transforms": EXPORT_DATE_TRANSFORMS},
+    )
+
+    assert from_config == EXPORT_DATE_TRANSFORMS
+    assert from_schema == EXPORT_DATE_TRANSFORMS
