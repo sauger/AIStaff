@@ -193,6 +193,27 @@ def test_tool_config_namespaces_execution_and_preserves_existing_policy() -> Non
     }
 
 
+def test_tool_config_preserves_request_transforms_when_http_ui_sends_empty_mcp() -> None:
+    transforms = [
+        {
+            "type": "calendar_date_to_unix",
+            "source": "date_from",
+            "target": "from",
+            "timezone": "Asia/Shanghai",
+            "bound": "start",
+        }
+    ]
+    existing = {
+        "request_transforms": transforms,
+        "execution": {"timeout_seconds": 120.0},
+    }
+
+    updated = _tool_config({}, ToolExecutionPolicy(timeout_seconds=120), existing=existing)
+
+    assert updated["request_transforms"] == transforms
+    assert updated["execution"]["timeout_seconds"] == 120.0
+
+
 def test_tool_config_round_trips_detached_execution_policy() -> None:
     policy = ToolExecutionPolicy(
         timeout_seconds=12,
@@ -649,6 +670,78 @@ def test_probe_get_tool_sends_sample_arguments_as_query_params(
         },
         "json": None,
     }
+
+
+def test_probe_get_tool_applies_schema_date_transforms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            requested.update({"method": method, "url": url, "params": params, "json": json})
+            return httpx.Response(200, content=b"ok", headers={"content-type": "text/csv"})
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+
+        result = probe_tool(
+            ToolProbeRequest(
+                tenant_id="tenant_demo",
+                name="export_platform_usage_details",
+                method="GET",
+                url="https://www.numwayai.com/api/platform/usage-details/export",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "date_from": {"type": "string"},
+                        "date_to": {"type": "string"},
+                        "organization_id": {"type": "integer"},
+                    },
+                    "x-request-transforms": [
+                        {
+                            "type": "calendar_date_to_unix",
+                            "source": "date_from",
+                            "target": "from",
+                            "timezone": "Asia/Shanghai",
+                            "bound": "start",
+                        },
+                        {
+                            "type": "calendar_date_to_unix",
+                            "source": "date_to",
+                            "target": "to",
+                            "timezone": "Asia/Shanghai",
+                            "bound": "end_exclusive",
+                        },
+                    ],
+                },
+                sample_arguments={
+                    "organization_id": 10,
+                    "date_from": "2026-10-22",
+                    "date_to": "2026-10-22",
+                },
+            ),
+            db,
+        )
+
+    assert result.success is True
+    assert requested["params"] == {
+        "organization_id": 10,
+        "from": 1792598400,
+        "to": 1792684800,
+    }
+
 
 
 def test_probe_get_tool_substitutes_path_placeholders(monkeypatch: pytest.MonkeyPatch) -> None:
