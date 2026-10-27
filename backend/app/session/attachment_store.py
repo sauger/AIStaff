@@ -9,6 +9,7 @@ from pathlib import Path, PurePath
 from typing import Any
 
 from app import paths
+from app.config import get_settings
 from app.harness.execution_context import SANDBOX_WORKSPACE
 from app.session.session_schema import ChatAttachmentRead
 
@@ -98,11 +99,22 @@ def read_staged_chat_attachment(
     return data
 
 
-def _attachment_directory(*, tenant_id: str, user_id: str, attachment_id: str) -> Path:
+def _attachment_root() -> Path:
+    configured = str(get_settings().harness_uploads_path or "").strip()
+    if configured:
+        root = Path(configured).expanduser()
+        if not root.is_absolute():
+            raise ValueError("HARNESS_UPLOADS_PATH must be absolute")
+        return root.resolve()
     data_root = paths.user_data_dir().resolve()
     root = (data_root / "harness_uploads").resolve()
     if not root.is_relative_to(data_root):
         raise ValueError("attachment storage root escapes user data directory")
+    return root
+
+
+def _attachment_directory(*, tenant_id: str, user_id: str, attachment_id: str) -> Path:
+    root = _attachment_root()
     key = _attachment_storage_key(
         tenant_id=tenant_id,
         user_id=user_id,

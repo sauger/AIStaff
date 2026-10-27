@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     public_base_url: str = ""
     # 仅本地开发允许 http://localhost 的下载链接；生产默认关闭。
     allow_local_artifact_links: bool = False
+    # 聊天附件暂存目录；为空时使用用户数据目录下的 harness_uploads。
+    harness_uploads_path: str = ""
     public_api_enabled: bool = True
     public_api_key_pepper: str = ""
     public_api_idempotency_ttl_seconds: int = 60 * 60 * 24

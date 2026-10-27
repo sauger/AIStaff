@@ -94,3 +94,37 @@ def test_attachment_directory_rejects_intermediate_symlink_escape(
             user_id="user",
             attachment_id="attachment",
         )
+
+
+def test_configured_attachment_root_is_used(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import app.session.attachment_store as attachment_store_module
+
+    configured = tmp_path / "project-attachments"
+    monkeypatch.setattr(
+        attachment_store_module,
+        "get_settings",
+        lambda: SimpleNamespace(harness_uploads_path=str(configured)),
+    )
+    raw = b"configured attachment"
+    attachment = ChatAttachmentRead(
+        id="attachment-configured",
+        filename="report.txt",
+        content_type="text/plain",
+        size=len(raw),
+        kind="text",
+    )
+    staged = stage_chat_attachment(
+        attachment,
+        raw,
+        tenant_id="tenant",
+        user_id="user",
+    )
+    assert configured.is_dir()
+    assert read_staged_chat_attachment(
+        staged, tenant_id="tenant", user_id="user"
+    ) == raw
