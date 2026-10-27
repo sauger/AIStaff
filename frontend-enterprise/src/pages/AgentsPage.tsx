@@ -25,6 +25,7 @@ import {
   employeeProfile,
 } from '../employee';
 import { emitAgentScopeChange, isTeamScope, persistSharedAgentScope, readEmployeeScope } from '../lib/agent-scope-storage';
+import { EnterpriseRoute } from '../enums/routes';
 import type { AgentProfileRead } from '../types';
 
 const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
@@ -319,6 +320,11 @@ export default function AgentsPage({
         currentUser={currentUser}
         onClose={() => setProfileAgent(null)}
         onSaved={updateAgentInList}
+        onOpenMail={(agentId) => {
+          persistSharedAgentScope(agentId);
+          emitAgentScopeChange(agentId);
+          navigate(EnterpriseRoute.Mail);
+        }}
       />
       <EmployeeApiKeyDialog
         agent={apiKeyAgent}
