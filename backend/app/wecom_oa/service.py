@@ -70,6 +70,12 @@ WECOM_OA_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+def _oa_client(cred, client_factory=None) -> WecomOaClient:
+    if client_factory is None:
+        return WecomOaClient(cred)
+    return WecomOaClient(cred, client_factory=client_factory)
+
+
 class WecomOaServiceError(RuntimeError):
     def __init__(self, message: str, *, code: str = "WECOM_OA_ERROR"):
         super().__init__(message)
@@ -285,7 +291,6 @@ def preview_approval(
         "summary": summary,
         "status": intent.status,
     }
-    # 写入会话消息元数据，供前端确认卡渲染
     db.add(
         Message(
             tenant_id=tenant_id,
@@ -333,7 +338,6 @@ def submit_approval(
     if intent.session_id != session_id:
         return _err("WECOM_OA_SESSION_MISMATCH", "意图不属于当前会话")
 
-    # 未确认：不允许触达 applyevent
     if intent.status == "draft":
         try:
             intent = confirm_intent(
@@ -444,10 +448,7 @@ def submit_approval(
         return _err("WECOM_OA_FIELD_ERROR", str(exc), intent=intent)
 
     intent = mark_submitting(db, intent)
-    client_kwargs = {}
-    if client_factory is not None:
-        client_kwargs["client_factory"] = client_factory
-    client = WecomOaClient(cred, **client_kwargs)
+    client = _oa_client(cred, client_factory)
     try:
         result = client.apply_event(
             creator_userid=creator_userid,
@@ -541,10 +542,7 @@ def query_approval(
     cred = get_oa_credential(db, tenant_id=tenant_id, corp_id=intent.corp_id)
     if cred is None:
         return _err("WECOM_OA_NO_CREDENTIAL", "OA 凭证缺失")
-    kwargs = {}
-    if client_factory is not None:
-        kwargs["client_factory"] = client_factory
-    client = WecomOaClient(cred, **kwargs)
+    client = _oa_client(cred, client_factory)
     try:
         detail = client.get_approval_detail(target_sp)
     except WecomOaApiError as exc:

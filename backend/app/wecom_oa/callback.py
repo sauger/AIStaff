@@ -12,7 +12,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from defusedxml import ElementTree as ET
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.db.models import Message, WecomApprovalStatusEvent, utc_now
 from app.wecom_oa.intent import get_intent_by_sp_no
@@ -88,25 +88,9 @@ def parse_approval_change_xml(xml_text: str) -> dict[str, Any]:
                 return str(node.text).strip()
         return ""
 
-    # 企微审批变更常见字段
     event = _text("Event", "MsgType")
-    sp_no = _text("SpNo", "SpNoStr", "ApprovalInfo/SpNo")
-    if not sp_no:
-        # ApprovalInfo nested
-        info = root.find("ApprovalInfo")
-        if info is not None:
-            for tag in ("SpNo", "SpNoStr"):
-                node = info.find(tag)
-                if node is not None and node.text:
-                    sp_no = str(node.text).strip()
-                    break
+    sp_no = _text("SpNo", "SpNoStr", "ApprovalInfo/SpNo", "ApprovalInfo/SpNoStr")
     sp_status = _text("SpStatus", "ApprovalInfo/SpStatus")
-    if not sp_status:
-        info = root.find("ApprovalInfo")
-        if info is not None:
-            node = info.find("SpStatus")
-            if node is not None and node.text:
-                sp_status = str(node.text).strip()
     return {
         "event": event or "sys_approval_change",
         "sp_no": sp_no,
@@ -136,9 +120,6 @@ def apply_status_update(
         return None
     sp_status = str(sp_status or "").strip() or "unknown"
     change_event = str(change_event or "").strip() or source
-    existing = None
-    from sqlmodel import select
-
     existing = db.exec(
         select(WecomApprovalStatusEvent).where(
             WecomApprovalStatusEvent.intent_id == intent.id,

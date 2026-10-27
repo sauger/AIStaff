@@ -8,25 +8,10 @@ from typing import Any, Literal
 
 ApplicantMode = Literal["fixed", "chat_partner"]
 
-# v1 对话框可收集的标量控件（KTD5）
+# v1 对话框可收集的标量控件（KTD5）；匹配大小写不敏感
 ALLOWED_WIDGET_TYPES = frozenset(
-    {
-        "Text",
-        "Textarea",
-        "Number",
-        "Money",
-        "Date",
-        "Selector",
-        # 企微文档偶发小写
-        "text",
-        "textarea",
-        "number",
-        "money",
-        "date",
-        "selector",
-    }
+    {"Text", "Textarea", "Number", "Money", "Date", "Selector"}
 )
-
 DENIED_WIDGET_TYPES = frozenset(
     {
         "File",
@@ -37,16 +22,10 @@ DENIED_WIDGET_TYPES = frozenset(
         "RelatedApproval",
         "Formula",
         "Contact",
-        "file",
-        "table",
-        "vacation",
-        "attendance",
-        "location",
-        "related_approval",
-        "formula",
-        "contact",
     }
 )
+_ALLOWED_WIDGET_TYPES_LOWER = frozenset(t.lower() for t in ALLOWED_WIDGET_TYPES)
+_DENIED_WIDGET_TYPES_LOWER = frozenset(t.lower() for t in DENIED_WIDGET_TYPES)
 
 RESOURCE_TYPE = "wecom_oa_approval"
 
@@ -63,11 +42,10 @@ def is_allowed_widget(widget_type: str) -> bool:
     wt = normalize_widget_type(widget_type)
     if not wt:
         return False
-    if wt in DENIED_WIDGET_TYPES:
+    lowered = wt.lower()
+    if lowered in _DENIED_WIDGET_TYPES_LOWER:
         return False
-    # 大小写不敏感匹配白名单
-    allowed_lower = {a.lower() for a in ALLOWED_WIDGET_TYPES}
-    return wt.lower() in allowed_lower
+    return lowered in _ALLOWED_WIDGET_TYPES_LOWER
 
 
 def validate_approval_config(config: dict[str, Any]) -> dict[str, Any]:

@@ -14,14 +14,6 @@ class WecomOaCredentialError(RuntimeError):
     """凭证缺失或解密失败。"""
 
 
-def encrypt_secret(plaintext: str) -> str:
-    return encrypt_channel_secret(plaintext)
-
-
-def decrypt_secret(token: str) -> str:
-    return decrypt_channel_secret(token)
-
-
 def store_oa_credential(
     db: Session,
     *,
@@ -50,19 +42,19 @@ def store_oa_credential(
         row = WecomOaAppCredential(
             tenant_id=tenant_id,
             corp_id=corp_id,
-            secret_enc=encrypt_secret(secret),
+            secret_enc=encrypt_channel_secret(secret),
         )
         db.add(row)
     else:
-        row.secret_enc = encrypt_secret(secret)
+        row.secret_enc = encrypt_channel_secret(secret)
         row.updated_at = utc_now()
     row.agentid = (agentid or "").strip() or None
     if callback_token is not None:
         token = str(callback_token).strip()
-        row.callback_token_enc = encrypt_secret(token) if token else None
+        row.callback_token_enc = encrypt_channel_secret(token) if token else None
     if callback_aes_key is not None:
         aes = str(callback_aes_key).strip()
-        row.callback_aes_key_enc = encrypt_secret(aes) if aes else None
+        row.callback_aes_key_enc = encrypt_channel_secret(aes) if aes else None
     if created_by_user_id and not row.created_by_user_id:
         row.created_by_user_id = created_by_user_id
     row.status = "active"
@@ -90,14 +82,14 @@ def load_plaintext_secrets(row: WecomOaAppCredential) -> dict[str, str]:
         raise WecomOaCredentialError("OA 应用 secret 缺失")
     out: dict[str, str] = {
         "corp_id": row.corp_id,
-        "secret": decrypt_secret(row.secret_enc),
+        "secret": decrypt_channel_secret(row.secret_enc),
     }
     if row.agentid:
         out["agentid"] = row.agentid
     if row.callback_token_enc:
-        out["callback_token"] = decrypt_secret(row.callback_token_enc)
+        out["callback_token"] = decrypt_channel_secret(row.callback_token_enc)
     if row.callback_aes_key_enc:
-        out["callback_aes_key"] = decrypt_secret(row.callback_aes_key_enc)
+        out["callback_aes_key"] = decrypt_channel_secret(row.callback_aes_key_enc)
     return out
 
 

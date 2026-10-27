@@ -380,7 +380,6 @@ class CapabilityManifestBuilder:
         return unavailable
 
 
-
 def _wecom_oa_approval_descriptor(
     db: Session, tenant_id: str, agent_id: str | None
 ) -> CapabilityDescriptor | None:

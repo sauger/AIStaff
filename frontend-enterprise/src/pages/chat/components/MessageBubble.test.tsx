@@ -102,6 +102,8 @@ describe('MessageBubble team group identity', () => {
       attachments: [],
       harnessArtifacts: [],
       statusOnly: false,
+      wecomApprovalConfirm: null,
+      wecomApprovalSubmitted: false,
     };
     const leader = {
       id: 'agent-leader',
@@ -165,6 +167,8 @@ describe('MessageBubble team group identity', () => {
       attachments: [],
       harnessArtifacts: [],
       statusOnly: false,
+      wecomApprovalConfirm: null,
+      wecomApprovalSubmitted: false,
     };
     const chat = {
       displayedTeam: { id: 'team-1', name: '项目组' } as TeamRead,
