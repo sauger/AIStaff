@@ -10,6 +10,18 @@ from sqlmodel import Session, select
 from app.db.models import ChannelIdentity, WecomTempIdentityBinding, utc_now
 
 
+def _corp_scope_matches(scope: str, corp_scope: str) -> bool:
+    """Exact match, or corp_scope + delimiter suffix (e.g. corp_id:bot_id).
+
+    Bare startswith is unsafe: corp_scope "ww" must not bind scope "wwcorp".
+    """
+    if not scope or not corp_scope:
+        return False
+    if scope == corp_scope:
+        return True
+    return scope.startswith(corp_scope + ":")
+
+
 @dataclass(frozen=True)
 class ResolvedWecomIdentity:
     wecom_userid: str
@@ -45,20 +57,19 @@ class DefaultIdentityResolver:
         if not staffdeck_user_id or not corp_scope:
             return None
 
-        channel_hit = self._from_channel_identity(
-            tenant_id=tenant_id,
-            staffdeck_user_id=staffdeck_user_id,
-            corp_scope=corp_scope,
-        )
+        # KTD4：临时表覆盖/补齐 — 先查临时表，命中则跳过 ChannelIdentity
         temp_hit = self._from_temp_binding(
             tenant_id=tenant_id,
             staffdeck_user_id=staffdeck_user_id,
             corp_scope=corp_scope,
         )
-        # KTD4：临时表覆盖/补齐
         if temp_hit is not None:
             return temp_hit
-        return channel_hit
+        return self._from_channel_identity(
+            tenant_id=tenant_id,
+            staffdeck_user_id=staffdeck_user_id,
+            corp_scope=corp_scope,
+        )
 
     def _from_channel_identity(
         self,
@@ -76,8 +87,7 @@ class DefaultIdentityResolver:
         ).all()
         for row in rows:
             scope = str(row.external_account_scope or "").strip()
-            # corp_scope 精确匹配，或 scope 以 corp_id 开头（兼容 bot_id 拼接）
-            if scope == corp_scope or scope.startswith(corp_scope):
+            if _corp_scope_matches(scope, corp_scope):
                 userid = str(row.external_user_id or "").strip()
                 if userid:
                     return ResolvedWecomIdentity(

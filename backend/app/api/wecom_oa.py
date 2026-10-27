@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -9,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
+from app.api.agents import _ensure_can_manage_agent
+from app.api.chat import _get_readable_chat_session
 from app.db import engine, get_session
 from app.db.models import AgentProfile, User, WecomApprovalIntent
 from app.security.auth import ensure_current_user_tenant, get_current_user
@@ -85,6 +88,19 @@ def _require_admin(tenant_id: str, user: User) -> None:
         raise HTTPException(status_code=403, detail="仅管理员可管理企微 OA 绑定与凭证")
 
 
+def _temp_binding_view(row, *, include_updated_at: bool = False) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "id": row.id,
+        "corp_scope": row.corp_scope,
+        "staffdeck_user_id": row.staffdeck_user_id,
+        "wecom_userid": row.wecom_userid,
+        "display_name": row.display_name,
+    }
+    if include_updated_at:
+        out["updated_at"] = row.updated_at.isoformat() if row.updated_at else None
+    return out
+
+
 @router.get("/credentials")
 def get_credentials(
     tenant_id: str = Query(...),
@@ -133,15 +149,7 @@ def get_temp_bindings(
     rows = list_temp_bindings(db, tenant_id=tenant_id, corp_scope=corp_scope)
     return {
         "bindings": [
-            {
-                "id": r.id,
-                "corp_scope": r.corp_scope,
-                "staffdeck_user_id": r.staffdeck_user_id,
-                "wecom_userid": r.wecom_userid,
-                "display_name": r.display_name,
-                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-            }
-            for r in rows
+            _temp_binding_view(r, include_updated_at=True) for r in rows
         ]
     }
 
@@ -166,15 +174,7 @@ def create_temp_binding(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "binding": {
-            "id": row.id,
-            "corp_scope": row.corp_scope,
-            "staffdeck_user_id": row.staffdeck_user_id,
-            "wecom_userid": row.wecom_userid,
-            "display_name": row.display_name,
-        }
-    }
+    return {"binding": _temp_binding_view(row)}
 
 
 @router.delete("/temp-identity-bindings/{binding_id}", status_code=204)
@@ -224,6 +224,7 @@ def put_agent_config(
     agent = db.get(AgentProfile, agent_id)
     if agent is None or agent.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="员工不存在")
+    _ensure_can_manage_agent(agent, current_user)
     try:
         row = save_agent_approval_config(
             db,
@@ -244,6 +245,7 @@ def session_intents(
     db: Session = Depends(get_session),
 ) -> dict[str, Any]:
     ensure_current_user_tenant(tenant_id, current_user)
+    _get_readable_chat_session(db, tenant_id, current_user, session_id)
     rows = list_intents_for_session(db, tenant_id=tenant_id, session_id=session_id)
     return {
         "intents": [
@@ -273,6 +275,14 @@ def confirm_and_maybe_submit(
     db: Session = Depends(get_session),
 ) -> dict[str, Any]:
     ensure_current_user_tenant(tenant_id, current_user)
+    _get_readable_chat_session(db, tenant_id, current_user, session_id)
+    intent_row = db.get(WecomApprovalIntent, body.intent_id)
+    if (
+        intent_row is None
+        or intent_row.tenant_id != tenant_id
+        or intent_row.session_id != session_id
+    ):
+        raise HTTPException(status_code=404, detail="意图不存在")
     if not body.submit:
         try:
             intent = confirm_intent(
@@ -306,6 +316,7 @@ def dismiss_confirm(
     intent = db.get(WecomApprovalIntent, intent_id)
     if intent is None or intent.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="意图不存在")
+    _get_readable_chat_session(db, tenant_id, current_user, intent.session_id)
     if intent.status in {"draft", "confirmed"} and not intent.sp_no:
         intent.status = "failed"
         intent.failure_reason = "用户取消确认，未提交"
@@ -357,8 +368,6 @@ async def callback_event(
             node = root.find("Encrypt")
             ciphertext = (node.text or "") if node is not None else ""
         else:
-            import json
-
             payload = json.loads(text or "{}")
             ciphertext = str(payload.get("Encrypt") or payload.get("encrypt") or "")
     except Exception as exc:
