@@ -54,6 +54,10 @@ class ChannelBindingAgentsUpdate(BaseModel):
     name: Optional[str] = None
 
 
+class ChannelBindingTransferRequest(BaseModel):
+    target_agent_id: str
+
+
 class ChannelBindingRead(BaseModel):
     """绑定信息对外视图：只暴露配置元数据，绝不回传凭证明文。"""
 

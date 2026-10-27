@@ -39,6 +39,7 @@ from app.channels.schema import (
     ChannelBindCodeRead,
     ChannelBindingAgentRead,
     ChannelBindingAgentsUpdate,
+    ChannelBindingTransferRequest,
     ChannelBindingCreate,
     ChannelBindingManagerCreate,
     ChannelBindingManagerRead,
@@ -790,6 +791,66 @@ def update_channel_binding_agents(
             db.commit()
         binding = _get_binding(db, tenant_id, binding_id)
         db.refresh(binding)
+        return channel_binding_read(db, binding, current_user)
+
+
+@router.post("/{binding_id}/transfer", response_model=ChannelBindingRead)
+def transfer_channel_binding(
+    binding_id: str,
+    request: ChannelBindingTransferRequest,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> ChannelBindingRead:
+    ensure_current_user_tenant(tenant_id, current_user)
+    binding = _get_binding(db, tenant_id, binding_id)
+    _ensure_binding_manager(
+        db, tenant_id, binding, current_user, action=_MANAGER_ACTION_AGENTS
+    )
+    if binding.team_id:
+        raise HTTPException(status_code=400, detail="团队绑定的渠道不支持转移")
+    target_agent_id = (request.target_agent_id or "").strip()
+    if not target_agent_id:
+        raise HTTPException(status_code=400, detail="目标员工不能为空")
+    if target_agent_id == binding.agent_id:
+        raise HTTPException(status_code=400, detail="目标员工不能与当前归属相同")
+    ensure_agent_scope_manager(db, tenant_id, target_agent_id, current_user)
+
+    from_agent = binding.agent_id
+    db.rollback()
+    with binding_lifecycle_lock(binding_id):
+        binding = _get_binding(db, tenant_id, binding_id)
+        if binding.team_id:
+            raise HTTPException(status_code=400, detail="团队绑定的渠道不支持转移")
+        if target_agent_id == binding.agent_id:
+            raise HTTPException(status_code=400, detail="目标员工不能与当前归属相同")
+        existing = db.exec(
+            select(ChannelBindingAgent).where(ChannelBindingAgent.binding_id == binding.id)
+        ).all()
+        for row in existing:
+            db.delete(row)
+        db.flush()
+        db.add(
+            ChannelBindingAgent(
+                tenant_id=tenant_id,
+                binding_id=binding.id,
+                agent_id=target_agent_id,
+                is_default=True,
+                sort_order=0,
+            )
+        )
+        binding.agent_id = target_agent_id
+        binding.updated_at = utc_now()
+        db.add(binding)
+        db.commit()
+        db.refresh(binding)
+        logger.info(
+            "channel_binding_transfer binding_id=%s from_agent=%s to_agent=%s actor=%s",
+            binding.id,
+            from_agent,
+            target_agent_id,
+            current_user.id,
+        )
         return channel_binding_read(db, binding, current_user)
 
 
