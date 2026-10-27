@@ -134,7 +134,7 @@ function renderPage() {
 }
 
 async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getAllByRole('button', { name: /接入渠道/ })[0]);
+  await user.click(screen.getAllByRole('button', { name: /新建渠道/ })[0]);
   await user.click(await screen.findByRole('button', { name: /微信/ }));
   // 命名步骤:默认名已预填,直接进入下一步
   await screen.findByText('命名接入');
@@ -162,7 +162,7 @@ describe('ChannelsPage', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
-    await user.click(screen.getAllByRole('button', { name: /接入渠道/ })[0]);
+    await user.click(screen.getAllByRole('button', { name: /新建渠道/ })[0]);
     await user.click(await screen.findByRole('button', { name: /微信/ }));
     // 命名步骤预填默认名:渠道名 + YYYYMMDDHHMM
     const nameInput = (await screen.findByLabelText('接入名称')) as HTMLInputElement;
@@ -188,7 +188,7 @@ describe('ChannelsPage', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
-    await user.click(screen.getAllByRole('button', { name: /接入渠道/ })[0]);
+    await user.click(screen.getAllByRole('button', { name: /新建渠道/ })[0]);
     await user.click(await screen.findByRole('button', { name: /微信/ }));
     const nameInput = (await screen.findByLabelText('接入名称')) as HTMLInputElement;
     await user.clear(nameInput);
@@ -341,5 +341,59 @@ describe('ChannelsPage', () => {
     await user.click(screen.getByRole('button', { name: '团队' }));
     expect(await screen.findByText('暂无可用团队')).toBeTruthy();
     expect(screen.getByRole('button', { name: '去创建团队' })).toBeTruthy();
+  });
+
+  const agentBinding: ChannelBindingRead = {
+    id: 'binding-agent-1',
+    tenant_id: 'tenant_demo',
+    agent_id: 'agent-1',
+    channel: 'wechat',
+    status: 'active',
+    connected: true,
+    name: '小艾微信',
+    agents: [{ agent_id: 'agent-1', name: '小艾', is_default: true }],
+    auto_route: false,
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+  };
+
+  it('shows 渠道管理 title and hides 智能分发', async () => {
+    vi.stubGlobal('fetch', makeFetchMock({ bindings: [agentBinding] }));
+    renderPage();
+    expect(await screen.findByText('渠道管理')).toBeTruthy();
+    expect(screen.queryByText('智能分发')).toBeNull();
+  });
+
+  it('posts transfer with target_agent_id after confirm', async () => {
+    const user = userEvent.setup();
+    const agents = [agent, { ...agent, id: 'agent-2', name: '小北' }];
+    const fetchMock = makeFetchMock({ bindings: [agentBinding], agents });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || 'GET';
+      if (method === 'POST' && url.includes('/transfer')) {
+        return jsonResponse({
+          ...agentBinding,
+          agent_id: 'agent-2',
+          agents: [{ agent_id: 'agent-2', name: '小北', is_default: true }],
+        });
+      }
+      return makeFetchMock({ bindings: [agentBinding], agents })(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
+    await screen.findByText('小艾微信');
+    await user.click(screen.getByRole('button', { name: /小艾微信/ }));
+    await user.click(await screen.findByRole('button', { name: '转移' }));
+    expect(await screen.findByText(/历史会话仍归原员工/)).toBeTruthy();
+    await user.click(await screen.findByText('小北'));
+    await user.click(screen.getByRole('button', { name: '确认转移' }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) => init?.method === 'POST' && String(input).includes('/transfer'),
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ target_agent_id: 'agent-2' });
+    });
   });
 });
