@@ -721,7 +721,12 @@ class HarnessCapabilityInvoker:
                 "published_at": artifact.get("published_at"),
             }
         )
-        return {"success": True, "data": data}
+        citations = artifact.get("knowledge_citations")
+        return {
+            "success": True,
+            "data": data,
+            "citations": citations if isinstance(citations, list) else [],
+        }
 
     def _search_capabilities(self, arguments: dict[str, Any]) -> dict[str, Any]:
         query = str(arguments.get("query") or "").strip()
