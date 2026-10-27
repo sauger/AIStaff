@@ -97,9 +97,7 @@ const DELIVERY_KIND_LABEL: Record<string, string> = {
 };
 
 const CHANNEL_COMMANDS: Array<{ command: string; description: string }> = [
-  { command: '/员工', description: '查看可调度员工' },
-  { command: '/切换 <员工名> 或 /<员工名>', description: '切换当前员工' },
-  { command: '/当前', description: '查看当前员工' },
+  { command: '/当前', description: '查看当前归属员工' },
   { command: '/帮助', description: '查看指令说明' },
 ];
 
