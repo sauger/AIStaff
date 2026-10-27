@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.db import engine, get_session
-from app.db.models import AgentProfile, AgentResourceBinding, User, WecomApprovalIntent
+from app.db.models import AgentProfile, User, WecomApprovalIntent
 from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import is_admin_user
 from app.wecom_oa.callback import (
@@ -33,9 +33,8 @@ from app.wecom_oa.identity import (
     upsert_temp_binding,
 )
 from app.wecom_oa.intent import WecomOaIntentError, confirm_intent, list_intents_for_session
-from app.wecom_oa.policy import RESOURCE_TYPE, WecomOaConfigError, validate_approval_config
+from app.wecom_oa.policy import WecomOaConfigError
 from app.wecom_oa.service import (
-    invoke_wecom_oa_approval,
     load_agent_approval_config,
     save_agent_approval_config,
     submit_approval,
@@ -51,27 +50,27 @@ chat_router = APIRouter(prefix="/api/chat/wecom-oa", tags=["chat:wecom-oa"])
 class OaCredentialUpsert(BaseModel):
     corp_id: str
     secret: str
-    agentid: Optional[str] = None
-    callback_token: Optional[str] = None
-    callback_aes_key: Optional[str] = None
+    agentid: str | None = None
+    callback_token: str | None = None
+    callback_aes_key: str | None = None
 
 
 class TempBindingUpsert(BaseModel):
     corp_scope: str
     staffdeck_user_id: str
     wecom_userid: str
-    display_name: Optional[str] = None
+    display_name: str | None = None
 
 
 class AgentApprovalConfigUpsert(BaseModel):
     template_id: str
     scenario_key: str = "default"
     applicant_mode: str
-    mode_a_userid: Optional[str] = None
+    mode_a_userid: str | None = None
     field_mappings: list[dict[str, Any]] = Field(default_factory=list)
     compliance_enabled: bool = False
-    compliance_policy_ref: Optional[str] = None
-    display_name: Optional[str] = None
+    compliance_policy_ref: str | None = None
+    display_name: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -207,7 +206,8 @@ def get_agent_config(
         config = load_agent_approval_config(
             db, tenant_id=tenant_id, agent_id=agent_id, scenario_key=scenario_key
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - missing/invalid config means empty UI state
+        logger.debug("approval config unavailable for agent=%s: %s", agent_id, exc)
         return {"config": None}
     return {"config": config}
 
@@ -361,7 +361,7 @@ async def callback_event(
 
             payload = json.loads(text or "{}")
             ciphertext = str(payload.get("Encrypt") or payload.get("encrypt") or "")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=400, detail="回调体无效") from exc
     if not all((msg_signature, timestamp, nonce, ciphertext)):
         raise HTTPException(status_code=400, detail="缺少回调参数")

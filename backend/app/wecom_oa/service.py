@@ -606,7 +606,7 @@ def _default_compliance_check(
             if token in blob:
                 return False, f"policy_check signaled: {token}"
         return True, "policy_check completed"
-    except Exception as exc:  # noqa: BLE001 — 合规失败应拒绝提交
+    except Exception as exc:
         logger.exception("compliance check error")
         return False, f"合规检查异常：{exc}"
 

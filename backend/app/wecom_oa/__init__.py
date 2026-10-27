@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 __all__ = [
+    "callback",
     "client",
     "credentials",
     "identity",
     "intent",
     "policy",
-    "callback",
     "service",
 ]
