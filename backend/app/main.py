@@ -85,6 +85,11 @@ def on_startup() -> None:
         with Session(engine) as db:
             seed_demo_data(db)
             recover_orphan_harness_runs(db, startup=True)
+            from app.channels.service_single_owner import prune_multi_agent_mounts
+
+            pruned = prune_multi_agent_mounts(db)
+            if pruned:
+                db.commit()
         recover_codex_a2a_tasks()
         recover_a2a_client_tasks()
         start_external_task_worker()
