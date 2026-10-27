@@ -62,9 +62,10 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 - typed 文件工具的相对路径默认从当前 TaskFrame workspace 起算，也接受 `..`、绝对路径和
   `~`；只有用户明确提供或任务明确需要时才访问 workspace 外部，不要猜测或虚构宿主机路径。
   实际可访问范围由 StaffDeck 进程权限及管理员配置的 OS 沙箱策略决定。
-  TaskFrame 结束时系统会发现本轮新增或修改的用户文件并提供下载，因此同一任务生成的
-  源码、图片、文档等多个相关文件都应保留。`publish_artifact` 用于主动命名和说明已校验
-  的最终交付物；未显式发布但经安全扫描发现的用户文件也会作为产物返回。
+  TaskFrame 结束时，如果本轮没有显式发布文件，系统会把本轮新增或修改的用户文件作为
+  产物返回；一旦调用 `publish_artifact` 显式发布了任一文件，自动发现即关闭，所有需要
+  交付的文件都必须逐个显式发布。`publish_artifact` 用于命名和说明已校验的最终交付物；
+  不要把脚本、中间 Markdown、缓存或构建产物发布给用户。
 - HTTP/MCP Tool 的 JSON 结果序列化后不超过 2000 字符时直接返回；更大的结果只返回
   `kind=sandbox_json_file`、`sandbox_path`、`size` 和 `sha256`，完整内容保存在当前
   TaskFrame 沙箱。`sandbox_path` 是不透明地址，调用 `read_file` 时必须将其完整值直接放入

@@ -1288,9 +1288,11 @@ class ChannelDelivery(SQLModel, table=True):
     message_id: Optional[str] = Field(default=None, index=True)
     # 投递目标：to_user_id + context_token
     target_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
-    # reply/error_notice
+    # reply/file/error_notice
     kind: str = Field(default="reply", index=True)
     text: str
+    # kind=file 时的产物引用（task_frame_id/path/display_name/size/sha256/share_token）
+    artifact_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # pending/sending/delivered/failed
     status: str = Field(default="pending", index=True)
     attempts: int = 0

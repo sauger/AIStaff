@@ -234,6 +234,8 @@ def _filename_from_content_disposition(value: str) -> str:
 
 
 class WeChatKfAdapter:
+    file_max_bytes = 20 * 1024 * 1024
+
     def __init__(self, token_provider: WeChatKfTokenProvider | None = None) -> None:
         self._tokens = token_provider or WeChatKfTokenProvider()
 
@@ -485,6 +487,97 @@ class WeChatKfAdapter:
                     "text": {"content": chunk},
                 },
             )
+
+    def _upload_media(
+        self,
+        binding: ChannelBinding,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        media_type: str,
+    ) -> str:
+        token = self._tokens.get(binding)
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    f"{WECOM_API_BASE}/media/upload",
+                    params={"access_token": token, "type": media_type},
+                    files={
+                        "media": (
+                            filename,
+                            content,
+                            content_type or "application/octet-stream",
+                        )
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise WeChatKfTransientError("微信客服文件上传失败") from exc
+        errcode = int(data.get("errcode") or 0)
+        if errcode in {40014, 42001}:
+            self._tokens.invalidate(binding)
+            raise WeChatKfTransientError("微信客服 access_token 已失效")
+        if errcode != 0:
+            error = WeChatKfPermanentError(
+                f"微信客服文件上传失败: {data.get('errmsg') or errcode}"
+            )
+            if errcode in {45009, 45011}:
+                error.retryable = True
+            raise error
+        media_id = str(data.get("media_id") or "").strip()
+        if not media_id:
+            raise WeChatKfTransientError("微信客服文件上传未返回 media_id")
+        return media_id
+
+    def send_file(
+        self,
+        binding: ChannelBinding,
+        target: dict[str, Any],
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        caption: str = "",
+        idempotency_key: str | None = None,
+    ) -> None:
+        to_user = str(target.get("to_user_id") or "").strip()
+        open_kfid = str(target.get("open_kfid") or "").strip()
+        if not to_user or not open_kfid:
+            raise WeChatKfPermanentError("微信客服投递目标无效")
+        if not filename or not content:
+            raise WeChatKfPermanentError("微信客服文件投递内容为空")
+        is_image = str(content_type or "").lower().startswith("image/")
+        limit = WECOM_KF_IMAGE_MAX_BYTES if is_image else self.file_max_bytes
+        if len(content) > limit:
+            raise WeChatKfPermanentError("微信客服文件超过大小上限")
+        media_id = self._upload_media(
+            binding,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+            media_type="image" if is_image else "file",
+        )
+        msg_id = hashlib.sha256(str(idempotency_key or "").encode()).hexdigest()[:32]
+        body = (
+            {
+                "touser": to_user,
+                "open_kfid": open_kfid,
+                "msgid": msg_id,
+                "msgtype": "image",
+                "image": {"media_id": media_id},
+            }
+            if is_image
+            else {
+                "touser": to_user,
+                "open_kfid": open_kfid,
+                "msgid": msg_id,
+                "msgtype": "file",
+                "file": {"media_id": media_id},
+            }
+        )
+        self._post(binding, "/kf/send_msg", body)
 
     def start_ingress(self, binding_id: str) -> None:
         return None

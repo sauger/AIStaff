@@ -1203,6 +1203,9 @@ def process_inbound(
         "to_user_id": inbound.conv_key if inbound.is_group else inbound.from_user_id,
         "context_token": inbound.context_token,
     }
+    if binding.channel == "dingtalk":
+        # 钉钉原生文件消息走服务端 API，群聊需要 openConversationId。
+        target["conversation_id"] = inbound.session_id
     if inbound.is_group:
         target["reply_to_user_id"] = inbound.from_user_id
         target["is_group"] = True

@@ -207,14 +207,14 @@ CHANNEL_META = [
                 "secret": True,
             },
         ],
-        "capabilities": ["text", "callback"],
+        "capabilities": ["text", "callback", "file"],
     },
     {
         "channel": "wechat",
         "name": "微信",
         "setup": "qrcode",
         "credential_fields": [],
-        "capabilities": ["typing"],
+        "capabilities": ["typing", "file"],
     },
     {
         "channel": "wecom",
@@ -231,7 +231,7 @@ CHANNEL_META = [
                 "optional": False,
             },
         ],
-        "capabilities": [],
+        "capabilities": ["file"],
     },
     {
         "channel": "feishu",
@@ -241,7 +241,7 @@ CHANNEL_META = [
             {"key": "app_id", "label": "App ID", "placeholder": "cli_xxx", "secret": False},
             {"key": "app_secret", "label": "App Secret", "placeholder": None, "secret": True},
         ],
-        "capabilities": [],
+        "capabilities": ["file"],
     },
     {
         "channel": "dingtalk",
@@ -251,7 +251,7 @@ CHANNEL_META = [
             {"key": "client_id", "label": "Client ID", "placeholder": "钉钉开放平台获取", "secret": False},
             {"key": "client_secret", "label": "Client Secret", "placeholder": None, "secret": True},
         ],
-        "capabilities": [],
+        "capabilities": ["file"],
     },
 ]
 

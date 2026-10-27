@@ -283,6 +283,10 @@ def _migrate_sqlite_skill_schema() -> None:
                         "INTEGER NOT NULL DEFAULT 0"
                     )
                 )
+            if "artifact_json" not in delivery_columns:
+                conn.execute(
+                    text("ALTER TABLE channel_deliveries ADD COLUMN artifact_json JSON")
+                )
 
         if "channel_inbound_events" in tables:
             inbound_columns = {

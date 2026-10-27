@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ import threading
 import time
 from datetime import timedelta
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 from uuid import uuid4
 
 import aiohttp
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 CHANNEL_VERSION = "1.0.0"
 WECHAT_TEXT_LIMIT = 2000
+WECHAT_CDN_BASE = "https://novac2c.cdn.weixin.qq.com/c2c"
 GETUPDATES_TIMEOUT_SECONDS = 40.0
 SESSION_EXPIRED_ERRCODE = -14
 POLL_BACKOFF_START_SECONDS = 2.0
@@ -202,6 +204,17 @@ def decrypt_wechat_media(data: bytes, aes_key: str, *, expected_size: int = 0) -
             f"微信媒体解密后大小不匹配 expected={expected_size} actual={len(decrypted)}",
         )
     return decrypted
+
+
+def encrypt_wechat_media(data: bytes, aes_key: bytes) -> bytes:
+    """Encrypt iLink CDN media using its fixed AES-ECB/PKCS#7 wire format."""
+
+    padder = padding.PKCS7(algorithms.AES.block_size).padder()
+    padded = padder.update(data) + padder.finalize()
+    # The iLink CDN protocol requires AES-ECB; this is transport compatibility,
+    # not reusable storage encryption.
+    encryptor = Cipher(algorithms.AES(aes_key), modes.ECB()).encryptor()
+    return encryptor.update(padded) + encryptor.finalize()
 
 
 def _patch_runtime_config(
@@ -419,6 +432,117 @@ class WeChatClient:
             if errcode:
                 raise WeChatApiError(int(errcode), str(data.get("errmsg") or ""))
 
+    def send_file(
+        self,
+        to_user_id: str,
+        context_token: str,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        client_id: str = "",
+    ) -> None:
+        is_image = str(content_type or "").lower().startswith("image/")
+        item_type = 2 if is_image else 4
+        media_type = 1 if is_image else 3
+        aes_key = os.urandom(16)
+        encrypted = encrypt_wechat_media(content, aes_key)
+        filekey = os.urandom(16).hex()
+        try:
+            response = self._client.post(
+                f"{self.base_url}/ilink/bot/getuploadurl",
+                headers=self._business_headers(),
+                json={
+                    "filekey": filekey,
+                    "media_type": media_type,
+                    "to_user_id": to_user_id,
+                    "rawsize": len(content),
+                    "rawfilemd5": hashlib.md5(content).hexdigest(),
+                    "filesize": len(encrypted),
+                    "no_need_thumb": True,
+                    "aeskey": aes_key.hex(),
+                    "base_info": self._base_info(),
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            upload_data = response.json() if response.content else {}
+        except (httpx.HTTPError, ValueError) as exc:
+            raise WeChatApiError(-1, "微信文件上传地址请求失败") from exc
+        if isinstance(upload_data, dict):
+            ret = upload_data.get("ret") or upload_data.get("errcode") or 0
+            if ret:
+                raise WeChatApiError(int(ret), str(upload_data.get("errmsg") or ""))
+        upload_url = str((upload_data or {}).get("upload_full_url") or "").strip()
+        if not upload_url:
+            upload_param = str((upload_data or {}).get("upload_param") or "").strip()
+            if not upload_param:
+                raise WeChatApiError(-1, "微信文件上传地址为空")
+            upload_url = (
+                f"{WECHAT_CDN_BASE}/upload?encrypted_query_param="
+                f"{quote(upload_param, safe='')}&filekey={quote(filekey, safe='')}"
+            )
+        try:
+            uploaded = self._client.post(
+                upload_url,
+                content=encrypted,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "User-Agent": "Mozilla/5.0",
+                },
+                timeout=120.0,
+            )
+        except httpx.HTTPError as exc:
+            raise WeChatApiError(-1, "微信文件上传失败") from exc
+        if uploaded.status_code >= 400:
+            raise WeChatApiError(-1, f"微信文件上传失败 HTTP {uploaded.status_code}")
+        download_param = str(uploaded.headers.get("x-encrypted-param") or "").strip()
+        if not download_param:
+            raise WeChatApiError(-1, "微信文件上传未返回下载参数")
+        media_ref = {
+            "encrypt_query_param": download_param,
+            "aes_key": base64.b64encode(aes_key.hex().encode("ascii")).decode("ascii"),
+            "encrypt_type": 1,
+        }
+        if is_image:
+            item = {
+                "type": item_type,
+                "image_item": {"media": media_ref, "mid_size": len(encrypted)},
+            }
+        else:
+            item = {
+                "type": item_type,
+                "file_item": {
+                    "media": media_ref,
+                    "file_name": filename,
+                    "len": str(len(content)),
+                },
+            }
+        payload = {
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": to_user_id,
+                "client_id": client_id or f"staffdeck:{uuid4().hex}",
+                "message_type": 2,
+                "message_state": 2,
+                "context_token": context_token,
+                "item_list": [item],
+            },
+            "base_info": self._base_info(),
+        }
+        resp = self._client.post(
+            f"{self.base_url}/ilink/bot/sendmessage",
+            headers=self._business_headers(),
+            json=payload,
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        if isinstance(data, dict):
+            errcode = data.get("errcode") or data.get("ret") or 0
+            if errcode:
+                raise WeChatApiError(int(errcode), str(data.get("errmsg") or ""))
+
     def get_config(self, ilink_user_id: str, context_token: str = "") -> dict[str, Any]:
         resp = self._client.post(
             f"{self.base_url}/ilink/bot/getconfig",
@@ -537,6 +661,8 @@ class WeChatClient:
 class WeChatAdapter:
     """微信适配器:出站 sendmessage + 归一化 + typing + ingress(poll manager)。"""
 
+    file_max_bytes = 25 * 1024 * 1024
+
     def __init__(self, client_factory=None):
         self._client_factory = client_factory or WeChatClient.for_binding
 
@@ -583,6 +709,33 @@ class WeChatAdapter:
         for index, chunk in enumerate(split_wechat_text(text)):
             client_id = f"staffdeck:{idempotency_key}:{index}" if idempotency_key else ""
             client.send_message(to_user_id, context_token, chunk, client_id=client_id)
+
+    def send_file(
+        self,
+        binding: ChannelBinding,
+        target: dict[str, Any],
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        caption: str = "",
+        idempotency_key: str | None = None,
+    ) -> None:
+        to_user_id = str(target.get("to_user_id") or "").strip()
+        context_token = str(target.get("context_token") or "").strip()
+        if not to_user_id or not context_token:
+            raise ValueError("微信文件投递目标缺少 to_user_id 或 context_token")
+        if len(content) > self.file_max_bytes:
+            raise ValueError("微信文件超过 25MB 上限")
+        client = self._client_factory(binding)
+        client.send_file(
+            to_user_id,
+            context_token,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+            client_id=f"staffdeck:{idempotency_key}:file" if idempotency_key else "",
+        )
 
     def send_typing(
         self,

@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import time
+from pathlib import PurePath
 from typing import Any, Callable
 
 import httpx
@@ -28,6 +29,15 @@ from app.db.models import ChannelBinding
 FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 TOKEN_REFRESH_SKEW_SECONDS = 300
 FEISHU_REACTION_TOKEN = "Get"
+_FEISHU_FILE_TYPES = {
+    ".pdf": "pdf",
+    ".doc": "doc",
+    ".docx": "doc",
+    ".xls": "xls",
+    ".xlsx": "xls",
+    ".ppt": "ppt",
+    ".pptx": "ppt",
+}
 _TOKEN_INVALID_CODES = {99991663, 99991664, 99991668}
 _PERMANENT_MESSAGE_CODES = {
     230001,  # invalid request/target
@@ -168,6 +178,7 @@ class FeishuAdapter:
     # 先用 find_own_reaction() 回查，不能直接重发。
     reaction_attach_idempotent = False
     reaction_token = FEISHU_REACTION_TOKEN
+    file_max_bytes = 25 * 1024 * 1024
 
     def __init__(
         self,
@@ -588,6 +599,136 @@ class FeishuAdapter:
                 )
             created_message_id = str((data.get("data") or {}).get("message_id") or "").strip() or None
         return created_message_id
+
+    def _upload_media(
+        self,
+        binding: ChannelBinding,
+        path: str,
+        *,
+        form: dict[str, str],
+        file_field: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> dict[str, Any]:
+        force_refresh = False
+        for attempt in range(2):
+            token = self._tokens.get(binding, force_refresh=force_refresh)
+            force_refresh = False
+            try:
+                with self._client_factory() as client:
+                    response = client.post(
+                        f"{FEISHU_API_BASE}{path}",
+                        headers={"Authorization": f"Bearer {token}"},
+                        data=form,
+                        files={
+                            file_field: (
+                                filename,
+                                content,
+                                content_type or "application/octet-stream",
+                            )
+                        },
+                    )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                raise FeishuTransientError("飞书文件上传暂时失败") from exc
+            if response.status_code == 401 and attempt == 0:
+                force_refresh = self._tokens.invalidate(binding, expected_token=token)
+                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                raise FeishuTransientError("飞书文件服务暂时不可用")
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise FeishuTransientError("飞书文件上传响应格式无效") from exc
+            code = int(payload.get("code", -1))
+            if code in _TOKEN_INVALID_CODES and attempt == 0:
+                force_refresh = self._tokens.invalidate(binding, expected_token=token)
+                continue
+            if response.status_code >= 400 or code != 0:
+                raise FeishuPermanentError(f"飞书拒绝文件上传 code={code}")
+            return dict(payload.get("data") or {})
+        raise FeishuPermanentError("飞书 token 刷新后仍无效")
+
+    def send_file(
+        self,
+        binding: ChannelBinding,
+        target: dict[str, Any],
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        caption: str = "",
+        idempotency_key: str | None = None,
+    ) -> str | None:
+        key = str(idempotency_key or "").strip()
+        if not key:
+            raise FeishuPermanentError("飞书文件投递缺少幂等键")
+        if not filename or not content:
+            raise FeishuPermanentError("飞书文件投递内容为空")
+        if len(content) > self.file_max_bytes:
+            raise FeishuPermanentError("飞书文件超过 25MB 上限")
+        is_image = str(content_type or "").lower().startswith("image/")
+        if is_image:
+            uploaded = self._upload_media(
+                binding,
+                "/im/v1/images",
+                form={"image_type": "message"},
+                file_field="image",
+                filename=filename,
+                content=content,
+                content_type=content_type,
+            )
+            body: dict[str, Any] = {
+                "msg_type": "image",
+                "content": json.dumps(
+                    {"image_key": str(uploaded.get("image_key") or "")},
+                    ensure_ascii=False,
+                ),
+                "uuid": self._uuid(key, 0),
+            }
+        else:
+            file_type = _FEISHU_FILE_TYPES.get(
+                PurePath(filename).suffix.lower(), "stream"
+            )
+            uploaded = self._upload_media(
+                binding,
+                "/im/v1/files",
+                form={"file_type": file_type, "file_name": filename},
+                file_field="file",
+                filename=filename,
+                content=content,
+                content_type=content_type,
+            )
+            file_key = str(uploaded.get("file_key") or "").strip()
+            if not file_key:
+                raise FeishuTransientError("飞书文件上传未返回 file_key")
+            body = {
+                "msg_type": "file",
+                "content": json.dumps({"file_key": file_key}, ensure_ascii=False),
+                "uuid": self._uuid(key, 0),
+            }
+        message_id = str(target.get("message_id") or "").strip()
+        receive_id = str(target.get("receive_id") or "").strip()
+        receive_id_type = str(target.get("receive_id_type") or "").strip()
+        if message_id:
+            body["reply_in_thread"] = bool(target.get("reply_in_thread"))
+            data = self._post(
+                binding,
+                f"{FEISHU_API_BASE}/im/v1/messages/{message_id}/reply",
+                params=None,
+                body=body,
+            )
+        elif receive_id and receive_id_type:
+            body["receive_id"] = receive_id
+            data = self._post(
+                binding,
+                f"{FEISHU_API_BASE}/im/v1/messages",
+                params={"receive_id_type": receive_id_type},
+                body=body,
+            )
+        else:
+            raise FeishuPermanentError("飞书投递目标无效")
+        return str((data.get("data") or {}).get("message_id") or "").strip() or None
 
     def start_ingress(self, binding_id: str) -> None:
         from app.channels import get_feishu_process_manager

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import mimetypes
 import threading
 from datetime import timedelta
+from pathlib import PurePath
 
 from sqlalchemy import func, or_, update
 from sqlmodel import Session, select
 
 from app.channels.adapters.base import channel_reaction_token
+from app.channels.artifact_links import (
+    artifact_link_expires_at,
+    build_channel_artifact_url,
+    new_artifact_share_token,
+)
 from app.channels.service_durable_inbox import reaction_target
 from app.channels.service_identity import external_account_scope
 from app.config import get_settings
@@ -25,6 +33,7 @@ from app.db.models import (
     new_id,
     utc_now,
 )
+from app.harness import HarnessArtifactAccessError, open_harness_artifact
 from app.session.origin import PILOTDECK_GROUP_CHAT_CHANNEL
 
 logger = logging.getLogger(__name__)
@@ -47,6 +56,127 @@ _NON_DELIVERY_CHANNELS = {
 _INTERNAL_SLOT_KEYS = frozenset(
     {"handoff_confirmed", "message_content", "_tool_results"}
 )
+_MAX_FILES_PER_MESSAGE = 5
+_MAX_CHANNEL_FILE_BYTES = 25 * 1024 * 1024
+_DELIVERABLE_CONTENT_TYPES = frozenset(
+    {
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "text/csv",
+        "text/plain",
+        "text/markdown",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+    }
+)
+_DELIVERABLE_SUFFIXES = frozenset(
+    {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".ppt",
+        ".pptx",
+        ".csv",
+        ".txt",
+        ".md",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+    }
+)
+
+
+def _deliverable_artifact(raw: object) -> dict[str, object] | None:
+    if not isinstance(raw, dict) or raw.get("type") != "workspace_file":
+        return None
+    task_frame_id = str(raw.get("task_frame_id") or "").strip()
+    path = str(raw.get("path") or "").strip()
+    if not task_frame_id or not path:
+        return None
+    display_name = str(raw.get("display_name") or PurePath(path).name).strip()
+    if not display_name:
+        return None
+    display_name = display_name[:180]
+    suffix = PurePath(display_name).suffix.lower()
+    content_type = str(raw.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if not content_type or content_type == "application/octet-stream":
+        content_type = (mimetypes.guess_type(display_name)[0] or "").lower()
+    if content_type not in _DELIVERABLE_CONTENT_TYPES and suffix not in _DELIVERABLE_SUFFIXES:
+        return None
+    size = raw.get("size")
+    if isinstance(size, int) and size > _MAX_CHANNEL_FILE_BYTES:
+        return None
+    return {
+        "task_frame_id": task_frame_id,
+        "path": path,
+        "display_name": display_name,
+        "content_type": content_type or "application/octet-stream",
+        "size": size if isinstance(size, int) and size >= 0 else None,
+        "sha256": str(raw.get("sha256") or "").strip().lower() or None,
+        "description": str(raw.get("description") or "").strip()[:500] or None,
+    }
+
+
+def _stage_artifact_deliveries(
+    db: Session,
+    chat_session: ChatSession,
+    binding: ChannelBinding,
+    message: Message,
+    target: dict,
+    *,
+    base_idempotency_key: str,
+) -> None:
+    metadata = message.metadata_json if isinstance(message.metadata_json, dict) else {}
+    raw_artifacts = metadata.get("harness_artifacts")
+    if not isinstance(raw_artifacts, list):
+        return
+    seen: set[tuple[str, str]] = set()
+    staged = 0
+    for index, raw in enumerate(raw_artifacts):
+        if staged >= _MAX_FILES_PER_MESSAGE:
+            return
+        artifact = _deliverable_artifact(raw)
+        if artifact is None:
+            continue
+        identity = (str(artifact["task_frame_id"]), str(artifact["path"]))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        key = f"{base_idempotency_key}:file:{index}"
+        existing = db.exec(
+            select(ChannelDelivery).where(ChannelDelivery.idempotency_key == key)
+        ).first()
+        if existing is not None:
+            continue
+        artifact["share_token"] = new_artifact_share_token()
+        artifact["share_expires_at"] = artifact_link_expires_at()
+        display_name = str(artifact["display_name"])
+        db.add(
+            ChannelDelivery(
+                tenant_id=chat_session.tenant_id,
+                binding_id=binding.id,
+                session_id=chat_session.id,
+                message_id=message.id,
+                target_json=dict(target),
+                kind="file",
+                text=f"已生成文件：{display_name}",
+                artifact_json=dict(artifact),
+                status="pending",
+                next_attempt_at=utc_now(),
+                idempotency_key=key,
+            )
+        )
+        staged += 1
+
 
 
 def _stage_failed_delivery(
@@ -153,10 +283,17 @@ def _find_active_binding_for_agent(db: Session, chat_session: ChatSession) -> Ch
     return None
 
 
-def stage_channel_delivery(db: Session, chat_session: ChatSession, message: Message) -> None:
-    """把 assistant 回复登记为渠道 outbox 投递（随主事务提交，不单独 commit）。
+def stage_channel_delivery(
+    db: Session,
+    chat_session: ChatSession,
+    message: Message,
+    *,
+    include_reply: bool = True,
+) -> None:
+    """把 assistant 回复/文件登记为渠道 outbox 投递（随主事务提交，不单独 commit）。
 
-    Web 会话不受渠道 staging 影响；渠道会话必须留下 delivery 或让事务失败。
+    ``include_reply=False`` 用于文本已经通过流式通道直接发出的情况（如企微），
+    此时仍必须登记文件投递。Web 会话不受渠道 staging 影响。
     """
     try:
         channel = str(getattr(chat_session, "channel", None) or "").strip()
@@ -168,14 +305,15 @@ def stage_channel_delivery(db: Session, chat_session: ChatSession, message: Mess
         if binding_id:
             binding = db.get(ChannelBinding, binding_id)
             if not binding or binding.status != "active":
-                _stage_failed_delivery(
-                    db,
-                    chat_session,
-                    message,
-                    binding_id=binding_id,
-                    target=dict(chat_session.channel_target_json or {}),
-                    error="binding_missing_or_inactive",
-                )
+                if include_reply:
+                    _stage_failed_delivery(
+                        db,
+                        chat_session,
+                        message,
+                        binding_id=binding_id,
+                        target=dict(chat_session.channel_target_json or {}),
+                        error="binding_missing_or_inactive",
+                    )
                 return
             if binding.tenant_id != chat_session.tenant_id or binding.channel != chat_session.channel:
                 raise RuntimeError("渠道会话与绑定租户或渠道不一致")
@@ -211,14 +349,6 @@ def stage_channel_delivery(db: Session, chat_session: ChatSession, message: Mess
             db.add(chat_session)
             db.flush()
         target = _immutable_delivery_target(db, binding, chat_session, message)
-        idempotency_key = _reply_idempotency_key(db, binding.id, message)
-        existing = db.exec(
-            select(ChannelDelivery).where(
-                ChannelDelivery.idempotency_key == idempotency_key
-            )
-        ).first()
-        if existing:
-            return
         if binding.channel == "feishu":
             valid_target = bool(target.get("message_id") or target.get("receive_id"))
         elif binding.channel == "wechat_kf":
@@ -226,35 +356,61 @@ def stage_channel_delivery(db: Session, chat_session: ChatSession, message: Mess
         else:
             valid_target = bool(target.get("to_user_id") and target.get("context_token"))
         if not valid_target:
-            _stage_failed_delivery(
-                db,
-                chat_session,
-                message,
-                binding_id=binding.id,
-                target=target,
-                error="delivery_target_missing",
-                idempotency_key=idempotency_key,
-            )
+            if include_reply:
+                _stage_failed_delivery(
+                    db,
+                    chat_session,
+                    message,
+                    binding_id=binding.id,
+                    target=target,
+                    error="delivery_target_missing",
+                    idempotency_key=_reply_idempotency_key(db, binding.id, message),
+                )
             return
-        db.add(
-            ChannelDelivery(
-                tenant_id=chat_session.tenant_id,
-                binding_id=binding.id,
-                session_id=chat_session.id,
-                message_id=message.id,
-                target_json=target,
-                kind="reply",
-                text=message.content,
-                status="pending",
-                next_attempt_at=utc_now(),
-                idempotency_key=idempotency_key,
+        idempotency_key = _reply_idempotency_key(db, binding.id, message)
+        if include_reply:
+            existing = db.exec(
+                select(ChannelDelivery).where(
+                    ChannelDelivery.idempotency_key == idempotency_key
+                )
+            ).first()
+            if existing:
+                # 文本投递可能已在崩溃前落库，但文件行尚未登记。
+                _stage_artifact_deliveries(
+                    db,
+                    chat_session,
+                    binding,
+                    message,
+                    target,
+                    base_idempotency_key=idempotency_key,
+                )
+                return
+            db.add(
+                ChannelDelivery(
+                    tenant_id=chat_session.tenant_id,
+                    binding_id=binding.id,
+                    session_id=chat_session.id,
+                    message_id=message.id,
+                    target_json=target,
+                    kind="reply",
+                    text=message.content,
+                    status="pending",
+                    next_attempt_at=utc_now(),
+                    idempotency_key=idempotency_key,
+                )
             )
+        _stage_artifact_deliveries(
+            db,
+            chat_session,
+            binding,
+            message,
+            target,
+            base_idempotency_key=idempotency_key,
         )
     except Exception:
         logger.exception("渠道投递登记失败 session=%s", getattr(chat_session, "id", None))
         if getattr(chat_session, "channel", None):
             raise
-
 
 def _deliver_due(db: Session, *, reaction_lane: bool = False) -> int:
     now = utc_now()
@@ -453,6 +609,110 @@ def _deliver_one(db: Session, delivery: ChannelDelivery) -> None:
         _deliver_one_locked(db, delivery)
 
 
+def _deliver_file(
+    db: Session,
+    delivery: ChannelDelivery,
+    adapter,
+    binding: ChannelBinding,
+    target: dict,
+) -> str | None:
+    """Send one staged artifact natively, or fall back to a signed download link."""
+
+    from app.core.harness_session_cleanup import harness_task_workspace_path
+
+    artifact = dict(delivery.artifact_json or {})
+    task_frame_id = str(artifact.get("task_frame_id") or "").strip()
+    relative_path = str(artifact.get("path") or "").strip()
+    if not task_frame_id or not relative_path:
+        error = RuntimeError("文件投递缺少产物引用")
+        error.retryable = False
+        raise error
+    try:
+        workspace_root = harness_task_workspace_path(
+            tenant_id=delivery.tenant_id,
+            session_id=delivery.session_id,
+            task_frame_id=task_frame_id,
+            db=db,
+        )
+        opened = open_harness_artifact(workspace_root, relative_path)
+    except (HarnessArtifactAccessError, OSError) as exc:
+        error = RuntimeError("文件产物不可读或已被清理")
+        error.retryable = False
+        raise error from exc
+    try:
+        if opened.size > _MAX_CHANNEL_FILE_BYTES:
+            return _send_artifact_link(adapter, binding, target, delivery, artifact)
+        data = b"".join(opened.iter_bytes(64 * 1024))
+    finally:
+        opened.close()
+
+    expected_size = artifact.get("size")
+    if isinstance(expected_size, int) and expected_size >= 0 and len(data) != expected_size:
+        error = RuntimeError("文件产物大小与登记不一致")
+        error.retryable = False
+        raise error
+    expected_sha = str(artifact.get("sha256") or "").strip().lower()
+    if expected_sha and hashlib.sha256(data).hexdigest() != expected_sha:
+        error = RuntimeError("文件产物校验失败")
+        error.retryable = False
+        raise error
+
+    send_file = getattr(adapter, "send_file", None)
+    file_limit = int(getattr(adapter, "file_max_bytes", _MAX_CHANNEL_FILE_BYTES))
+    if callable(send_file) and len(data) <= file_limit:
+        try:
+            return send_file(
+                binding,
+                target,
+                filename=str(artifact.get("display_name") or "artifact"),
+                content=data,
+                content_type=str(
+                    artifact.get("content_type") or "application/octet-stream"
+                ),
+                caption=delivery.text,
+                idempotency_key=delivery.idempotency_key,
+            )
+        except Exception as exc:
+            if bool(getattr(exc, "retryable", True)):
+                raise
+            logger.warning(
+                "渠道原生文件发送失败，降级为下载链接 delivery=%s: %s",
+                delivery.id,
+                exc,
+            )
+    return _send_artifact_link(adapter, binding, target, delivery, artifact)
+
+
+def _send_artifact_link(
+    adapter,
+    binding: ChannelBinding,
+    target: dict,
+    delivery: ChannelDelivery,
+    artifact: dict,
+) -> str | None:
+    url = build_channel_artifact_url(delivery.id, artifact)
+    if not url:
+        error = RuntimeError("未配置 PUBLIC_BASE_URL，无法生成文件下载链接")
+        error.retryable = False
+        raise error
+    size = artifact.get("size")
+    size_text = ""
+    if isinstance(size, int) and size > 0:
+        size_text = f"（{size / (1024 * 1024):.1f} MB）"
+    filename = str(artifact.get("display_name") or "文件")
+    text = (
+        f"{delivery.text}\n"
+        f"{filename}{size_text}\n"
+        f"下载链接（24 小时内有效）：{url}"
+    )
+    return adapter.send(
+        binding,
+        target,
+        text,
+        idempotency_key=f"{delivery.idempotency_key}:link",
+    )
+
+
 def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
     from app.channels.adapters import get_channel_adapter
 
@@ -515,7 +775,7 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
             last_error="remote_state_unknown",
         )
         return
-    if delivery.kind == "reply":
+    if delivery.kind in {"reply", "file"}:
         chat_session = db.get(ChatSession, delivery.session_id)
         invalid_session = (
             not chat_session
@@ -561,6 +821,8 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
                     db, reaction_event
                 ):
                     _stage_reaction_removal(db, delivery, reaction_event)
+        elif delivery.kind == "file":
+            sent_message_id = _deliver_file(db, delivery, adapter, binding, target)
         elif delivery.kind == "reaction_remove":
             remove_reaction = getattr(adapter, "remove_reaction", None)
             if not callable(remove_reaction):
@@ -599,6 +861,8 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
     # handoff_notice/handoff_ack 投递成功后,把飞书返回的 message_id 回写到 delivery;
     # handoff_notice 额外同步到 HumanHandoffRequest.notify_message_id。阶段 4 据此
     # 关联处理人的飞书引用回复(含对确认消息的再次回复)。
+    if delivery.kind == "file" and sent_message_id:
+        delivery.message_id = sent_message_id
     if delivery.kind in {
         "handoff_notice",
         "handoff_ack",
@@ -611,7 +875,7 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
     if channel_reaction_token(binding.channel) and delivery.kind not in _REACTION_KINDS:
         event = _reaction_event_for_delivery(db, delivery, binding.channel)
         target = delivery.target_json or {}
-        is_final = delivery.kind in {"reply", "error_notice"} or bool(
+        is_final = delivery.kind in {"reply", "file", "error_notice"} or bool(
             target.get("reaction_final")
         )
         if event and is_final:

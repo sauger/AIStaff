@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     wechat_ilink_base_url: str = "https://ilinkai.weixin.qq.com"
     channel_delivery_poll_seconds: float = 1.0
     channel_delivery_max_attempts: int = 8
+    # 渠道文件下载链接的公网基地址；为空时退回 tool_base_url。
+    public_base_url: str = ""
     public_api_enabled: bool = True
     public_api_key_pepper: str = ""
     public_api_idempotency_ttl_seconds: int = 60 * 60 * 24
@@ -84,6 +86,10 @@ class Settings(BaseSettings):
     @property
     def normalized_tool_base_url(self) -> str:
         return self.tool_base_url.rstrip("/")
+
+    @property
+    def normalized_public_base_url(self) -> str:
+        return (self.public_base_url or self.tool_base_url).rstrip("/")
 
     @property
     def general_skill_runtime_package_list(self) -> list[str]:

@@ -5582,3 +5582,72 @@ def test_compile_threads_client_timezone_into_requirement() -> None:
         client_timezone="Asia/Shanghai",
     )
     assert "+08:00" in requirement.current_time
+
+
+def test_explicit_artifact_suppresses_workspace_discovery_helpers() -> None:
+    from app.core.harness_v2_engine import _merge_discovered_artifacts
+
+    result = SimpleNamespace(
+        artifacts=[
+            {
+                "type": "workspace_file",
+                "path": "财务报销流程说明.docx",
+                "operation": "publish_artifact",
+            }
+        ]
+    )
+    _merge_discovered_artifacts(
+        result,
+        [
+            {"type": "workspace_file", "path": "build_docx.py"},
+            {"type": "workspace_file", "path": "content.md"},
+        ],
+    )
+    assert [item["path"] for item in result.artifacts] == ["财务报销流程说明.docx"]
+
+
+def test_workspace_discovery_still_works_without_explicit_artifact() -> None:
+    from app.core.harness_v2_engine import _merge_discovered_artifacts
+
+    result = SimpleNamespace(artifacts=[{"type": "human_handoff", "handoff_id": "h1"}])
+    _merge_discovered_artifacts(
+        result,
+        [
+            {"type": "workspace_file", "path": "report.docx"},
+            {"type": "workspace_file", "path": "data.csv"},
+        ],
+    )
+    assert [
+        item["path"]
+        for item in result.artifacts
+        if item.get("type") == "workspace_file"
+    ] == ["report.docx", "data.csv"]
+
+
+def test_aggregate_artifacts_drops_discovery_across_steps() -> None:
+    from app.core.harness_v2_engine import _aggregate_artifacts
+
+    results = [
+        SimpleNamespace(
+            artifacts=[
+                {
+                    "type": "workspace_file",
+                    "path": "build_docx.py",
+                    "source": "harness.workspace_discovery",
+                }
+            ]
+        ),
+        SimpleNamespace(
+            artifacts=[
+                {
+                    "type": "workspace_file",
+                    "path": "财务报销流程说明.docx",
+                    "source": "harness",
+                    "operation": "publish_artifact",
+                }
+            ]
+        ),
+    ]
+    assert [
+        item["path"] for item in _aggregate_artifacts(results)
+    ] == ["财务报销流程说明.docx"]
