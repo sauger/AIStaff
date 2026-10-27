@@ -272,3 +272,21 @@ def test_transfer_rejects_team_binding() -> None:
     )
     assert response.status_code == 400
     assert "团队" in response.json()["detail"]
+
+
+from app.channels.service_autoroute import auto_route_enabled, maybe_auto_route
+from app.channels.service_routing import mounted_agents, resolve_current_agent
+
+
+def test_routing_uses_sole_owner_and_autoroute_disabled() -> None:
+    engine = _engine()
+    _seed(engine)
+    with Session(engine) as db:
+        binding = db.get(ChannelBinding, "chan_1")
+        assert auto_route_enabled(binding) is False
+        mounts = mounted_agents(db, binding)
+        assert [m.agent_id for m in mounts] == ["agent_1"]
+        agent_id, reset = resolve_current_agent(db, binding, "ext_conv_1")
+        assert agent_id == "agent_1"
+        assert reset is False
+        assert maybe_auto_route(db, binding, "agent_1", "ext_conv_1", "你好") is None
