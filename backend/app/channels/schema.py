@@ -54,6 +54,10 @@ class ChannelBindingAgentsUpdate(BaseModel):
     name: Optional[str] = None
 
 
+class ChannelBindingTransferRequest(BaseModel):
+    target_agent_id: str
+
+
 class ChannelBindingRead(BaseModel):
     """绑定信息对外视图：只暴露配置元数据，绝不回传凭证明文。"""
 
@@ -405,7 +409,7 @@ def channel_binding_read(
         created_by_name=channel_binding_creator_name(db, binding),
         agents=channel_binding_agents_read(db, binding),
         wechat_kf_accounts=wechat_kf_accounts,
-        auto_route=(binding.config_json or {}).get("auto_route") is not False,
+        auto_route=False,
         default_handoff_assignee_user_id=(binding.config_json or {}).get(
             "default_handoff_assignee_user_id"
         ),

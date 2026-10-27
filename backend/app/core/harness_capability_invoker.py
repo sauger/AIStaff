@@ -545,6 +545,19 @@ class HarnessCapabilityInvoker:
                 active_skill=self.active_skill,
                 active_step_id=self.active_step_id,
             )
+        if name == "wecom_oa_approval":
+            from app.wecom_oa.service import invoke_wecom_oa_approval
+
+            session_id = getattr(self.session, "id", None) or ""
+            user_id = getattr(self.session, "user_id", None)
+            return invoke_wecom_oa_approval(
+                self.db,
+                tenant_id=self.tenant_id,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                user_id=user_id,
+                arguments=arguments,
+            )
         if name in {
             "cabinet_list",
             "cabinet_find",

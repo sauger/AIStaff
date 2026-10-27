@@ -7,7 +7,6 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DataTable, type DataTableColumn } from '@/components/DataTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import {
-  Checkbox,
   Dialog,
   DialogContent,
   DialogTitle,
@@ -19,7 +18,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
 } from '@/components/ui';
 import { Button as UIButton } from '@/components/ui/button';
 
@@ -59,6 +57,7 @@ import { formatHandoffAssigneeValue, parseHandoffAssigneeValue } from '../lib/ha
 import { feishuAppIdFromIdentityScope } from '../lib/identity-scope';
 import WechatSetup from './channels/WechatSetup';
 import WecomSetup from './channels/WecomSetup';
+import WecomOaAdminPanel from './channels/WecomOaAdminPanel';
 import FeishuSetup from './channels/FeishuSetup';
 import DingTalkSetup from './channels/DingTalkSetup';
 import WechatKfSetup from './channels/WechatKfSetup';
@@ -99,9 +98,7 @@ const DELIVERY_KIND_LABEL: Record<string, string> = {
 };
 
 const CHANNEL_COMMANDS: Array<{ command: string; description: string }> = [
-  { command: '/员工', description: '查看可调度员工' },
-  { command: '/切换 <员工名> 或 /<员工名>', description: '切换当前员工' },
-  { command: '/当前', description: '查看当前员工' },
+  { command: '/当前', description: '查看当前归属员工' },
   { command: '/帮助', description: '查看指令说明' },
 ];
 
@@ -274,13 +271,11 @@ export default function ChannelsPage({
   const [unbindOpen, setUnbindOpen] = useState(false);
   const [unbinding, setUnbinding] = useState(false);
   const [togglingStatus, setTogglingStatus] = useState(false);
-  const [agentEditing, setAgentEditing] = useState(false);
   const [agentCandidates, setAgentCandidates] = useState<AgentProfileRead[]>([]);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
-  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(new Set());
-  const [defaultAgentId, setDefaultAgentId] = useState('');
-  const [savingAgents, setSavingAgents] = useState(false);
-  const [autoRouteSaving, setAutoRouteSaving] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTargetId, setTransferTargetId] = useState('');
+  const [transferring, setTransferring] = useState(false);
   const [tenantUsers, setTenantUsers] = useState<Array<{ id: string; username: string; display_name?: string; source?: string; channel_identities?: Array<{ channel: string; display_name?: string; external_user_id?: string; external_account_scope?: string }> }>>([]);
   const [handoffAssigneeSaving, setHandoffAssigneeSaving] = useState(false);
   const [bindCode, setBindCode] = useState<ChannelBindCodeRead | null>(null);
@@ -376,7 +371,6 @@ export default function ChannelsPage({
   }, []);
 
   useEffect(() => {
-    setAgentEditing(false);
     setDeliveryDays([]);
     setDeliveryTotalDays(0);
     setExpandedDays(new Set());
@@ -592,7 +586,7 @@ export default function ChannelsPage({
         channel: createChannel,
         name: createName.trim(),
       });
-      notify.success('渠道接入创建成功');
+      notify.success('渠道创建成功');
       setCreateOpen(false);
       setCreateAgentId('');
       setCreateTeamId('');
@@ -600,7 +594,7 @@ export default function ChannelsPage({
       await load();
       setSelectedId(created.id);
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : '创建渠道接入失败');
+      notify.error(error instanceof Error ? error.message : '创建渠道失败');
     } finally {
       setCreating(false);
     }
@@ -681,7 +675,6 @@ export default function ChannelsPage({
       await api.delete(`/api/enterprise/channels/${binding.id}?tenant_id=${TENANT_ID}`);
       notify.success('已断开接入');
       setUnbindOpen(false);
-      setAgentEditing(false);
       setSelectedId('');
       await load();
     } catch (error) {
@@ -707,71 +700,28 @@ export default function ChannelsPage({
     }
   }
 
-  function openAgentEdit() {
-    const mounted = binding?.agents || [];
-    setSelectedAgentIds(new Set(mounted.map((item) => item.agent_id)));
-    setDefaultAgentId(
-      mounted.find((item) => item.is_default)?.agent_id || mounted[0]?.agent_id || '',
-    );
-    setAgentEditing(true);
-    void loadAgentCandidates();
+  function agentNameFor(agentId: string): string {
+    const fromCandidates = agentCandidates.find((item) => item.id === agentId);
+    if (fromCandidates) return employeeDisplayName(fromCandidates);
+    const fromBinding = binding?.agents?.find((item) => item.agent_id === agentId);
+    return fromBinding?.name || agentId;
   }
 
-  function toggleAgentSelect(agentIdToToggle: string, checked: boolean) {
-    const next = new Set(selectedAgentIds);
-    if (checked) {
-      next.add(agentIdToToggle);
-    } else {
-      next.delete(agentIdToToggle);
-    }
-    setSelectedAgentIds(next);
-    if (!next.has(defaultAgentId)) {
-      setDefaultAgentId(next.values().next().value || '');
-    }
-  }
-
-  async function saveAgents() {
-    if (!binding || selectedAgentIds.size === 0 || savingAgents) return;
-    setSavingAgents(true);
+  async function confirmTransfer() {
+    if (!binding || !transferTargetId || transferring) return;
+    setTransferring(true);
     try {
-      const updated = await api.put<ChannelBindingRead>(
-        `/api/enterprise/channels/${binding.id}?tenant_id=${TENANT_ID}`,
-        {
-          tenant_id: TENANT_ID,
-          agents: [...selectedAgentIds].map((id) => ({
-            agent_id: id,
-            is_default: id === defaultAgentId,
-          })),
-        },
+      const updated = await api.post<ChannelBindingRead>(
+        `/api/enterprise/channels/${binding.id}/transfer?tenant_id=${TENANT_ID}`,
+        { target_agent_id: transferTargetId },
       );
-      setBindings((current) =>
-        current.map((item) => (item.id === updated.id ? updated : item)),
-      );
-      setAgentEditing(false);
-      notify.success('已保存');
+      setBindings((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setTransferOpen(false);
+      notify.success('已转移');
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : '保存可调度员工失败');
+      notify.error(error instanceof Error ? error.message : '转移失败');
     } finally {
-      setSavingAgents(false);
-    }
-  }
-
-  async function toggleAutoRoute(next: boolean) {
-    if (!binding || autoRouteSaving) return;
-    setAutoRouteSaving(true);
-    try {
-      const updated = await api.put<ChannelBindingRead>(
-        `/api/enterprise/channels/${binding.id}?tenant_id=${TENANT_ID}`,
-        { tenant_id: TENANT_ID, auto_route: next },
-      );
-      setBindings((current) =>
-        current.map((item) => (item.id === updated.id ? updated : item)),
-      );
-      notify.success('已保存');
-    } catch (error) {
-      notify.error(error instanceof Error ? error.message : '更新智能分发设置失败');
-    } finally {
-      setAutoRouteSaving(false);
+      setTransferring(false);
     }
   }
 
@@ -841,7 +791,6 @@ export default function ChannelsPage({
     : null;
   // bot_id / ilink_bot_id 是 DTO 顶层字段(后端不回传 config_json)
   const botId = binding?.ilink_bot_id || binding?.bot_id || binding?.open_kfid || binding?.app_id || '';
-  const mountedAgents = binding?.agents || [];
   const conversationGroups = groupByDay(conversations, (item) => item.updated_at);
 
   const deliveryColumns: DataTableColumn<ChannelDeliveryRead>[] = [
@@ -898,14 +847,14 @@ export default function ChannelsPage({
           className="h-[34px] gap-[4px] rounded-[10px] bg-[#18181a] px-[20px] text-[12px] font-normal text-white hover:bg-[#303030]"
         >
           <IconAdd className="size-[14px]" />
-          接入渠道
+          新建渠道
         </UIButton>
       </div>
       {bindings.length === 0 && !loading ? (
         <div className="flex min-h-[200px] flex-col items-center justify-center gap-[12px] rounded-[14px] bg-[#f6f6f6] text-[13px] text-[#858b9c]">
-          <span>暂无渠道接入，接入后用户可通过斜杠指令在多个数字员工之间切换。</span>
+          <span>暂无渠道。创建时须指定归属的数字员工；一通道只服务一个员工。</span>
           <UIButton onClick={openCreate} className={PRIMARY_BUTTON_CLASS}>
-            接入渠道
+            新建渠道
           </UIButton>
         </div>
       ) : (
@@ -964,12 +913,12 @@ export default function ChannelsPage({
                 </div>
                 <div className="flex flex-wrap items-center gap-[6px]">
                   <span className="text-[12px] text-[#858b9c]">
-                    {item.team_id ? '绑定团队' : '可调度员工'}
+                    {item.team_id ? '绑定团队' : '归属员工'}
                   </span>
                   {item.team_id ? (
                     <StatusBadge tone="blue">{`团队 · ${teamNameFor(item)}`}</StatusBadge>
                   ) : (item.agents || []).length === 0 ? (
-                    <span className="text-[12px] text-[#858b9c]">暂无可调度员工</span>
+                    <span className="text-[12px] text-[#858b9c]">暂无归属员工</span>
                   ) : (
                     (item.agents || []).map((agent) => (
                       <span
@@ -1113,19 +1062,9 @@ export default function ChannelsPage({
         ) : (
           <WechatSetup binding={binding} onChanged={() => void load()} />
         )}
-        <div className="flex items-center justify-between gap-[12px] border-t border-[#eef0f4] pt-[16px]">
-          <div className="flex min-w-0 flex-col gap-[4px]">
-            <span className="text-[13px] font-semibold text-[#18181a]">智能分发</span>
-            <span className="text-[12px] leading-[1.6] text-[#858b9c]">
-              开启后，用户消息将按意图自动分发给合适的员工；/切换 仍可手动指定，手动指定后 10 分钟内不自动切换。
-            </span>
-          </div>
-          <Switch
-            checked={binding.auto_route ?? true}
-            disabled={autoRouteSaving}
-            onCheckedChange={(next) => void toggleAutoRoute(next)}
-          />
-        </div>
+        {binding.channel === 'wecom' && (
+          <WecomOaAdminPanel currentUser={currentUser} />
+        )}
         <div className="flex items-center justify-between gap-[12px] border-t border-[#eef0f4] pt-[16px]">
           <div className="flex min-w-0 flex-col gap-[4px]">
             <span className="text-[13px] font-semibold text-[#18181a]">默认人工处理人</span>
@@ -1287,92 +1226,39 @@ export default function ChannelsPage({
         </div>
       </section>
 
-      <section aria-label="可调度员工">
+      <section aria-label={binding.team_id ? '可调度员工' : '归属员工'}>
         <div className="mb-[16px] flex items-center justify-between gap-[6px] px-[12px] text-[#757f9c]">
           <div className="flex items-center gap-[6px]">
             <IconAccount className="size-[14px] shrink-0" />
-            <span className="text-[14px] font-normal leading-none">可调度员工</span>
+            <span className="text-[14px] font-normal leading-none">
+              {binding.team_id ? '可调度员工' : '归属员工'}
+            </span>
           </div>
-          {!agentEditing && !binding.team_id && (
-            <UIButton variant="outline" onClick={openAgentEdit} className={OUTLINE_BUTTON_CLASS}>
-              编辑
+          {!binding.team_id && (
+            <UIButton
+              variant="outline"
+              onClick={() => {
+                setTransferTargetId('');
+                setTransferOpen(true);
+                void loadAgentCandidates();
+              }}
+              className={OUTLINE_BUTTON_CLASS}
+            >
+              转移
             </UIButton>
           )}
         </div>
-        <p className="mb-[16px] px-[12px] text-[12px] text-[#858b9c]">
-          挂载后，该渠道的所有用户均可与这些员工对话。
-        </p>
         {binding.team_id ? (
           <div className="flex flex-wrap items-center gap-[8px] rounded-[14px] border border-[#eef0f4] p-[16px]">
             <span className="text-[13px] text-[#18181a]">
               {`团队：${teamNameFor(binding)}（项目领导：${teamLeaderName(binding.team_id)}）`}
             </span>
           </div>
-        ) : agentEditing ? (
-          <div className="flex flex-col gap-[12px] rounded-[14px] border border-[#eef0f4] p-[16px]">
-            {candidatesLoading ? (
-              <span className="py-[12px] text-center text-[12px] text-[#858b9c]">加载中…</span>
-            ) : agentCandidates.length === 0 ? (
-              <span className="py-[12px] text-center text-[12px] text-[#858b9c]">暂无可用员工</span>
-            ) : (
-              <RadioGroup
-                value={defaultAgentId}
-                onValueChange={setDefaultAgentId}
-                className="grid gap-[10px]"
-              >
-                {agentCandidates.map((agent) => {
-                  const checked = selectedAgentIds.has(agent.id);
-                  return (
-                    <div
-                      key={agent.id}
-                      className="flex items-center gap-[8px] text-[13px] text-[#18181a]"
-                    >
-                      <Checkbox
-                        checked={checked}
-                        onCheckedChange={(value) => toggleAgentSelect(agent.id, value === true)}
-                      />
-                      <span className="min-w-0 flex-1 truncate">{employeeDisplayName(agent)}</span>
-                      <span className="flex shrink-0 items-center gap-[6px] text-[12px] text-[#858b9c]">
-                        <RadioGroupItem value={agent.id} disabled={!checked} />
-                        默认
-                      </span>
-                    </div>
-                  );
-                })}
-              </RadioGroup>
-            )}
-            <div className="flex justify-end gap-[8px]">
-              <UIButton
-                variant="outline"
-                onClick={() => setAgentEditing(false)}
-                className={OUTLINE_BUTTON_CLASS}
-              >
-                取消
-              </UIButton>
-              <UIButton
-                onClick={() => void saveAgents()}
-                disabled={selectedAgentIds.size === 0 || savingAgents}
-                className={PRIMARY_BUTTON_CLASS}
-              >
-                保存
-              </UIButton>
-            </div>
-          </div>
         ) : (
-          <div className="flex flex-wrap gap-[8px] rounded-[14px] border border-[#eef0f4] p-[16px]">
-            {mountedAgents.length === 0 ? (
-              <span className="text-[12px] text-[#858b9c]">暂无可调度员工</span>
-            ) : (
-              mountedAgents.map((item) => (
-                <span
-                  key={item.agent_id}
-                  className="inline-flex items-center gap-[6px] rounded-full bg-[#f2f3f7] px-[12px] py-[6px] text-[12px] text-[#18181a]"
-                >
-                  {item.name}
-                  {item.is_default && <StatusBadge tone="blue">默认</StatusBadge>}
-                </span>
-              ))
-            )}
+          <div className="flex flex-wrap items-center gap-[8px] rounded-[14px] border border-[#eef0f4] p-[16px]">
+            <div className="text-[13px] text-[#464c5e]">
+              归属员工：{binding.agents?.[0]?.name || agentNameFor(binding.agent_id) || binding.agent_id}
+            </div>
           </div>
         )}
       </section>
@@ -1604,7 +1490,7 @@ export default function ChannelsPage({
 
   return (
     <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]">
-      <AppHeader onLogout={onLogout} userName={currentUser?.username} title="渠道接入" />
+      <AppHeader onLogout={onLogout} userName={currentUser?.username} title="渠道管理" />
       {binding ? detailView : listView}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -1913,6 +1799,59 @@ export default function ChannelsPage({
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
+        <DialogContent
+          aria-describedby={undefined}
+          className="flex max-h-[calc(100dvh-4rem)] w-[calc(100%-2rem)] flex-col gap-[16px] overflow-hidden rounded-[14px] px-[20px] py-[16px] sm:max-w-[480px]"
+        >
+          <DialogTitle className="text-[14px] font-normal leading-none text-[#757f9c]">
+            转移渠道
+          </DialogTitle>
+          <p className="text-[13px] text-muted-foreground">
+            将把该渠道改挂到目标员工。凭证与机器人跟随绑定；历史会话仍归原员工，新消息进入目标员工。
+          </p>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {candidatesLoading ? (
+              <div className="py-[24px] text-center text-[12px] text-[#858b9c]">加载中…</div>
+            ) : (
+              <RadioGroup
+                value={transferTargetId}
+                onValueChange={setTransferTargetId}
+                className="grid gap-[10px]"
+              >
+                {agentCandidates
+                  .filter((agent) => agent.id !== binding?.agent_id)
+                  .map((agent) => (
+                    <label
+                      key={agent.id}
+                      className="flex cursor-pointer items-center gap-[8px] text-[13px] text-[#18181a]"
+                    >
+                      <RadioGroupItem value={agent.id} />
+                      <span className="min-w-0 flex-1 truncate">{employeeDisplayName(agent)}</span>
+                    </label>
+                  ))}
+              </RadioGroup>
+            )}
+          </div>
+          <div className="flex justify-end gap-[8px]">
+            <UIButton
+              variant="outline"
+              onClick={() => setTransferOpen(false)}
+              className={OUTLINE_BUTTON_CLASS}
+            >
+              取消
+            </UIButton>
+            <UIButton
+              disabled={!transferTargetId || transferring}
+              onClick={() => void confirmTransfer()}
+              className={PRIMARY_BUTTON_CLASS}
+            >
+              确认转移
+            </UIButton>
+          </div>
         </DialogContent>
       </Dialog>
 

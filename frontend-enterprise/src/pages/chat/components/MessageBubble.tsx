@@ -47,6 +47,7 @@ import {
   MarkdownMessage,
   attachmentTypeLabel,
   canRateMessage,
+  WecomApprovalConfirmCardData,
 } from '../chatHelpers';
 import type { TraceLine } from '../chatTypes';
 import type { UseChatSession } from '../useChatSession';
@@ -54,6 +55,7 @@ import ExecutionRecord from './ExecutionRecord';
 import HarnessArtifactDownloads from './HarnessArtifactDownloads';
 import KnowledgeCitationList from './KnowledgeCitationList';
 import ScheduledDraftCard from './ScheduledDraftCard';
+import WecomApprovalConfirmCard from './WecomApprovalConfirmCard';
 import SlashCommandChip from './SlashCommandChip';
 import { slashCommandMessage } from '../slashCommands';
 
@@ -66,6 +68,8 @@ export type MessageRender = {
   visibleContent: string;
   citations: KnowledgeCitation[];
   scheduledDraft: ScheduledTaskDraftRead | null;
+  wecomApprovalConfirm: WecomApprovalConfirmCardData | null;
+  wecomApprovalSubmitted: boolean;
   createdTask?: ScheduledTaskRead;
   scheduledTaskPrompt: boolean;
   attachments: ChatAttachmentRead[];
@@ -98,6 +102,8 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
     setActiveCitation,
     confirmScheduledTask,
     dismissScheduledTaskDraft,
+    confirmWecomApproval,
+    dismissWecomApproval,
     removeQueuedTurn,
   } = chat;
   const {
@@ -109,6 +115,8 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
     visibleContent,
     citations,
     scheduledDraft,
+    wecomApprovalConfirm,
+    wecomApprovalSubmitted,
     createdTask,
     scheduledTaskPrompt,
     attachments,
@@ -259,6 +267,15 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
               createdTask={createdTask}
               onConfirm={(nextDraft) => void confirmScheduledTask(nextDraft, item.id)}
               onDismiss={() => dismissScheduledTaskDraft(item.id)}
+            />
+          )}
+
+          {wecomApprovalConfirm && (
+            <WecomApprovalConfirmCard
+              card={wecomApprovalConfirm}
+              submitted={wecomApprovalSubmitted}
+              onConfirm={(next) => void confirmWecomApproval(next, item.id)}
+              onDismiss={() => dismissWecomApproval(wecomApprovalConfirm.intent_id, item.id)}
             />
           )}
 

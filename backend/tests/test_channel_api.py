@@ -1471,8 +1471,8 @@ def test_put_binding_agents_only() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert [(a["agent_id"], a["is_default"]) for a in payload["agents"]] == [("agent_1", True)]
-    # auto_route 不传不动(默认 True)
-    assert payload["auto_route"] is True
+    # 智能分发已下线:读路径恒为 False
+    assert payload["auto_route"] is False
     with Session(engine) as db:
         assert "auto_route" not in (db.get(ChannelBinding, binding_id).config_json or {})
 
@@ -2168,10 +2168,16 @@ def test_binding_manager_not_drifted_by_default_agent() -> None:
             )
         )
         db.commit()
-    # agent_2 属于 other,owner 无管理权 → PUT 校验逐员工 manager 应 403(该校验不变)
+    # 一通道多员工:硬约束 400(先于逐员工 manager 校验)
     assert client.put(
         f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
         json={"agents": [{"agent_id": "agent_3"}, {"agent_id": "agent_2"}]},
+        headers=_auth(users["owner"]),
+    ).status_code == 400
+    # agent_2 属于 other,owner 无管理权 → 单员工 PUT 仍走 manager 校验 403
+    assert client.put(
+        f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
+        json={"agents": [{"agent_id": "agent_2"}]},
         headers=_auth(users["owner"]),
     ).status_code == 403
 

@@ -1867,6 +1867,35 @@ export function scheduledDraftForMessage(item: ChatMessage): ScheduledTaskDraftR
   return draft as unknown as ScheduledTaskDraftRead;
 }
 
+
+export type WecomApprovalConfirmCardData = {
+  intent_id: string;
+  submission_digest: string;
+  status?: string;
+  summary: {
+    template_id: string;
+    applicant_mode: string;
+    applicant_mode_label?: string;
+    creator_userid: string;
+    creator_display_name?: string | null;
+    applicant_summary: string;
+    fields: Array<{ key: string; title: string; value: unknown }>;
+  };
+};
+
+export function wecomApprovalConfirmForMessage(item: ChatMessage): WecomApprovalConfirmCardData | null {
+  const card = item.metadata?.wecom_oa_approval_confirm;
+  if (!isPlainRecord(card)) return null;
+  if (typeof card.intent_id !== 'string' || typeof card.submission_digest !== 'string') return null;
+  const summary = card.summary;
+  if (!isPlainRecord(summary) || typeof summary.applicant_summary !== 'string') return null;
+  return card as unknown as WecomApprovalConfirmCardData;
+}
+
+export function wecomApprovalSubmittedForMessage(item: ChatMessage): boolean {
+  return isPlainRecord(item.metadata?.wecom_oa_approval_submitted);
+}
+
 export function createdScheduledTaskForMessage(item: ChatMessage): ScheduledTaskRead | undefined {
   const task = item.metadata?.scheduled_task_created;
   if (!isPlainRecord(task)) return undefined;

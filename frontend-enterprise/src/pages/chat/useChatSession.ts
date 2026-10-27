@@ -2032,6 +2032,65 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [sessionId]);
 
+
+  const confirmWecomApproval = useCallback(async (
+    card: {
+      intent_id: string;
+      submission_digest: string;
+    },
+    messageId?: string,
+  ) => {
+    const agentId = displayedAgent?.id || selectedAgentId;
+    if (!sessionId || !agentId) return;
+    try {
+      const result = await api.post<Record<string, unknown>>(
+        `/api/chat/wecom-oa/confirm?tenant_id=${encodeURIComponent(tenantId)}`
+        + `&session_id=${encodeURIComponent(sessionId)}`
+        + `&agent_id=${encodeURIComponent(agentId)}`,
+        {
+          intent_id: card.intent_id,
+          confirmed_digest: card.submission_digest,
+          submit: true,
+        },
+      );
+      if (result && result.ok === false) {
+        notify.error(String(result.error || '企微审批提交失败'));
+        return;
+      }
+      if (messageId) {
+        setDismissedDraftMessageIds((prev) => (prev.includes(messageId) ? prev : [...prev, messageId]));
+      }
+      const spNo = typeof result?.sp_no === 'string' ? result.sp_no : '';
+      notify.success(spNo ? `企微审批已提交，单号 ${spNo}` : '企微审批已提交');
+    } catch (error) {
+      if (isAuthError(error)) {
+        redirectToLogin();
+        return;
+      }
+      notify.error(error instanceof Error ? error.message : '企微审批提交失败');
+    }
+  }, [displayedAgent?.id, redirectToLogin, selectedAgentId, sessionId, tenantId]);
+
+  const dismissWecomApproval = useCallback(async (intentId: string, messageId?: string) => {
+    if (!sessionId) return;
+    try {
+      await api.post(
+        `/api/chat/wecom-oa/dismiss?tenant_id=${encodeURIComponent(tenantId)}`
+        + `&intent_id=${encodeURIComponent(intentId)}`,
+        {},
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        redirectToLogin();
+        return;
+      }
+      // 本地仍可隐藏卡片
+    }
+    if (messageId) {
+      setDismissedDraftMessageIds((prev) => (prev.includes(messageId) ? prev : [...prev, messageId]));
+    }
+  }, [redirectToLogin, sessionId, tenantId]);
+
   const handleStreamEvent = useCallback((
     item: StreamEvent,
     baseSessionId: string,
@@ -3498,6 +3557,8 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     hasVisibleMessageScheduledDraft,
     confirmScheduledTask,
     dismissScheduledTaskDraft,
+    confirmWecomApproval,
+    dismissWecomApproval,
     // composer
     input,
     setInput,

@@ -793,7 +793,7 @@
   "可用工具": "Available Tools",
   "可追溯": "Traceable",
   "控制一次用户输入内员工可连续决策和调用工具的最大次数，用于避免无限循环。": "Limit how many consecutive decisions and tool calls an employee can make for one user input to prevent infinite loops.",
-  "口径统一": "Consistent Standards",
+  "口径统一": "Consistent Definitions",
   "口径治理": "Standards Governance",
   "快速开始": "Quick Start",
   "来源": "Source",
@@ -1469,7 +1469,7 @@
   "已读取 {1}": "Read {1}",
   "已读取 {1} 个文件{2}": "Read {1} File {2}",
   "已发布": "Published",
-  "已发布到广场": "Publish to Marketplace",
+  "已发布到广场": "Published to plaza",
   "已发布到广场，可在对话端直接使用。": "Published to the Marketplace and available directly in Chat.",
   "已发送取消请求": "Send Cancel Request",
   "已返回": "Returned",
@@ -1557,7 +1557,7 @@
   "用户名、用户 ID、记忆内容": "User, User ID, Memory Content",
   "用户明确拒绝后进入": "Enter after the user explicitly declines",
   "用户明确确认后进入": "Enter after the user explicitly confirms",
-  "用户消息": "User Message",
+  "用户消息": "User Messages",
   "用户选择了创建定时任务模式": "User Select Create Scheduled Task Mode",
   "用户已拒绝": "User Rejected",
   "用户已确认": "User Confirmed",
@@ -2116,14 +2116,17 @@
   "微信指令说明": "WeChat Commands",
   "查看可调度员工": "List dispatchable employees",
   "查看当前员工": "Show current employee",
+  "查看当前归属员工": "Show the owning employee",
   "查看指令说明": "Show command help",
   "/员工": "/employees",
   "/切换 <员工名> 或 /<员工名>": "/switch <employee> or /<employee>",
   "/当前": "/current",
   "/帮助": "/help",
   "渠道接入": "Channels",
+  "渠道管理": "Channel Management",
+  "新建渠道": "New Channel",
   "新建渠道绑定": "New Channel Binding",
-  "暂无渠道绑定，创建后微信用户可通过斜杠指令在多个数字员工之间切换。": "No channel bindings yet. Once created, WeChat users can switch between multiple employees with slash commands.",
+  "暂无渠道绑定。创建时须指定归属的数字员工；一通道只服务一个员工。": "No channel bindings yet. Assign an owning digital employee when creating; each channel serves only one employee.",
   "返回列表": "Back to List",
   "选择默认员工": "Select Default Employee",
   "渠道绑定创建成功": "Channel binding created",
@@ -2142,7 +2145,7 @@
   "来源/用户": "Source / User",
   "网页": "Web",
   "全部用户": "All Users",
-  "挂载后，该渠道的所有用户均可与这些员工对话。": "Once mounted, all users of this channel can talk to these employees.",
+  "挂载后，该渠道的所有用户均可与这些员工对话。": "Once connected, users of this channel talk with the owning employee.",
   "绑定我的微信": "Bind My WeChat",
   "生成绑定码失败": "Failed to generate bind code",
   "绑定码 {1} 分 {2} 秒后过期": "Bind code expires in {1}m {2}s",
@@ -2155,7 +2158,9 @@
   "已解除绑定": "Identity unbound",
   "解除绑定失败": "Failed to unbind",
   "接入微信": "Connect WeChat",
-  "暂无渠道接入，接入后微信用户可通过斜杠指令在多个数字员工之间切换。": "No channels connected yet. Once connected, WeChat users can switch between multiple employees with slash commands.",
+  "暂无渠道接入。接入时须指定归属的数字员工；一通道只服务一个员工。": "No channels connected yet. Assign an owning digital employee when connecting; each channel serves only one employee.",
+  "渠道创建成功": "Channel created",
+  "创建渠道失败": "Failed to create channel",
   "渠道接入创建成功": "Channel connected",
   "创建渠道接入失败": "Failed to create channel connection",
   "微信接入成功": "WeChat connected",
@@ -2174,6 +2179,13 @@
   "已接入": "Connected",
   "请使用微信扫描二维码完成接入": "Scan the QR code with WeChat to finish connecting",
   "接入渠道": "Connect Channel",
+  "归属员工": "Owning Employee",
+  "暂无归属员工": "No owning employee",
+  "转移": "Transfer",
+  "转移渠道": "Transfer Channel",
+  "确认转移": "Confirm Transfer",
+  "已转移": "Transferred",
+  "转移失败": "Transfer failed",
   "选择渠道": "Select Channel",
   "返回选择渠道": "Back to Channels",
   "返回命名": "Back to Naming",
@@ -2888,7 +2900,6 @@
   "统一继承模型配置中的全局默认模型": "Inherit the global default model from Model Settings",
   "员工不再单独绑定模型；切换全局默认模型后，所有员工立即生效。": "Employees no longer bind models individually. Changing the global default model takes effect for every employee immediately.",
   "创建开放 Skill": "Create public Skill",
-  "暂无渠道接入，接入后用户可通过斜杠指令在多个数字员工之间切换。": "No channel integrations yet. Once connected, users can switch between digital employees with slash commands.",
   "{1}身份绑定": "{1} identity binding",
   "{1}指令说明": "{1} command guide",
   "指令说明": "Command guide",
@@ -3139,61 +3150,55 @@
   "咨询链接已生成并复制": "Consultation link generated and copied",
   "生成咨询链接失败": "Failed to generate consultation link",
   "生成中": "Generating",
-  "生成咨询链接": "Generate Consultation Link"
-  ,"请先填写企业 ID": "Enter the enterprise ID first"
-  ,"回调配置已生成": "Callback configuration generated"
-  ,"生成回调配置失败": "Failed to generate callback configuration"
-  ,"先生成回调配置，将 URL、Token、EncodingAESKey 填入微信客服后台；后台创建 API 后再回来填写 Secret 和客服账号 ID。": "Generate the callback configuration first, enter its URL, Token, and EncodingAESKey in WeChat Customer Service, then return to enter the Secret and account ID after creating the API."
-  ,"生成回调配置": "Generate Callback Configuration"
-  ,"请先将以下 Token 和 EncodingAESKey 填入微信客服后台，完成 API 创建：": "Enter the following Token and EncodingAESKey in WeChat Customer Service to create the API:"
-   ,"回调已准备，请填写微信客服后台返回的 Secret；保存后选择已有客服账号或创建新账号。": "The callback is ready. Enter the Secret from WeChat Customer Service, then select an existing account or create a new one."
-   ,"Secret 已保存": "Secret saved"
-  ,"重新配置 Secret": "Reconfigure Secret"
-  ,"必须先选择已有客服账号或创建新账号，绑定完成后才会接收业务回调。": "Select an existing customer service account or create a new one before business callbacks are accepted."
-  ,"加载客服账号失败": "Failed to load customer service accounts"
-  ,"客服账号已绑定": "Customer service account bound"
-  ,"绑定客服账号失败": "Failed to bind customer service account"
-  ,"请输入客服账号名称": "Enter a customer service account name"
-  ,"客服账号已创建并绑定": "Customer service account created and bound"
-  ,"创建客服账号失败": "Failed to create customer service account"
-  ,"加载中": "Loading"
-  ,"选择已有客服账号": "Select Existing Account"
-  ,"新客服账号名称": "New customer service account name"
-  ,"创建并绑定": "Create and Bind"
-  ,"请先上传客服头像": "Upload a customer service avatar first"
-  ,"客服头像上传成功": "Customer service avatar uploaded"
-  ,"上传客服头像失败": "Failed to upload customer service avatar"
-  ,"客服头像仅支持 JPG 或 PNG": "Customer service avatars must be JPG or PNG"
-  ,"客服头像不能超过 2MB": "Customer service avatars cannot exceed 2 MB"
-  ,"上传中": "Uploading"
-  ,"上传客服头像": "Upload customer service avatar"
-  ,"配置详情": "Configuration Details"
-  ,"选择": "Select"
-  ,"关闭": "Close"
-  ,"扫码使用": "Scan to Use"
-  ,"分享链接": "Share Link"
-  ,"已绑定客服账号": "Bound customer service accounts"
-  ,"客服账号 ID：": "Customer service account ID:"
-  ,"绑定渠道：": "Bound channel:"
-  ,"未绑定": "Not bound"
-  ,"已绑定客服账号：": "Bound customer service accounts:"
-  ,"客服二维码": "Customer service QR code"
-  ,"客服二维码已生成": "Customer service QR code generated"
-  ,"绑定数字员工：": "Bound digital employee:"
-  ,"绑定团队：": "Bound team:"
-  ,"咨询链接已生成": "Consultation link generated"
-  ,"咨询链接已复制": "Consultation link copied"
-  ,"复制咨询链接失败": "Failed to copy consultation link"
-  ,"客服账号已更新": "Customer service account updated"
-  ,"修改客服账号失败": "Failed to update customer service account"
-  ,"确定删除这个微信客服账号吗？删除后微信客服后台账号也会被删除。": "Delete this WeChat Customer Service account? It will also be deleted from WeChat Customer Service."
-  ,"删除客服账号失败": "Failed to delete customer service account"
-  ,"客服账号已删除": "Customer service account deleted"
-  ,"编辑": "Edit"
-  ,"删除": "Delete"
-  ,"保存": "Save"
-  ,"取消": "Cancel"
-   ,"更换头像（可选）": "Change avatar (optional)",
+  "生成咨询链接": "Generate Consultation Link",
+  "请先填写企业 ID": "Enter the enterprise ID first",
+  "回调配置已生成": "Callback configuration generated",
+  "生成回调配置失败": "Failed to generate callback configuration",
+  "先生成回调配置，将 URL、Token、EncodingAESKey 填入微信客服后台；后台创建 API 后再回来填写 Secret 和客服账号 ID。": "Generate the callback configuration first, enter its URL, Token, and EncodingAESKey in WeChat Customer Service, then return to enter the Secret and account ID after creating the API.",
+  "生成回调配置": "Generate Callback Configuration",
+  "请先将以下 Token 和 EncodingAESKey 填入微信客服后台，完成 API 创建：": "Enter the following Token and EncodingAESKey in WeChat Customer Service to create the API:",
+  "回调已准备，请填写微信客服后台返回的 Secret；保存后选择已有客服账号或创建新账号。": "The callback is ready. Enter the Secret from WeChat Customer Service, then select an existing account or create a new one.",
+  "Secret 已保存": "Secret saved",
+  "重新配置 Secret": "Reconfigure Secret",
+  "必须先选择已有客服账号或创建新账号，绑定完成后才会接收业务回调。": "Select an existing customer service account or create a new one before business callbacks are accepted.",
+  "加载客服账号失败": "Failed to load customer service accounts",
+  "客服账号已绑定": "Customer service account bound",
+  "绑定客服账号失败": "Failed to bind customer service account",
+  "请输入客服账号名称": "Enter a customer service account name",
+  "客服账号已创建并绑定": "Customer service account created and bound",
+  "创建客服账号失败": "Failed to create customer service account",
+  "加载中": "Loading",
+  "选择已有客服账号": "Select Existing Account",
+  "新客服账号名称": "New customer service account name",
+  "创建并绑定": "Create and Bind",
+  "请先上传客服头像": "Upload a customer service avatar first",
+  "客服头像上传成功": "Customer service avatar uploaded",
+  "上传客服头像失败": "Failed to upload customer service avatar",
+  "客服头像仅支持 JPG 或 PNG": "Customer service avatars must be JPG or PNG",
+  "客服头像不能超过 2MB": "Customer service avatars cannot exceed 2 MB",
+  "上传中": "Uploading",
+  "上传客服头像": "Upload customer service avatar",
+  "配置详情": "Configuration Details",
+  "扫码使用": "Scan to Use",
+  "分享链接": "Share Link",
+  "已绑定客服账号": "Bound customer service accounts",
+  "客服账号 ID：": "Customer service account ID:",
+  "绑定渠道：": "Bound channel:",
+  "未绑定": "Unbound",
+  "已绑定客服账号：": "Bound customer service accounts:",
+  "客服二维码": "Customer service QR code",
+  "客服二维码已生成": "Customer service QR code generated",
+  "绑定数字员工：": "Bound digital employee:",
+  "绑定团队：": "Bound team:",
+  "咨询链接已生成": "Consultation link generated",
+  "咨询链接已复制": "Consultation link copied",
+  "复制咨询链接失败": "Failed to copy consultation link",
+  "客服账号已更新": "Customer service account updated",
+  "修改客服账号失败": "Failed to update customer service account",
+  "确定删除这个微信客服账号吗？删除后微信客服后台账号也会被删除。": "Delete this WeChat Customer Service account? It will also be deleted from WeChat Customer Service.",
+  "删除客服账号失败": "Failed to delete customer service account",
+  "客服账号已删除": "Customer service account deleted",
+  "更换头像（可选）": "Change avatar (optional)",
   "仅进入所选子 SOP；父子流程共享当前 TaskFrame 字段。": "Only enter the selected child SOP; the parent and child share the current TaskFrame fields.",
   "仅进入所选子 SOP；字段、动作和能力由子 SOP 自己定义。": "Only enter the selected child SOP; its fields, actions, and capabilities are defined by the child SOP.",
   "未找到子 SOP": "Child SOP not found",
@@ -3259,7 +3264,6 @@
   "协调阻塞": "Resolve Blockers",
   "负责指标口径梳理、数据诊断、趋势解读和经营建议沉淀。": "Defines metric standards, diagnoses data, interprets trends, and documents business recommendations.",
   "数据严谨": "Data Rigor",
-  "口径统一": "Consistent Definitions",
   "结论克制": "Measured Conclusions",
   "经营分析": "Business Analysis",
   "输出洞察": "Deliver Insights",
@@ -3390,7 +3394,7 @@
   "移除协作者失败": "Failed to remove collaborator",
   "协作者管理": "Collaborator Management",
   "渠道协作管理": "Channel Collaboration Management",
-  "协作者可配置/轮换凭证、管理挂载员工、启停渠道，但不能删除渠道或管理其他协作者。": "Collaborators can configure or rotate credentials, manage assigned agents, and enable or disable channels, but cannot delete channels or manage other collaborators.",
+  "协作者可配置/轮换凭证、管理挂载员工、启停渠道，但不能删除渠道或管理其他协作者。": "Collaborators can configure or rotate credentials, manage the owning employee assignment, and enable or disable channels, but cannot delete channels or manage other collaborators.",
   "暂无协作者": "No collaborators",
   "授权人：": "Granted by:",
   "选择成员": "Select Member",
@@ -3455,7 +3459,6 @@
   "近期摘要预算": "Recent Summary Budget",
   "纳入历史上下文的角色": "Roles Included in Conversation History",
   "至少保留一种角色；图片只随用户消息进入上下文。": "Keep at least one role; images enter context only with user messages.",
-  "用户消息": "User Messages",
   "数字员工回复": "Digital Employee Replies",
   "长期摘要前缀": "Long-term Summary Prefix",
   "注入长期摘要消息时使用，最多 200 字。": "Used when injecting long-term summary messages, up to 200 characters.",
@@ -3549,14 +3552,12 @@
   "登录地址": "Login URL",
   "复制到当前员工": "Copy to current employee",
   "还没有认证配置。": "No auth configurations yet.",
-  "已发布到广场": "Published to plaza",
   "来自广场复制": "Copied from plaza",
   "密钥绑定为空。从广场复制而来，只带来了步骤文字；请先选择一条默认密钥，才能测试登录。": "Secret binding is empty. Plaza copy brought steps only; bind a default secret before test login.",
   "用户名字段": "Username field",
   "密码字段": "Password field",
   "提交按钮": "Submit button",
   "默认密钥": "Default secret",
-  "未绑定": "Unbound",
   "正在测试登录…": "Testing login…",
   "测试登录": "Test login",
   "请先绑定默认密钥后再测试登录。": "Bind a default secret before test login.",
@@ -3596,7 +3597,67 @@
   "已自动更新会话快照「{1}」。": "Updated session snapshot “{1}”.",
   "密码密钥未改动。": "The password secret was not changed.",
   "登录成功。本次使用密钥「{1}」{2}。{3}{4}密码密钥未改动。": "Login succeeded using secret “{1}”{2}. {3}{4}The password secret was not changed.",
-  "关联登录说明：": "Linked login guide: ",
   "（留空不改）": "(leave blank to keep)",
-  "(?:参考来源|参考资料|引用来源|资料来源)": "(?:References|Reference Materials|Citation Sources|Sources)"
+  "(?:参考来源|参考资料|引用来源|资料来源)": "(?:References|Reference Materials|Citation Sources|Sources)",
+  "企微审批代发": "WeCom approval (submit on behalf)",
+  "请确认提交内容": "Confirm submission details",
+  "确认提交": "Confirm and submit",
+  "申请人": "Applicant",
+  "模板": "Template",
+  "确认后将按此不可变摘要向企微提交；修改字段需重新预览。": "After confirmation, this immutable summary is submitted to WeCom; change fields only by regenerating the preview.",
+  "企微 OA 审批（代发）": "WeCom OA approval (on behalf)",
+  "配置自建应用凭证（与智能机器人凭证隔离）及 Mode B 临时身份绑定。密钥保存后不再回显。": "Configure self-built app credentials (isolated from the smart-bot credentials) and Mode B temporary identity bindings. Secrets are not echoed after save.",
+  "OA 自建应用凭证": "OA self-built app credentials",
+  "已配置企业 ID：": "Configured corp ID: ",
+  " · Secret 已存": " · Secret stored",
+  " · 回调 Token 已存": " · Callback token stored",
+  "OA Secret": "OA Secret",
+  "应用 AgentId（可选）": "App AgentId (optional)",
+  "回调 Token（可选）": "Callback token (optional)",
+  "回调 EncodingAESKey（可选）": "Callback EncodingAESKey (optional)",
+  "重新输入以更新密钥": "Re-enter to update the secret",
+  "保存 OA 凭证": "Save OA credentials",
+  "临时身份绑定（Mode B）": "Temporary identity binding (Mode B)",
+  "企业范围 corp_scope": "Corp scope (corp_scope)",
+  "StaffDeck 用户 ID": "StaffDeck user ID",
+  "企微 userid": "WeCom userid",
+  "显示名（可选）": "Display name (optional)",
+  "新增/更新绑定": "Add / update binding",
+  "请填写企业 ID 与 OA Secret": "Enter corp ID and OA Secret",
+  "OA 应用凭证已保存": "OA app credentials saved",
+  "保存 OA 凭证失败": "Failed to save OA credentials",
+  "请填写企业范围、StaffDeck 用户与企微 userid": "Enter corp scope, StaffDeck user ID, and WeCom userid",
+  "临时身份绑定已保存": "Temporary identity binding saved",
+  "保存临时绑定失败": "Failed to save temporary binding",
+  "已删除临时绑定": "Temporary binding deleted",
+  "删除临时绑定失败": "Failed to delete temporary binding",
+  "加载企微 OA 配置失败": "Failed to load WeCom OA settings",
+  "企微审批代发配置": "WeCom approval on-behalf settings",
+  "绑定模板 ID、申请人模式与字段映射；确认摘要后才会向企微提交。": "Bind template ID, applicant mode, and field mappings; submit to WeCom only after the summary is confirmed.",
+  "模板 ID": "Template ID",
+  "场景键": "Scenario key",
+  "申请人模式": "Applicant mode",
+  "Mode A：固定员工 userid": "Mode A: fixed staff userid",
+  "Mode B：聊天对方代发": "Mode B: on behalf of chat partner",
+  "Mode A 固定 userid": "Mode A fixed userid",
+  "字段映射（JSON 数组）": "Field mappings (JSON array)",
+  "提交前启用合规检查": "Enable compliance check before submit",
+  "合规策略引用": "Compliance policy reference",
+  "保存审批配置": "Save approval settings",
+  "请填写审批模板 ID": "Enter the approval template ID",
+  "Mode A 需填写固定申请人 userid": "Mode A requires a fixed applicant userid",
+  "字段映射须为 JSON 数组": "Field mappings must be a JSON array",
+  "字段映射 JSON 无效": "Field mappings JSON is invalid",
+  "企微审批场景配置已保存": "WeCom approval scenario settings saved",
+  "保存审批配置失败": "Failed to save approval settings",
+  "加载审批配置失败": "Failed to load approval settings",
+  "企微审批提交失败": "WeCom approval submission failed",
+  "企微审批已提交": "WeCom approval submitted",
+  "企微审批已提交，单号 ${spNo}": "WeCom approval submitted, request no. ${spNo}",
+  "企微审批已提交，单号 ": "WeCom approval submitted, request no. ",
+  "· Secret 已存": "· Secret stored",
+  "· 回调 Token 已存": "· Callback token stored",
+  "企微审批已提交，单号 {1}": "WeCom approval submitted, request no. {1}",
+  "暂无渠道。创建时须指定归属的数字员工；一通道只服务一个员工。": "No channels yet. Assign an owning digital employee when creating; each channel serves only one employee.",
+  "将把该渠道改挂到目标员工。凭证与机器人跟随绑定；历史会话仍归原员工，新消息进入目标员工。": "This channel will be remounted on the target employee. Credentials and the bot stay with the binding; historical sessions remain with the original employee, and new messages go to the target."
 }

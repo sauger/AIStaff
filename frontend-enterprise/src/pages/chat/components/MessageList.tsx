@@ -13,6 +13,8 @@ import {
   normalizeMessageText,
   placeQueuedMessagesLast,
   scheduledDraftForMessage,
+  wecomApprovalConfirmForMessage,
+  wecomApprovalSubmittedForMessage,
   stripTrailingCitationSummary,
   traceDetails,
   traceLineAllowed,
@@ -135,6 +137,12 @@ export default function MessageList({
           const scheduledDraft = item.role === 'assistant' && !dismissedDraftMessageIds.includes(item.id)
             ? scheduledDraftForMessage(item)
             : null;
+          const wecomApprovalConfirm = item.role === 'assistant' && !dismissedDraftMessageIds.includes(item.id)
+            ? wecomApprovalConfirmForMessage(item)
+            : null;
+          const wecomApprovalSubmitted = item.role === 'assistant'
+            ? wecomApprovalSubmittedForMessage(item)
+            : false;
           const persistedCreatedTask = item.role === 'assistant'
             ? createdScheduledTaskForMessage(item)
             : undefined;
@@ -173,6 +181,8 @@ export default function MessageList({
             visibleContent,
             citations,
             scheduledDraft,
+            wecomApprovalConfirm,
+            wecomApprovalSubmitted,
             createdTask: createdScheduledTasks[item.id] || persistedCreatedTask,
             scheduledTaskPrompt,
             attachments,

@@ -31,6 +31,7 @@ from app.api import (
     traces,
     ui_config,
     wechat_kf,
+    wecom_oa,
 )
 from app.cabinet.api import router as cabinet_router
 from app.mail.api import router as mail_router
@@ -85,6 +86,11 @@ def on_startup() -> None:
         with Session(engine) as db:
             seed_demo_data(db)
             recover_orphan_harness_runs(db, startup=True)
+            from app.channels.service_single_owner import prune_multi_agent_mounts
+
+            pruned = prune_multi_agent_mounts(db)
+            if pruned:
+                db.commit()
         recover_codex_a2a_tasks()
         recover_a2a_client_tasks()
         start_external_task_worker()
@@ -153,6 +159,9 @@ app.include_router(ui_config.enterprise_router)
 app.include_router(channels.router)
 app.include_router(channel_artifacts.router)
 app.include_router(wechat_kf.router)
+app.include_router(wecom_oa.router)
+app.include_router(wecom_oa.callback_router)
+app.include_router(wecom_oa.chat_router)
 app.include_router(teams.router)
 app.include_router(teams.threads_router)
 app.include_router(tools.router)

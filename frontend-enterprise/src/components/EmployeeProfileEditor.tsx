@@ -22,6 +22,8 @@ import type { EnterpriseAuthUser } from '../auth';
 import { employeeDisplayName, employeeProfile } from '../employee';
 import type { AgentProfileRead } from '../types';
 import EmployeeAvatar from './EmployeeAvatar';
+import EmployeeAccessChannelsPanel from '../pages/channels/EmployeeAccessChannelsPanel';
+import WecomOaAgentConfigPanel from '../pages/channels/WecomOaAgentConfigPanel';
 
 type EmployeeProfileFormValues = {
   name: string;
@@ -63,12 +65,14 @@ export default function EmployeeProfileEditor({
   onClose,
   onSaved,
   currentUser,
+  onOpenMail,
 }: {
   agent?: AgentProfileRead | null;
   open: boolean;
   onClose: () => void;
   onSaved?: (agent: AgentProfileRead) => void;
   currentUser?: EnterpriseAuthUser;
+  onOpenMail?: (agentId: string) => void;
 }) {
   const [form, setForm] = useState<EmployeeProfileFormValues>(BLANK_FORM);
   const [saving, setSaving] = useState(false);
@@ -235,6 +239,15 @@ export default function EmployeeProfileEditor({
                   <TagsField value={form.workModes} options={WORK_MODE_OPTIONS} placeholder="输入后回车添加" onChange={(next) => update({ workModes: next })} />
                 </LabeledField>
               </div>
+
+              {agent?.id && (
+                <EmployeeAccessChannelsPanel
+                  agentId={agent.id}
+                  onOpenMail={onOpenMail ? () => onOpenMail(agent.id) : undefined}
+                />
+              )}
+
+              {agent?.id && <WecomOaAgentConfigPanel agentId={agent.id} />}
 
               <div className="employee-profile-publish">
                 <div>

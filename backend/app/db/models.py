@@ -1860,3 +1860,116 @@ class TeamTaskBid(SQLModel, table=True):
     score: Optional[float] = None
     score_rationale: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class WecomOaAppCredential(SQLModel, table=True):
+    """企微 OA 自建应用凭证（与智能机器人 ChannelBinding 分离）。"""
+
+    __tablename__ = "wecom_oa_app_credentials"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "corp_id", name="uq_wecom_oa_app_tenant_corp"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("woaapp"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    corp_id: str = Field(index=True)
+    agentid: Optional[str] = None
+    # Fernet 加密的 corpsecret；绝不回传明文
+    secret_enc: str
+    # 回调验签 Token / EncodingAESKey（可空；生产回调需要）
+    callback_token_enc: Optional[str] = None
+    callback_aes_key_enc: Optional[str] = None
+    status: str = Field(default="active", index=True)
+    created_by_user_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class WecomTempIdentityBinding(SQLModel, table=True):
+    """组织架构上线前的临时身份绑定：staffdeck_user_id → 企微 userid。"""
+
+    __tablename__ = "wecom_temp_identity_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "corp_scope",
+            "staffdeck_user_id",
+            name="uq_wecom_temp_identity_user",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("woatmp"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    corp_scope: str = Field(index=True)
+    staffdeck_user_id: str = Field(index=True)
+    wecom_userid: str
+    display_name: Optional[str] = None
+    created_by_user_id: Optional[str] = Field(default=None, index=True)
+    updated_by_user_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class WecomApprovalIntent(SQLModel, table=True):
+    """审批代发意图：确认后不可变快照 + 状态机 + 会话/实例绑定。"""
+
+    __tablename__ = "wecom_approval_intents"
+    __table_args__ = (
+        Index("ix_wecom_approval_intent_session", "tenant_id", "session_id"),
+        Index("ix_wecom_approval_intent_sp_no", "tenant_id", "sp_no"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("woaint"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    user_id: Optional[str] = Field(default=None, index=True)
+    # draft | confirmed | submitting | submitted | failed
+    status: str = Field(default="draft", index=True)
+    template_id: str
+    scenario_key: str = Field(default="default", index=True)
+    applicant_mode: str  # fixed | chat_partner
+    creator_userid: Optional[str] = None
+    creator_display_name: Optional[str] = None
+    # 不可变确认载荷：fields、template、mode、userid、digest
+    payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    submission_digest: str = Field(index=True)
+    corp_id: str = Field(index=True)
+    sp_no: Optional[str] = Field(default=None, index=True)
+    failure_reason: Optional[str] = None
+    identity_source: Optional[str] = None  # channel_identity | temp_binding
+    compliance_checked: bool = False
+    compliance_passed: Optional[bool] = None
+    # 审计：触发代发的平台用户
+    audit_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    last_progress_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    confirmed_at: Optional[datetime] = None
+    submitted_at: Optional[datetime] = None
+
+
+class WecomApprovalStatusEvent(SQLModel, table=True):
+    """审批状态变更历史（主动查询与回调共享写入路径）。"""
+
+    __tablename__ = "wecom_approval_status_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "intent_id",
+            "sp_status",
+            "change_event",
+            name="uq_wecom_approval_status_event",
+        ),
+        Index("ix_wecom_approval_status_intent", "intent_id", "created_at"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("woaevt"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    intent_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    sp_no: str = Field(index=True)
+    sp_status: str
+    change_event: str = Field(default="")
+    source: str = Field(default="query")  # query | callback
+    payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
