@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -242,6 +243,7 @@ class KnowledgeService:
         *,
         title: str | None = None,
         status: str | None = None,
+        source_sha256: str | None = None,
     ) -> KnowledgeDocument:
         """Replace editable source text and rebuild every derived knowledge layer."""
         normalized_text = _normalize_text(content_md)
@@ -275,6 +277,8 @@ class KnowledgeService:
         document.title = resolved_title
         document.status = status or "ready"
         document.error = None
+        if source_sha256:
+            document.source_sha256 = source_sha256
         document.metadata_json = metadata
         document.updated_at = utc_now()
         self.db.add(document)
@@ -417,6 +421,7 @@ class KnowledgeService:
             )
             metadata = job.metadata_json or {}
             content = base64.b64decode(str(metadata.get("content_base64") or ""))
+            source_sha256 = hashlib.sha256(content).hexdigest()
             text, file_type = extract_text(job.filename, content)
             self._raise_if_ingest_cancelled(job)
             self._update_ingest_stage(
@@ -452,6 +457,7 @@ class KnowledgeService:
                 file_type=file_type,
                 title=str(metadata.get("title") or Path(job.filename).stem),
                 status="processing",
+                source_sha256=source_sha256,
                 metadata_json={
                     **(metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}),
                     "ingest_schema_version": KNOWLEDGE_INGEST_SCHEMA_VERSION,
@@ -462,6 +468,8 @@ class KnowledgeService:
                         "section_count": len(section_nodes),
                         "paragraph_count": len(_paragraph_blocks(normalized_text)),
                     },
+                    # Bounded excerpt for duplicate/similarity checks in chat proposals.
+                    "raw_text_excerpt": normalized_text[:4_000],
                 },
             )
             self.db.add(document)

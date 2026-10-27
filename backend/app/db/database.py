@@ -2471,6 +2471,21 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                     {"tenant_id": tenant_id, "knowledge_base_id": _default_knowledge_base_id(tenant_id)},
                 )
 
+    if "knowledge_documents" in tables:
+        document_columns = {
+            column["name"] for column in inspector.get_columns("knowledge_documents")
+        }
+        if "source_sha256" not in document_columns:
+            conn.execute(
+                text("ALTER TABLE knowledge_documents ADD COLUMN source_sha256 VARCHAR")
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_knowledge_documents_source_sha256 "
+                "ON knowledge_documents(source_sha256)"
+            )
+        )
+
     resolved_version_ids: dict[str, str] = {}
     if "knowledge_base_versions" in tables and "knowledge_bases" in tables:
         knowledge_bases = conn.execute(text("SELECT * FROM knowledge_bases")).mappings().all()
