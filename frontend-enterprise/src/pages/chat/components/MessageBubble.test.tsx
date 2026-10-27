@@ -32,6 +32,8 @@ function renderSlashMessage(content: string, slashCommands: ChatSlashCommand[] =
     visibleContent: content,
     citations: [],
     scheduledDraft: null,
+    wecomApprovalConfirm: null,
+    wecomApprovalSubmitted: false,
     scheduledTaskPrompt: false,
     attachments: [],
     harnessArtifacts: [],
@@ -44,6 +46,8 @@ function renderSlashMessage(content: string, slashCommands: ChatSlashCommand[] =
     setActiveCitation: vi.fn(),
     confirmScheduledTask: vi.fn(),
     dismissScheduledTaskDraft: vi.fn(),
+    confirmWecomApproval: vi.fn(),
+    dismissWecomApproval: vi.fn(),
     removeQueuedTurn: vi.fn(),
     tenantId: 'tenant_demo',
     activeConversationId: 'session-1',
@@ -98,6 +102,8 @@ describe('MessageBubble team group identity', () => {
       attachments: [],
       harnessArtifacts: [],
       statusOnly: false,
+      wecomApprovalConfirm: null,
+      wecomApprovalSubmitted: false,
     };
     const leader = {
       id: 'agent-leader',
@@ -161,6 +167,8 @@ describe('MessageBubble team group identity', () => {
       attachments: [],
       harnessArtifacts: [],
       statusOnly: false,
+      wecomApprovalConfirm: null,
+      wecomApprovalSubmitted: false,
     };
     const chat = {
       displayedTeam: { id: 'team-1', name: '项目组' } as TeamRead,

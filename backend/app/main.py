@@ -30,6 +30,7 @@ from app.api import (
     traces,
     ui_config,
     wechat_kf,
+    wecom_oa,
 )
 from app.cabinet.api import router as cabinet_router
 from app.mail.api import router as mail_router
@@ -151,6 +152,9 @@ app.include_router(scheduled_tasks.chat_draft_router)
 app.include_router(ui_config.enterprise_router)
 app.include_router(channels.router)
 app.include_router(wechat_kf.router)
+app.include_router(wecom_oa.router)
+app.include_router(wecom_oa.callback_router)
+app.include_router(wecom_oa.chat_router)
 app.include_router(teams.router)
 app.include_router(teams.threads_router)
 app.include_router(tools.router)

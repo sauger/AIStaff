@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # 装到用户数据目录。关掉自动安装则必须自备二进制并指定 binary_path。
     lark_cli_auto_install: bool = True
     lark_cli_binary_path: str = ""
+    # 企微 OA 审批代发（app/wecom_oa/）。开启后进入能力清单；凭证与 bot 绑定分离。
+    wecom_oa_enabled: bool = True
     tool_base_url: str = "http://localhost:5173"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     general_skill_runtime_python: str = ""

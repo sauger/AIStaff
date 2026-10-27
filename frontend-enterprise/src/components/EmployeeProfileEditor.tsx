@@ -22,6 +22,7 @@ import type { EnterpriseAuthUser } from '../auth';
 import { employeeDisplayName, employeeProfile } from '../employee';
 import type { AgentProfileRead } from '../types';
 import EmployeeAvatar from './EmployeeAvatar';
+import WecomOaAgentConfigPanel from '../pages/channels/WecomOaAgentConfigPanel';
 
 type EmployeeProfileFormValues = {
   name: string;
@@ -235,6 +236,8 @@ export default function EmployeeProfileEditor({
                   <TagsField value={form.workModes} options={WORK_MODE_OPTIONS} placeholder="输入后回车添加" onChange={(next) => update({ workModes: next })} />
                 </LabeledField>
               </div>
+
+              {agent?.id && <WecomOaAgentConfigPanel agentId={agent.id} />}
 
               <div className="employee-profile-publish">
                 <div>
