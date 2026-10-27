@@ -717,6 +717,8 @@ def update_channel_binding_agents(
     if request.agents is not None:
         if not request.agents:
             raise HTTPException(status_code=400, detail="挂载员工列表不能为空")
+        if len(request.agents) > 1:
+            raise HTTPException(status_code=400, detail="一通道只能挂载一个员工")
         seen: set[str] = set()
         for item in request.agents:
             if item.agent_id in seen:
@@ -759,7 +761,7 @@ def update_channel_binding_agents(
                 tenant_id,
                 binding_id,
                 "auto_route",
-                request.auto_route,
+                False,
             )
             db.commit()
         if request.default_handoff_assignee_user_id != "unchanged":

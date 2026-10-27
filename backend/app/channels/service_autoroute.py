@@ -51,8 +51,8 @@ class RouteDecision:
 
 
 def auto_route_enabled(binding: ChannelBinding) -> bool:
-    """智能分发开关:config_json.auto_route 非 False 即开(默认开)。"""
-    return (binding.config_json or {}).get("auto_route") is not False
+    """智能分发已下线:一通道一员工,产品路径永不跨员工分发。"""
+    return False
 
 
 def classify_intent(
