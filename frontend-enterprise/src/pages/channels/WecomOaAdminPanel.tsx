@@ -30,6 +30,12 @@ type TempBinding = {
   display_name?: string | null;
 };
 
+type StaffUser = {
+  id: string;
+  username: string;
+  display_name?: string | null;
+};
+
 type Props = {
   currentUser?: EnterpriseAuthUser | null;
 };
@@ -38,6 +44,7 @@ export default function WecomOaAdminPanel({ currentUser }: Props) {
   const isAdmin = isEnterpriseAdmin(currentUser);
   const [credential, setCredential] = useState<OaCredentialView | null>(null);
   const [bindings, setBindings] = useState<TempBinding[]>([]);
+  const [users, setUsers] = useState<StaffUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [savingCred, setSavingCred] = useState(false);
   const [savingBinding, setSavingBinding] = useState(false);
@@ -59,25 +66,31 @@ export default function WecomOaAdminPanel({ currentUser }: Props) {
     if (!isAdmin) return;
     setLoading(true);
     try {
-      const [credRes, bindRes] = await Promise.all([
+      const [credRes, bindRes, userRes] = await Promise.all([
         api.get<{ credential: OaCredentialView | null }>(
           `/api/enterprise/wecom-oa/credentials?tenant_id=${encodeURIComponent(TENANT_ID)}`,
         ),
         api.get<{ bindings: TempBinding[] }>(
           `/api/enterprise/wecom-oa/temp-identity-bindings?tenant_id=${encodeURIComponent(TENANT_ID)}`,
         ),
+        api.get<StaffUser[]>(`/api/auth/users?tenant_id=${encodeURIComponent(TENANT_ID)}`),
       ]);
       setCredential(credRes.credential);
       setBindings(bindRes.bindings || []);
+      setUsers(Array.isArray(userRes) ? userRes : []);
+      const savedCorpId = credRes.credential?.corp_id || '';
       if (credRes.credential) {
         setCredForm((prev) => ({
           ...prev,
-          corp_id: credRes.credential?.corp_id || '',
+          corp_id: savedCorpId,
           agentid: credRes.credential?.agentid || '',
           secret: '',
           callback_token: '',
           callback_aes_key: '',
         }));
+      }
+      if (savedCorpId) {
+        setBindingForm((prev) => ({ ...prev, corp_scope: prev.corp_scope || savedCorpId }));
       }
     } catch (error) {
       notify.error(error instanceof Error ? error.message : '加载企微 OA 配置失败');
@@ -113,6 +126,10 @@ export default function WecomOaAdminPanel({ currentUser }: Props) {
       );
       setCredential(res.credential);
       setCredForm((prev) => ({ ...prev, secret: '', callback_token: '', callback_aes_key: '' }));
+      const savedCorpId = res.credential?.corp_id || '';
+      if (savedCorpId) {
+        setBindingForm((prev) => ({ ...prev, corp_scope: prev.corp_scope || savedCorpId }));
+      }
       notify.success('OA 应用凭证已保存');
     } catch (error) {
       notify.error(error instanceof Error ? error.message : '保存 OA 凭证失败');
@@ -173,6 +190,7 @@ export default function WecomOaAdminPanel({ currentUser }: Props) {
         <span className="text-[13px] font-semibold text-[#18181a]">企微 OA 审批（代发）</span>
         <span className="text-[12px] leading-[1.6] text-[#858b9c]">
           配置自建应用凭证（与智能机器人凭证隔离）及 Mode B 临时身份绑定。密钥保存后不再回显。
+          企业范围填上面的企业 ID。企微 userid 在企业微信管理后台打开通讯录，进入成员详情，账号一栏就是 userid。
         </span>
       </div>
 
@@ -220,26 +238,59 @@ export default function WecomOaAdminPanel({ currentUser }: Props) {
       <div className="flex flex-col gap-[12px] rounded-[10px] bg-[#fafbfc] p-[16px]">
         <span className="text-[12px] font-medium text-[#464c5e]">临时身份绑定（Mode B）</span>
         <div className="grid gap-[8px] sm:grid-cols-2">
-          {(
-            [
-              ['corp_scope', '企业范围 corp_scope'],
-              ['staffdeck_user_id', 'StaffDeck 用户 ID'],
-              ['wecom_userid', '企微 userid'],
-              ['display_name', '显示名（可选）'],
-            ] as const
-          ).map(([key, label]) => (
-            <label key={key} className="flex flex-col gap-[6px] text-[12px] text-[#464c5e]">
-              {label}
-              <Input
-                value={bindingForm[key]}
-                autoComplete="off"
-                onChange={(event) =>
-                  setBindingForm((prev) => ({ ...prev, [key]: event.target.value }))
-                }
-                className="h-8 rounded-[10px] text-[12px]"
-              />
-            </label>
-          ))}
+          <label className="flex flex-col gap-[6px] text-[12px] text-[#464c5e]">
+            企业 ID（与上面保存的企业 ID 相同）
+            <Input
+              value={bindingForm.corp_scope}
+              autoComplete="off"
+              placeholder="ww 开头的企业 ID"
+              onChange={(event) =>
+                setBindingForm((prev) => ({ ...prev, corp_scope: event.target.value }))
+              }
+              className="h-8 rounded-[10px] text-[12px]"
+            />
+          </label>
+          <label className="flex flex-col gap-[6px] text-[12px] text-[#464c5e]">
+            StaffDeck 用户
+            <select
+              aria-label="StaffDeck 用户"
+              value={bindingForm.staffdeck_user_id}
+              onChange={(event) =>
+                setBindingForm((prev) => ({ ...prev, staffdeck_user_id: event.target.value }))
+              }
+              className="h-8 rounded-[10px] border border-[#e3e7f1] bg-white px-2 text-[12px]"
+            >
+              <option value="">{users.length ? '选择用户' : '暂无可选用户'}</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.display_name || user.username}（{user.username}）
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-[6px] text-[12px] text-[#464c5e]">
+            企微 userid
+            <Input
+              value={bindingForm.wecom_userid}
+              autoComplete="off"
+              placeholder="通讯录成员详情里的账号"
+              onChange={(event) =>
+                setBindingForm((prev) => ({ ...prev, wecom_userid: event.target.value }))
+              }
+              className="h-8 rounded-[10px] text-[12px]"
+            />
+          </label>
+          <label className="flex flex-col gap-[6px] text-[12px] text-[#464c5e]">
+            显示名（可选）
+            <Input
+              value={bindingForm.display_name}
+              autoComplete="off"
+              onChange={(event) =>
+                setBindingForm((prev) => ({ ...prev, display_name: event.target.value }))
+              }
+              className="h-8 rounded-[10px] text-[12px]"
+            />
+          </label>
         </div>
         <div className="flex justify-end">
           <UIButton

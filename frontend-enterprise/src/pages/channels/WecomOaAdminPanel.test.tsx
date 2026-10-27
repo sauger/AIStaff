@@ -37,5 +37,6 @@ describe('WecomOaAdminPanel', () => {
     expect(await screen.findByTestId('wecom-oa-admin-panel')).toBeTruthy();
     expect(screen.getByText('保存 OA 凭证')).toBeTruthy();
     expect(screen.getByText('新增/更新绑定')).toBeTruthy();
+    expect(screen.getByLabelText('StaffDeck 用户')).toBeTruthy();
   });
 });
