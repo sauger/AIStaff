@@ -22,6 +22,7 @@ import type { EnterpriseAuthUser } from '../auth';
 import { employeeDisplayName, employeeProfile } from '../employee';
 import type { AgentProfileRead } from '../types';
 import EmployeeAvatar from './EmployeeAvatar';
+import EmployeeAccessChannelsPanel from '../pages/channels/EmployeeAccessChannelsPanel';
 
 type EmployeeProfileFormValues = {
   name: string;
@@ -63,12 +64,14 @@ export default function EmployeeProfileEditor({
   onClose,
   onSaved,
   currentUser,
+  onOpenMail,
 }: {
   agent?: AgentProfileRead | null;
   open: boolean;
   onClose: () => void;
   onSaved?: (agent: AgentProfileRead) => void;
   currentUser?: EnterpriseAuthUser;
+  onOpenMail?: (agentId: string) => void;
 }) {
   const [form, setForm] = useState<EmployeeProfileFormValues>(BLANK_FORM);
   const [saving, setSaving] = useState(false);
@@ -245,6 +248,13 @@ export default function EmployeeProfileEditor({
                 </div>
                 <Switch checked={form.publishedToGallery} onCheckedChange={(next) => update({ publishedToGallery: next })} />
               </div>
+
+              {agent?.id && (
+                <EmployeeAccessChannelsPanel
+                  agentId={agent.id}
+                  onOpenMail={onOpenMail ? () => onOpenMail(agent.id) : undefined}
+                />
+              )}
             </div>
           </div>
         </div>
