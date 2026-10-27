@@ -845,22 +845,22 @@ def test_put_agents_replaces_mounts_and_normalizes_default() -> None:
         binding_id = binding.id
 
     client = _make_api_client(engine)
-    # 未标默认 → 取第一个
+    # 一通道一员工:单员工 PUT 替换归属,未标默认也视为唯一默认
     updated = client.put(
         f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
-        json={"agents": [{"agent_id": "agent_cw"}, {"agent_id": "agent_xz"}]},
+        json={"agents": [{"agent_id": "agent_cw"}]},
         headers=_auth(users["owner"]),
     )
     assert updated.status_code == 200
     payload = updated.json()
     assert [(a["agent_id"], a["is_default"]) for a in payload["agents"]] == [
         ("agent_cw", True),
-        ("agent_xz", False),
     ]
     assert payload["agent_id"] == "agent_cw"
+    assert payload["auto_route"] is False
 
-    # 多标默认 → 取首个标记
-    updated = client.put(
+    # 多员工 PUT 硬约束 400
+    rejected = client.put(
         f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
         json={
             "agents": [
@@ -870,9 +870,18 @@ def test_put_agents_replaces_mounts_and_normalizes_default() -> None:
         },
         headers=_auth(users["owner"]),
     )
+    assert rejected.status_code == 400
+    assert "一个员工" in rejected.json()["detail"]
+
+    # 再换回单员工
+    updated = client.put(
+        f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
+        json={"agents": [{"agent_id": "agent_xz", "is_default": True}]},
+        headers=_auth(users["owner"]),
+    )
+    assert updated.status_code == 200
     assert [(a["agent_id"], a["is_default"]) for a in updated.json()["agents"]] == [
         ("agent_xz", True),
-        ("agent_cw", False),
     ]
 
     with Session(engine) as db:
@@ -881,7 +890,8 @@ def test_put_agents_replaces_mounts_and_normalizes_default() -> None:
         mounts = db.exec(
             select(ChannelBindingAgent).where(ChannelBindingAgent.binding_id == binding_id)
         ).all()
-        assert len(mounts) == 2
+        assert len(mounts) == 1
+        assert mounts[0].agent_id == "agent_xz"
 
 
 def test_put_agents_validations() -> None:
@@ -916,18 +926,19 @@ def test_put_agents_validations() -> None:
     )
     assert empty.status_code == 400
 
-    # 未知 agent 404
+    # 未知 agent 404(单员工路径仍走 manager/未知校验)
     unknown = client.put(
         f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
-        json={"agents": [{"agent_id": "agent_xz"}, {"agent_id": "agent_nope"}]},
+        json={"agents": [{"agent_id": "agent_nope"}]},
         headers=_auth(users["owner"]),
     )
     assert unknown.status_code == 404
 
-    # 重复 agent 400
+    # 多员工(含重复)先于重复校验被硬约束拒绝
     duplicated = client.put(
         f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
         json={"agents": [{"agent_id": "agent_xz"}, {"agent_id": "agent_xz"}]},
         headers=_auth(users["owner"]),
     )
     assert duplicated.status_code == 400
+    assert "一个员工" in duplicated.json()["detail"]

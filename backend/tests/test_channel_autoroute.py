@@ -257,57 +257,25 @@ def test_sticky_rules_skip_classification() -> None:
 
 
 def test_sop_active_uses_higher_threshold() -> None:
+    # Product: auto_route_enabled always False → no switch (SOP path dead)
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     with Session(engine) as db:
-        db.add(
-            ChannelConvState(
-                tenant_id="tenant_demo",
-                binding_id=binding_id,
-                external_conv_id="wechat_p2p_u1",
-                current_agent_id="agent_xz",
-            )
-        )
-        db.add(
-            ChatSession(
-                id="s_sop",
-                tenant_id="tenant_demo",
-                agent_id="agent_xz",
-                channel="wechat",
-                external_conv_id="wechat_p2p_u1",
-                channel_binding_id=binding_id,
-                active_skill_id="meeting_room_sop",
-            )
-        )
-        db.commit()
         binding = db.get(ChannelBinding, binding_id)
-
-        # SOP 进行中:0.85 超过常规阈值但未达 0.9,不切
-        FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.85, "reason": "财务问题"})
-        decision = maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销吗")
-        assert decision is not None and decision.switched is False
-        assert decision.threshold == 0.9
-
-        # 0.92 达高阈值:切换,且 SOP 会话原样保留(冻结可续)
         FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.92, "reason": "明确财务"})
-        decision = maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销吗")
-        assert decision is not None and decision.switched is True
-        assert decision.threshold == 0.9
-        sop_session = db.get(ChatSession, "s_sop")
-        assert sop_session.active_skill_id == "meeting_room_sop"
-        assert sop_session.agent_id == "agent_xz"
+        assert maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销吗") is None
+    assert FakeLLMClient.calls == []
 
 
 def test_no_sop_uses_normal_threshold() -> None:
+    # Product: auto_route_enabled always False → no switch
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.8, "reason": "财务问题"})
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
-        # 无 SOP:0.8 过常规 0.75 阈值,正常切
-        decision = maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销吗")
-        assert decision is not None and decision.switched is True
-        assert decision.threshold == 0.75
+        assert maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销吗") is None
+    assert FakeLLMClient.calls == []
 
 
 def test_parse_command_current_alias() -> None:
@@ -334,47 +302,23 @@ def test_auto_route_disabled_and_single_mount_skip() -> None:
 
 
 def test_auto_route_hit_updates_pointer() -> None:
+    # Product: auto_route_enabled always False → no switch
     engine = _test_engine()
     binding_id = _seed_binding(engine)
-    FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.9, "reason": "财务问题"})
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
-        decision = maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销怎么走")
-        assert decision is not None and decision.switched is True
-        current, _ = resolve_current_agent(db, binding, "wechat_p2p_u1")
-        assert current == "agent_cw"
+        assert maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销怎么走") is None
 
 
 def test_auto_route_does_not_overwrite_manual_switch_during_classification(monkeypatch) -> None:
+    # Product: auto_route_enabled always False → classify never runs
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         resolve_current_agent(db, binding, "wechat_p2p_u1")
         db.commit()
-
-        def classify_after_manual_switch(*_args, **_kwargs):
-            set_current_agent(
-                db,
-                binding,
-                "wechat_p2p_u1",
-                "agent_xz",
-                pin_until=utc_now() + timedelta(minutes=5),
-            )
-            return RouteDecision(
-                agent_id="agent_cw",
-                switched=True,
-                confidence=0.99,
-                reason="财务问题",
-                target_agent_id="agent_cw",
-            )
-
-        monkeypatch.setattr(autoroute_module, "classify_intent", classify_after_manual_switch)
-        decision = maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销吗")
-
-        assert decision is not None
-        assert decision.switched is False
-        assert decision.error == "route_changed_during_classification"
+        assert maybe_auto_route(db, binding, "agent_xz", "wechat_p2p_u1", "报销吗") is None
         current, _ = resolve_current_agent(db, binding, "wechat_p2p_u1")
         assert current == "agent_xz"
 
@@ -416,35 +360,31 @@ def _fake_agent_loop(monkeypatch):
 
 
 def test_intake_auto_route_switches_with_notice_and_event() -> None:
+    # Product: auto_route off → stay on default, no switch notice/event
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
     FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.9, "reason": "财务问题"})
 
     assert process_inbound(binding, _p2p_message("evt_ar1", "报销怎么走"), db_engine=engine) is True
-    assert RecordingAgentLoop.calls[-1].agent_id == "agent_cw"
+    assert RecordingAgentLoop.calls[-1].agent_id == "agent_xz"
+    assert FakeLLMClient.calls == []
 
     with Session(engine) as db:
         notices = db.exec(
             select(ChannelDelivery).where(ChannelDelivery.kind == "notice")
         ).all()
-        assert any("已为你转接「财务」" in n.text for n in notices)
+        assert notices == []
         events = db.exec(
             select(AgentEvent).where(AgentEvent.event_type == "auto_route_decision")
         ).all()
-        assert len(events) == 1
-        payload = events[0].payload_json
-        assert payload["switched"] is True
-        assert payload["agent_id"] == "agent_cw"
-        assert payload["current_agent_id"] == "agent_xz"
-        assert payload["confidence"] == 0.9
-        assert payload["threshold"] == 0.75
-        # 会话锚定在财务名下
+        assert events == []
         chat_session = db.exec(select(ChatSession)).one()
-        assert chat_session.agent_id == "agent_cw"
+        assert chat_session.agent_id == "agent_xz"
 
 
 def test_intake_sop_event_carries_effective_threshold() -> None:
+    # Product: auto_route off → no classification / decision event
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     with Session(engine) as db:
@@ -471,17 +411,14 @@ def test_intake_sop_event_carries_effective_threshold() -> None:
     binding = _load_binding(engine, binding_id)
     FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.85, "reason": "财务倾向"})
 
-    # SOP 进行中:0.85 未达 0.9 不切,但分类已执行,事件带生效阈值 0.9
     assert process_inbound(binding, _p2p_message("evt_sop1", "报销怎么走"), db_engine=engine) is True
     assert RecordingAgentLoop.calls[-1].agent_id == "agent_xz"
+    assert FakeLLMClient.calls == []
     with Session(engine) as db:
         events = db.exec(
             select(AgentEvent).where(AgentEvent.event_type == "auto_route_decision")
         ).all()
-        assert len(events) == 1
-        payload = events[0].payload_json
-        assert payload["switched"] is False
-        assert payload["threshold"] == 0.9
+        assert events == []
 
 
 def test_intake_auto_route_stay_no_notice() -> None:
@@ -499,21 +436,19 @@ def test_intake_auto_route_stay_no_notice() -> None:
         events = db.exec(
             select(AgentEvent).where(AgentEvent.event_type == "auto_route_decision")
         ).all()
-        assert len(events) == 1
-        assert events[0].payload_json["switched"] is False
+        assert events == []
 
 
 def test_intake_new_conversation_initial_dispatch() -> None:
+    # Product: auto_route off → first message stays on default owner
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
     FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.95, "reason": "首条即财务"})
 
-    # 全新会话(无指针无历史):首条消息即可分发到非默认员工
     assert process_inbound(binding, _p2p_message("evt_ar3", "我要报销"), db_engine=engine) is True
-    assert RecordingAgentLoop.calls[-1].agent_id == "agent_cw"
-    payload = FakeLLMClient.calls[0]["payload"]
-    assert payload["recent_messages"] == []
+    assert RecordingAgentLoop.calls[-1].agent_id == "agent_xz"
+    assert FakeLLMClient.calls == []
 
 
 def test_manual_switch_writes_pin_window_and_blocks_auto_route() -> None:
@@ -522,28 +457,30 @@ def test_manual_switch_writes_pin_window_and_blocks_auto_route() -> None:
     binding = _load_binding(engine, binding_id)
     FakeLLMClient.script = json.dumps({"agent_id": "agent_xz", "confidence": 0.99, "reason": "行政问题"})
 
-    # 手动切换到财务:写 10 分钟保护窗
+    # 手动切换到财务:写 10 分钟保护窗(手动路由仍可用)
     assert process_inbound(binding, _p2p_message("evt_ar4", "/切换 财务"), db_engine=engine) is False
     with Session(engine) as db:
         state = db.exec(select(ChannelConvState)).one()
         assert state.current_agent_id == "agent_cw"
         assert state.manual_pin_until is not None
-        assert state.manual_pin_until > utc_now() + timedelta(minutes=9)
+        # SQLite may strip tz; compare naive walls
+        pin = state.manual_pin_until.replace(tzinfo=None)
+        now = utc_now().replace(tzinfo=None)
+        assert pin > now + timedelta(minutes=9)
 
-    # 保护窗内:即使分类器想切回行政也不触发(LLM 不被调用)
+    # 保护窗内 / 窗外:产品路径永不智能分发,LLM 不被调用,粘性停在财务
     assert process_inbound(binding, _p2p_message("evt_ar5", "帮我订会议室"), db_engine=engine) is True
     assert FakeLLMClient.calls == []
     assert RecordingAgentLoop.calls[-1].agent_id == "agent_cw"
 
-    # 窗外:恢复"每条都判"
     with Session(engine) as db:
         state = db.exec(select(ChannelConvState)).one()
         state.manual_pin_until = utc_now() - timedelta(minutes=1)
         db.add(state)
         db.commit()
     assert process_inbound(binding, _p2p_message("evt_ar6", "帮我订会议室"), db_engine=engine) is True
-    assert len(FakeLLMClient.calls) == 1
-    assert RecordingAgentLoop.calls[-1].agent_id == "agent_xz"
+    assert FakeLLMClient.calls == []
+    assert RecordingAgentLoop.calls[-1].agent_id == "agent_cw"
 
 
 def test_intake_auto_route_disabled_uses_default() -> None:
@@ -563,46 +500,42 @@ def test_intake_auto_route_disabled_uses_default() -> None:
 
 
 def test_intake_classification_failure_still_runs_turn() -> None:
+    # Product: auto_route off → no classify, turn still runs on default
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
     FakeLLMClient.error = RuntimeError("LLM 超时")
 
-    # 分类异常回退当前员工,消息正常进入 AgentLoop
     assert process_inbound(binding, _p2p_message("evt_ar8", "报销怎么走"), db_engine=engine) is True
     assert RecordingAgentLoop.calls[-1].agent_id == "agent_xz"
+    assert FakeLLMClient.calls == []
     with Session(engine) as db:
         event = db.exec(select(ChannelInboundEvent)).one()
         assert event.status == "done"
-        # 失败原因落决策事件 error 字段
         route_events = db.exec(
             select(AgentEvent).where(AgentEvent.event_type == "auto_route_decision")
         ).all()
-        assert len(route_events) == 1
-        payload = route_events[0].payload_json
-        assert payload["switched"] is False
-        assert "LLM 超时" in payload["error"]
+        assert route_events == []
 
 
 def test_intake_bad_json_error_in_decision_event() -> None:
+    # Product: auto_route off → no classify / decision event
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
     FakeLLMClient.script = "这不是 JSON"
 
     assert process_inbound(binding, _p2p_message("evt_ar9", "报销怎么走"), db_engine=engine) is True
+    assert FakeLLMClient.calls == []
     with Session(engine) as db:
         route_events = db.exec(
             select(AgentEvent).where(AgentEvent.event_type == "auto_route_decision")
         ).all()
-        assert len(route_events) == 1
-        payload = route_events[0].payload_json
-        assert payload["switched"] is False
-        # 坏 JSON 的解析失败摘要可辨
-        assert "Expecting value" in payload["error"]
+        assert route_events == []
 
 
 def test_normal_decision_event_error_empty() -> None:
+    # Product: auto_route off → no decision event
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -612,8 +545,7 @@ def test_normal_decision_event_error_empty() -> None:
         route_events = db.exec(
             select(AgentEvent).where(AgentEvent.event_type == "auto_route_decision")
         ).all()
-        assert len(route_events) == 1
-        assert route_events[0].payload_json["error"] == ""
+        assert route_events == []
 
 
 # ---------- PUT auto_route 读写 ----------
@@ -678,17 +610,17 @@ def test_put_auto_route_read_write() -> None:
         binding_id = binding.id
 
     client = _make_api_client(engine)
-    # 默认开
+    # 读路径恒 False(智能分发已下线)
     listed = client.get(
         "/api/enterprise/channels?tenant_id=tenant_demo&agent_id=agent_xz",
         headers=_auth(users["owner"]),
     )
-    assert listed.json()[0]["auto_route"] is True
+    assert listed.json()[0]["auto_route"] is False
 
-    # 显式关闭
+    # 显式传 True 也被强制写成 False
     updated = client.put(
         f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
-        json={"agents": [{"agent_id": "agent_xz"}], "auto_route": False},
+        json={"agents": [{"agent_id": "agent_xz"}], "auto_route": True},
         headers=_auth(users["owner"]),
     )
     assert updated.status_code == 200
@@ -697,7 +629,7 @@ def test_put_auto_route_read_write() -> None:
         binding = db.get(ChannelBinding, binding_id)
         assert binding.config_json["auto_route"] is False
 
-    # 不传 auto_route:保持不动
+    # 不传 auto_route:读路径仍 False
     updated = client.put(
         f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
         json={"agents": [{"agent_id": "agent_xz"}]},
