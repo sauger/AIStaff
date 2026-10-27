@@ -1,6 +1,7 @@
 import { IdcardOutlined } from '../icons';
 import { X as XIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Button as UIButton,
   Dialog,
@@ -20,9 +21,9 @@ import { SELECT_TRIGGER_CLASS } from '@/lib/enterprise-ui';
 import { api, TENANT_ID } from '../api/client';
 import type { EnterpriseAuthUser } from '../auth';
 import { employeeDisplayName, employeeProfile } from '../employee';
+import { EnterpriseRoute } from '../enums/routes';
 import type { AgentProfileRead } from '../types';
 import EmployeeAvatar from './EmployeeAvatar';
-import EmployeeAccessChannelsPanel from '../pages/channels/EmployeeAccessChannelsPanel';
 import WecomOaAgentConfigPanel from '../pages/channels/WecomOaAgentConfigPanel';
 
 type EmployeeProfileFormValues = {
@@ -65,7 +66,7 @@ export default function EmployeeProfileEditor({
   onClose,
   onSaved,
   currentUser,
-  onOpenMail,
+  onOpenMail: _onOpenMail,
 }: {
   agent?: AgentProfileRead | null;
   open: boolean;
@@ -74,6 +75,8 @@ export default function EmployeeProfileEditor({
   currentUser?: EnterpriseAuthUser;
   onOpenMail?: (agentId: string) => void;
 }) {
+  void _onOpenMail;
+  const navigate = useNavigate();
   const [form, setForm] = useState<EmployeeProfileFormValues>(BLANK_FORM);
   const [saving, setSaving] = useState(false);
   const profile = useMemo(() => employeeProfile(agent), [agent]);
@@ -241,10 +244,23 @@ export default function EmployeeProfileEditor({
               </div>
 
               {agent?.id && (
-                <EmployeeAccessChannelsPanel
-                  agentId={agent.id}
-                  onOpenMail={onOpenMail ? () => onOpenMail(agent.id) : undefined}
-                />
+                <div className="rounded-[14px] border border-[#e3e7f1] bg-[#fafbfc] p-[14px]">
+                  <strong className="text-[13px] text-[#18181a]">接入渠道</strong>
+                  <p className="m-0 mt-[6px] text-[12px] leading-[1.5] text-muted-foreground">
+                    企微 / 钉钉 / 飞书 / 微信客服 / 邮件已移到侧栏「基本资料 → 接入渠道」。
+                  </p>
+                  <UIButton
+                    type="button"
+                    variant="outline"
+                    className="mt-[10px] h-8 rounded-[10px] px-3 text-[12px]"
+                    onClick={() => {
+                      onClose();
+                      navigate(EnterpriseRoute.AccessChannels);
+                    }}
+                  >
+                    打开接入渠道
+                  </UIButton>
+                </div>
               )}
 
               {agent?.id && <WecomOaAgentConfigPanel agentId={agent.id} />}

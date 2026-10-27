@@ -137,6 +137,17 @@ describe('AppSidebar agent switcher team group', () => {
     expect(screen.getByText('认证配置')).toBeTruthy();
   });
 
+  it('places 接入渠道 between 员工档案 and 定时任务 in profile navigation', () => {
+    renderSidebar({ selectedAgentId: 'agent-1' });
+    const labels = ['员工档案', '接入渠道', '定时任务', '记忆', '对话日志'];
+    const nodes = labels.map((label) => screen.getByText(label));
+    for (let i = 0; i < nodes.length - 1; i += 1) {
+      expect(
+        nodes[i].compareDocumentPosition(nodes[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+  });
+
   it('falls back to a bare team label when the selected team is unknown', () => {
     renderSidebar({ selectedAgentId: 'team:missing', scopeTeams: [team] });
 

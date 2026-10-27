@@ -351,7 +351,7 @@ describe('ChannelsPage', () => {
     status: 'active',
     connected: true,
     name: '小艾微信',
-    agents: [{ agent_id: 'agent-1', name: '小艾', is_default: true }],
+    agents: [{ agent_id: 'agent-1', name: '小艾', is_default: true, sort_order: 0 }],
     auto_route: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
@@ -375,7 +375,7 @@ describe('ChannelsPage', () => {
         return jsonResponse({
           ...agentBinding,
           agent_id: 'agent-2',
-          agents: [{ agent_id: 'agent-2', name: '小北', is_default: true }],
+          agents: [{ agent_id: 'agent-2', name: '小北', is_default: true, sort_order: 0 }],
         });
       }
       return makeFetchMock({ bindings: [agentBinding], agents })(input, init);

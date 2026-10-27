@@ -40,6 +40,7 @@ import {
 import AccountsPage from "./pages/AccountsPage";
 import AgentsPage from "./pages/AgentsPage";
 import ChannelsPage from "./pages/ChannelsPage";
+import EmployeeAccessChannelsPage from "./pages/channels/EmployeeAccessChannelsPage";
 import ChatPage from "./pages/chat/ChatPage";
 import ChatGalleryPage from "./pages/chat/ChatGalleryPage";
 import DashboardPage from "./pages/dashboard/DashboardPage";
@@ -384,6 +385,7 @@ function Shell({
   // Routes that operate on a specific employee; show the empty guide when none exist.
   const EMPLOYEE_SCOPED_PREFIXES = [
     "/enterprise/dashboard",
+    "/enterprise/access-channels",
     "/enterprise/scheduled-tasks",
     "/enterprise/memories",
     "/enterprise/feedback",
@@ -604,6 +606,15 @@ function Shell({
                   <DashboardPage
                     currentUser={auth.user}
                     isAdmin={isAdmin}
+                    onLogout={onLogout}
+                  />
+                }
+              />
+              <Route
+                path="/enterprise/access-channels"
+                element={
+                  <EmployeeAccessChannelsPage
+                    currentUser={auth.user}
                     onLogout={onLogout}
                   />
                 }
