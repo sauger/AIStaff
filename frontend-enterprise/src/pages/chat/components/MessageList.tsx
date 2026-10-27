@@ -23,6 +23,7 @@ import {
 import { staffdeckDisplayText } from '@/employee';
 import type { UseChatSession } from '../useChatSession';
 import ChatEmptyState from './ChatEmptyState';
+import KnowledgeProposalPanel from './KnowledgeProposalPanel';
 import MessageBubble, { type MessageRender } from './MessageBubble';
 import ScheduledDraftCard from './ScheduledDraftCard';
 import TeamCollaborationPanel, {
@@ -49,6 +50,7 @@ export default function MessageList({
     dismissedDraftMessageIds,
     createdScheduledTasks,
     activeConversationId,
+    tenantId,
     currentScheduledDraft,
     hasVisibleMessageScheduledDraft,
     confirmScheduledTask,
@@ -203,6 +205,13 @@ export default function MessageList({
             onDismiss={() => dismissScheduledTaskDraft()}
           />
         </div>
+      )}
+
+      {activeConversationId && (
+        <KnowledgeProposalPanel
+          tenantId={tenantId}
+          sessionId={activeConversationId}
+        />
       )}
 
       {SHOW_DEBUG && lastTurn && (

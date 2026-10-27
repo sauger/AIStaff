@@ -991,6 +991,7 @@ class HarnessV2Engine:
                 ),
                 trace_sink=trace,
                 step_deadline_monotonic=step_deadline_monotonic,
+                attachments=list(request.attachments or []),
             )
             invoker.inbound_mail_auto_complete = bool(request.inbound_mail_auto_complete)
             invoker.inbound_mail_message_id = (

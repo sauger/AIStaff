@@ -30,6 +30,7 @@ ALWAYS_EXPANDED_CAPABILITIES = {
     "edit_file",
     "publish_artifact",
     "knowledge_search",
+    "knowledge_ingest_proposal",
 }
 
 

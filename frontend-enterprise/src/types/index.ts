@@ -986,6 +986,33 @@ export type ChannelBindingManagerRead = {
   granted_by_name?: string | null;
 };
 
+export type KnowledgeProposalCandidate = {
+  document_id: string;
+  title: string;
+  filename: string;
+  knowledge_base_id: string;
+  knowledge_base_version_id?: string | null;
+  updated_at: string;
+  expected_updated_at?: string;
+  match_reasons: string[];
+  score: number;
+};
+
+export type KnowledgeProposalRead = {
+  id: string;
+  status: string;
+  proposed_action: string;
+  filename: string;
+  content_type?: string | null;
+  size: number;
+  target_knowledge_base_id: string;
+  target_knowledge_base_name: string;
+  candidates: KnowledgeProposalCandidate[];
+  expires_at: string;
+  created_at: string;
+  job_id?: string | null;
+};
+
 export type ChannelDeliveryRead = {
   id: string;
   message_id?: string | null;

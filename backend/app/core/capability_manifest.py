@@ -445,6 +445,38 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
         *mail_capability_descriptors(),
         *secret_capability_descriptors(),
         CapabilityDescriptor(
+            capability_id="builtin.knowledge.proposal",
+            name="knowledge_ingest_proposal",
+            kind="internal",
+            description=(
+                "Create a pending proposal to add one uploaded attachment to the current "
+                "employee's private knowledge base. Use only when the user explicitly asks "
+                "to add/update knowledge. This does not write knowledge data; the user must "
+                "confirm the returned proposal before any ingest job is created."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "Attachment id from the current turn's attachments list.",
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["create", "replace", "undecided"],
+                        "default": "undecided",
+                    },
+                    "target_knowledge_base_id": {
+                        "type": "string",
+                        "description": "Optional target KB id when the employee has multiple KBs.",
+                    },
+                },
+                "required": ["attachment_id"],
+                "additionalProperties": False,
+            },
+            metadata={"provider": "harness", "side_effect": "write_proposal"},
+        ),
+        CapabilityDescriptor(
             capability_id="builtin.external_task.status",
             name="external_task_status",
             kind="internal",

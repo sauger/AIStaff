@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import difflib
 import hashlib
 from datetime import timedelta
@@ -10,21 +11,28 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.agents.branching import visible_knowledge_base_versions
+from app.agents.branching import (
+    knowledge_version_for_upload,
+    visible_knowledge_base_versions,
+)
 from app.channels.media import MAX_CHANNEL_MEDIA_BYTES
+from app.async_jobs import enqueue_async_job
 from app.db.models import (
     ChannelIdentity,
     ChatSession,
     KnowledgeBase,
     KnowledgeDocument,
+    KnowledgeIngestJob,
     KnowledgeUpdateProposal,
     User,
     utc_now,
 )
 from app.knowledge.parser import KnowledgeParseError, extract_text
 from app.security.permissions import ensure_agent_scope_manager
+from app.knowledge.service import IngestPayload, KnowledgeService
 from app.session.attachment_store import read_staged_chat_attachment
 from app.session.session_schema import ChatAttachmentRead
+from app.time_utils import as_utc
 
 
 MAX_CHAT_ATTACHMENT_BYTES = 12 * 1024 * 1024
@@ -460,3 +468,122 @@ __all__ = [
     "SUPPORTED_KNOWLEDGE_SUFFIXES",
     "create_knowledge_update_proposal",
 ]
+
+
+def confirm_knowledge_update_proposal(
+    db: Session,
+    proposal: KnowledgeUpdateProposal,
+    *,
+    action: str,
+    confirmed_by_user_id: str,
+    expected_updated_at: str | None = None,
+    target_document_id: str | None = None,
+) -> KnowledgeIngestJob:
+    """Confirm a pending proposal and create the existing ingest job."""
+
+    normalized_action = _normalize_action(action)
+    if normalized_action == "undecided":
+        raise KnowledgeProposalError("INVALID_ACTION", "请选择新增或覆盖。")
+    if proposal.status in {"executing", "succeeded"} and proposal.job_id:
+        job = db.get(KnowledgeIngestJob, proposal.job_id)
+        if job is not None:
+            return job
+    if proposal.status != "pending":
+        raise KnowledgeProposalError("PROPOSAL_NOT_PENDING", "这个提案已经处理过或已失效。")
+    if as_utc(proposal.expires_at) <= utc_now():
+        proposal.status = "expired"
+        proposal.updated_at = utc_now()
+        db.add(proposal)
+        db.commit()
+        raise KnowledgeProposalError("PROPOSAL_EXPIRED", "这次确认已过期，请重新上传文件发起更新。")
+    acting_user_id = str(
+        (proposal.metadata_json or {}).get("acting_user_id") or ""
+    ).strip()
+    if acting_user_id and acting_user_id != confirmed_by_user_id:
+        raise KnowledgeProposalError(
+            "PERMISSION_DENIED", "只有发起该提案的用户可以确认。"
+        )
+    if normalized_action == "replace":
+        raise KnowledgeProposalError(
+            "REPLACE_NOT_IMPLEMENTED",
+            "覆盖流程尚未开放，请先选择新增或使用网页知识库后台。",
+        )
+    if target_document_id:
+        raise KnowledgeProposalError(
+            "INVALID_TARGET", "新增提案不能指定覆盖文档。"
+        )
+    attachment = ChatAttachmentRead(
+        id=proposal.attachment_id,
+        filename=proposal.filename,
+        content_type=proposal.content_type or "application/octet-stream",
+        size=proposal.size,
+        kind="binary",
+        sha256=proposal.source_sha256,
+    )
+    data = read_staged_chat_attachment(
+        attachment,
+        tenant_id=proposal.tenant_id,
+        user_id=acting_user_id or confirmed_by_user_id,
+    )
+    if data is None:
+        raise KnowledgeProposalError(
+            "ATTACHMENT_MISSING", "附件已过期或无法读取，请重新上传。"
+        )
+    if hashlib.sha256(data).hexdigest() != proposal.source_sha256:
+        raise KnowledgeProposalError("ATTACHMENT_CHANGED", "附件内容已变化，请重新上传。")
+    try:
+        version = knowledge_version_for_upload(
+            db,
+            proposal.tenant_id,
+            proposal.target_knowledge_base_id,
+            proposal.agent_id,
+            metadata_json={
+                "source": "chat",
+                "proposal_id": proposal.id,
+                "session_id": proposal.session_id,
+            },
+        )
+    except HTTPException as exc:
+        raise KnowledgeProposalError(
+            "KNOWLEDGE_BASE_NOT_WRITABLE", "目标知识库当前不可写。"
+        ) from exc
+    service = KnowledgeService(db)
+    job = service.create_ingest_job(
+        IngestPayload(
+            tenant_id=proposal.tenant_id,
+            knowledge_base_id=proposal.target_knowledge_base_id,
+            knowledge_base_version_id=version.id,
+            filename=proposal.filename,
+            content_base64=base64.b64encode(data).decode("ascii"),
+            title=Path(proposal.filename).stem or proposal.filename,
+            metadata={
+                "source": "chat",
+                "proposal_id": proposal.id,
+                "source_message_id": proposal.source_message_id,
+                "source_sha256": proposal.source_sha256,
+                "session_id": proposal.session_id,
+                "channel": proposal.channel,
+                "user_id": confirmed_by_user_id,
+            },
+        )
+    )
+    enqueue_async_job(
+        "knowledge_ingest",
+        service.run_ingest_job,
+        job.id,
+        metadata={
+            "tenant_id": proposal.tenant_id,
+            "knowledge_base_id": proposal.target_knowledge_base_id,
+            "proposal_id": proposal.id,
+        },
+    )
+    proposal.status = "executing"
+    proposal.job_id = job.id
+    proposal.target_knowledge_base_version_id = version.id
+    proposal.confirmed_at = utc_now()
+    proposal.confirmed_by_user_id = confirmed_by_user_id
+    proposal.expected_updated_at = expected_updated_at or proposal.expected_updated_at
+    proposal.updated_at = utc_now()
+    db.add(proposal)
+    db.commit()
+    return job

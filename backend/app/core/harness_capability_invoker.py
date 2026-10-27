@@ -41,6 +41,7 @@ from app.db.models import (
     ChatSession,
     ExternalBusinessTask,
     GeneralSkill,
+    KnowledgeBase,
     HarnessInvocationRecord,
     ModelConfig,
     Skill,
@@ -66,6 +67,10 @@ from app.harness.execution_context import SANDBOX_WORKSPACE
 from app.harness.sandbox import parse_network_policy
 from app.knowledge.citations import knowledge_citations_from_results
 from app.knowledge.schema import KnowledgeSearchRequest
+from app.knowledge.proposals import (
+    KnowledgeProposalError,
+    create_knowledge_update_proposal,
+)
 from app.knowledge.service import KnowledgeService
 from app.mail.confirm import skill_requires_mail_confirm
 from app.skills.tool_authorization import current_sop_tool_authorization
@@ -101,6 +106,7 @@ class HarnessCapabilityInvoker:
         ensure_execution_lease: Any | None = None,
         trace_sink: Callable[[str, dict[str, Any]], None] | None = None,
         step_deadline_monotonic: float | None = None,
+        attachments: list[Any] | None = None,
     ) -> None:
         self.db = db
         self.tenant_id = tenant_id
@@ -118,6 +124,7 @@ class HarnessCapabilityInvoker:
         self.ensure_execution_lease = ensure_execution_lease
         self.trace_sink = trace_sink
         self.step_deadline_monotonic = step_deadline_monotonic
+        self.attachments = list(attachments or [])
         self.run_id = str(run_id or new_id("hrun"))
         self.workspace_root = _workspace_root(
             tenant_id, session.id, task_frame_id, db=self.db
@@ -739,6 +746,53 @@ class HarnessCapabilityInvoker:
             "success": True,
             "data": data,
             "citations": citations if isinstance(citations, list) else [],
+        }
+
+    def _knowledge_ingest_proposal(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        attachment_id = str(arguments.get("attachment_id") or "").strip()
+        if not attachment_id:
+            return _failure("INVALID_ARGUMENTS", "attachment_id 不能为空。")
+        attachment = next(
+            (item for item in self.attachments if str(getattr(item, "id", "")) == attachment_id),
+            None,
+        )
+        if attachment is None:
+            return _failure(
+                "ATTACHMENT_NOT_FOUND",
+                "当前轮次没有该附件，请让用户重新上传。",
+            )
+        try:
+            proposal = create_knowledge_update_proposal(
+                self.db,
+                chat_session=self.session,
+                attachment=attachment,
+                source_message_id=f"{self.task_frame_id}:{attachment_id}",
+                requested_action=str(arguments.get("intent") or "undecided"),
+                target_knowledge_base_id=str(
+                    arguments.get("target_knowledge_base_id") or ""
+                ).strip()
+                or None,
+                binding_id=str(getattr(self.session, "channel_binding_id", "") or "")
+                or None,
+            )
+        except KnowledgeProposalError as exc:
+            return _failure(exc.code, str(exc), details=exc.details)
+        knowledge_base = self.db.get(KnowledgeBase, proposal.target_knowledge_base_id)
+        return {
+            "success": True,
+            "data": {
+                "proposal_id": proposal.id,
+                "status": proposal.status,
+                "proposed_action": proposal.proposed_action,
+                "filename": proposal.filename,
+                "target_knowledge_base_id": proposal.target_knowledge_base_id,
+                "target_knowledge_base_name": (
+                    knowledge_base.name if knowledge_base else proposal.target_knowledge_base_id
+                ),
+                "candidates": list(proposal.candidates_json or []),
+                "expires_at": proposal.expires_at.isoformat(),
+                "notice": "提案已创建，尚未写入知识库；需要用户确认。",
+            },
         }
 
     def _search_capabilities(self, arguments: dict[str, Any]) -> dict[str, Any]:
