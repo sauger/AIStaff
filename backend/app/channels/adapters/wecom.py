@@ -33,6 +33,7 @@ from app.channels.media import (
 )
 from app.db import engine
 from app.db.models import ChannelBinding, GeneralSkill, Skill, Tool, utc_now
+from app.time_utils import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -924,6 +925,7 @@ class WeComStreamManager:
                     return
                 # 时间基准:最近成功连接时间;从未连上过则以最近更新(保存凭证)时刻起算
                 baseline = binding.last_connected_at or binding.updated_at
+                baseline = as_utc(baseline)
                 if not baseline or utc_now() - baseline < timedelta(
                     minutes=WECOM_DISCONNECT_ALERT_MINUTES
                 ):

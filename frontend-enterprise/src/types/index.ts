@@ -988,6 +988,8 @@ export type ChannelBindingManagerRead = {
 
 export type ChannelDeliveryRead = {
   id: string;
+  message_id?: string | null;
+  remote_message_id?: string | null;
   kind: string;
   text: string;
   status: string;

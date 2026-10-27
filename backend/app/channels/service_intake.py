@@ -36,6 +36,7 @@ from app.channels.service_routing import (
 from app.channels.service_session import find_or_create_channel_session
 from app.config import get_settings
 from app.db import engine
+from app.time_utils import as_utc
 from app.db.models import (
     AgentEvent,
     ChannelBindCode,
@@ -176,6 +177,7 @@ def _claim_stale_event(db: Session, event_id: str) -> bool:
                 ChannelInboundEvent.processor_lease_expires_at <= utc_now(),
             ),
         )
+        .execution_options(synchronize_session=False)
         .values(
             processor_run_id=run_id,
             processor_lease_expires_at=_inbound_lease_deadline(),
@@ -183,6 +185,7 @@ def _claim_stale_event(db: Session, event_id: str) -> bool:
         )
     )
     db.commit()
+    db.expire_all()
     return result.rowcount == 1
 
 
@@ -688,6 +691,7 @@ def _claim_bind_code(
             ChannelBindCode.used_at.is_(None),
             ChannelBindCode.expires_at > now,
         )
+        .execution_options(synchronize_session=False)
         .values(used_at=now)
     )
     return claim.rowcount == 1
@@ -715,7 +719,11 @@ def _bind_external_identity(
             ChannelBindCode.code == code,
         )
     ).first()
-    if not record or record.used_at is not None or record.expires_at <= now:
+    if (
+        not record
+        or record.used_at is not None
+        or as_utc(record.expires_at) <= now
+    ):
         _record_bind_failure(binding.tenant_id, binding.channel, scope, external_id)
         return "绑定码无效或已过期，请在 StaffDeck 网页端重新生成后再试。"
     owner = db.get(User, record.user_id)

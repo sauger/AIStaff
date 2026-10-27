@@ -1,5 +1,7 @@
+import ipaddress
 import os as _os
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -51,8 +53,10 @@ class Settings(BaseSettings):
     wechat_ilink_base_url: str = "https://ilinkai.weixin.qq.com"
     channel_delivery_poll_seconds: float = 1.0
     channel_delivery_max_attempts: int = 8
-    # 渠道文件下载链接的公网基地址；为空时退回 tool_base_url。
+    # 渠道文件下载链接必须使用显式公网基地址，不再回退 tool_base_url。
     public_base_url: str = ""
+    # 仅本地开发允许 http://localhost 的下载链接；生产默认关闭。
+    allow_local_artifact_links: bool = False
     public_api_enabled: bool = True
     public_api_key_pepper: str = ""
     public_api_idempotency_ttl_seconds: int = 60 * 60 * 24
@@ -91,7 +95,22 @@ class Settings(BaseSettings):
 
     @property
     def normalized_public_base_url(self) -> str:
-        return (self.public_base_url or self.tool_base_url).rstrip("/")
+        raw = self.public_base_url.strip().rstrip("/")
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return ""
+        host = parsed.hostname.strip().lower()
+        if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+            return raw if self.allow_local_artifact_links else ""
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return raw
+        if address.is_loopback or address.is_private or address.is_link_local:
+            return raw if self.allow_local_artifact_links else ""
+        return raw
 
     @property
     def general_skill_runtime_package_list(self) -> list[str]:

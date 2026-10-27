@@ -215,6 +215,7 @@ class ChannelDeliveryRead(BaseModel):
     binding_id: str
     session_id: str
     message_id: Optional[str] = None
+    remote_message_id: Optional[str] = None
     kind: str
     text: str
     status: str
@@ -432,6 +433,7 @@ def channel_delivery_read(delivery: ChannelDelivery) -> ChannelDeliveryRead:
         binding_id=delivery.binding_id,
         session_id=delivery.session_id,
         message_id=delivery.message_id,
+        remote_message_id=delivery.remote_message_id,
         kind=delivery.kind,
         text=delivery.text,
         status=delivery.status,

@@ -133,6 +133,7 @@ def _migrate_sqlite_skill_schema() -> None:
         _migrate_feishu_channel_schema(conn, tables)
         _migrate_channel_inbound_run_schema(conn, tables)
         _migrate_channel_bind_code_constraints(conn, tables)
+        _ensure_channel_binding_team_column(conn, tables)
         _migrate_wechat_kf_accounts(conn, tables)
         _migrate_capability_scope_schema(conn, inspector, tables)
         _migrate_harness_v2_schema(conn, inspector, tables)
@@ -265,8 +266,7 @@ def _migrate_sqlite_skill_schema() -> None:
             binding_columns = {column["name"] for column in inspector.get_columns("channel_bindings")}
             if "last_connected_at" not in binding_columns:
                 conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN last_connected_at DATETIME"))
-            if "team_id" not in binding_columns:
-                conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN team_id VARCHAR"))
+            _ensure_channel_binding_team_column(conn, tables)
             if "name" not in binding_columns:
                 conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN name VARCHAR"))
 
@@ -286,6 +286,13 @@ def _migrate_sqlite_skill_schema() -> None:
             if "artifact_json" not in delivery_columns:
                 conn.execute(
                     text("ALTER TABLE channel_deliveries ADD COLUMN artifact_json JSON")
+                )
+            if "remote_message_id" not in delivery_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE channel_deliveries "
+                        "ADD COLUMN remote_message_id VARCHAR"
+                    )
                 )
 
         if "channel_inbound_events" in tables:
@@ -1218,6 +1225,21 @@ def _migrate_channel_bindings_multi(conn, inspector, tables: set[str]) -> None:
         text("INSERT INTO app_data_migrations (id) VALUES (:id)"),
         {"id": _CHANNEL_BINDINGS_MULTI_MIGRATION_ID},
     )
+
+
+def _ensure_channel_binding_team_column(conn, tables: set[str]) -> None:
+    """Add channel_bindings.team_id before migrations that select it."""
+
+    if "channel_bindings" not in tables:
+        return
+    columns = {
+        row[1]
+        for row in conn.execute(text("PRAGMA table_info(channel_bindings)")).fetchall()
+    }
+    if "team_id" not in columns:
+        conn.execute(
+            text("ALTER TABLE channel_bindings ADD COLUMN team_id VARCHAR")
+        )
 
 
 def _migrate_wechat_kf_accounts(conn, tables: set[str]) -> None:

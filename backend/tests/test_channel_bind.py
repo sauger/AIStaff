@@ -346,7 +346,9 @@ def test_create_bind_code_invalidates_stale_codes() -> None:
         assert len(codes) == 1
         assert codes[0].code == second.code
         assert codes[0].code != first.code
-        assert codes[0].expires_at > utc_now()
+        from app.time_utils import as_utc
+
+    assert as_utc(codes[0].expires_at) > utc_now()
 
 
 def test_bind_code_generation_retries_tenant_code_collision(monkeypatch) -> None:

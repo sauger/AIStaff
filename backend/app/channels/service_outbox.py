@@ -35,6 +35,7 @@ from app.db.models import (
 )
 from app.harness import HarnessArtifactAccessError, open_harness_artifact
 from app.session.origin import PILOTDECK_GROUP_CHAT_CHANNEL
+from app.time_utils import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,51 @@ def _deliverable_artifact(raw: object) -> dict[str, object] | None:
     }
 
 
+def _artifact_rejection_reason(raw: object) -> str | None:
+    """Return a user-facing reason when a declared artifact cannot be staged."""
+
+    if not isinstance(raw, dict) or raw.get("type") != "workspace_file":
+        return None
+    size = raw.get("size")
+    if isinstance(size, int) and size > _MAX_CHANNEL_FILE_BYTES:
+        name = str(raw.get("display_name") or PurePath(str(raw.get("path") or "")).name or "文件")
+        return f"{name} 超过 25MB，未作为附件发送"
+    return None
+
+
+def _stage_artifact_notice(
+    db: Session,
+    chat_session: ChatSession,
+    binding: ChannelBinding,
+    message: Message,
+    target: dict,
+    *,
+    text: str,
+    idempotency_key: str,
+) -> None:
+    existing = db.exec(
+        select(ChannelDelivery).where(
+            ChannelDelivery.idempotency_key == idempotency_key
+        )
+    ).first()
+    if existing is not None:
+        return
+    db.add(
+        ChannelDelivery(
+            tenant_id=chat_session.tenant_id,
+            binding_id=binding.id,
+            session_id=chat_session.id,
+            message_id=message.id,
+            target_json=dict(target),
+            kind="error_notice",
+            text=text,
+            status="pending",
+            next_attempt_at=utc_now(),
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
 def _stage_artifact_deliveries(
     db: Session,
     chat_session: ChatSession,
@@ -134,6 +180,7 @@ def _stage_artifact_deliveries(
     target: dict,
     *,
     base_idempotency_key: str,
+    include_reply: bool = True,
 ) -> None:
     metadata = message.metadata_json if isinstance(message.metadata_json, dict) else {}
     raw_artifacts = metadata.get("harness_artifacts")
@@ -143,9 +190,33 @@ def _stage_artifact_deliveries(
     staged = 0
     for index, raw in enumerate(raw_artifacts):
         if staged >= _MAX_FILES_PER_MESSAGE:
-            return
+            if any(
+                _deliverable_artifact(item) is not None
+                for item in raw_artifacts[index:]
+            ):
+                _stage_artifact_notice(
+                    db,
+                    chat_session,
+                    binding,
+                    message,
+                    target,
+                    text="单条消息最多发送 5 个文件，后续文件未发送。",
+                    idempotency_key=f"{base_idempotency_key}:file:error:limit",
+                )
+            break
         artifact = _deliverable_artifact(raw)
         if artifact is None:
+            reason = _artifact_rejection_reason(raw)
+            if reason:
+                _stage_artifact_notice(
+                    db,
+                    chat_session,
+                    binding,
+                    message,
+                    target,
+                    text=reason,
+                    idempotency_key=f"{base_idempotency_key}:file:error:{index}",
+                )
             continue
         identity = (str(artifact["task_frame_id"]), str(artifact["path"]))
         if identity in seen:
@@ -159,6 +230,7 @@ def _stage_artifact_deliveries(
             continue
         artifact["share_token"] = new_artifact_share_token()
         artifact["share_expires_at"] = artifact_link_expires_at()
+        artifact["reply_streamed"] = not include_reply
         display_name = str(artifact["display_name"])
         db.add(
             ChannelDelivery(
@@ -383,6 +455,7 @@ def stage_channel_delivery(
                     message,
                     target,
                     base_idempotency_key=idempotency_key,
+                    include_reply=include_reply,
                 )
                 return
             db.add(
@@ -406,6 +479,7 @@ def stage_channel_delivery(
             message,
             target,
             base_idempotency_key=idempotency_key,
+            include_reply=include_reply,
         )
     except Exception:
         logger.exception("渠道投递登记失败 session=%s", getattr(chat_session, "id", None))
@@ -661,7 +735,7 @@ def _deliver_file(
     file_limit = int(getattr(adapter, "file_max_bytes", _MAX_CHANNEL_FILE_BYTES))
     if callable(send_file) and len(data) <= file_limit:
         try:
-            return send_file(
+            sent_message_id = send_file(
                 binding,
                 target,
                 filename=str(artifact.get("display_name") or "artifact"),
@@ -680,6 +754,27 @@ def _deliver_file(
                 delivery.id,
                 exc,
             )
+            return _send_artifact_link(adapter, binding, target, delivery, artifact)
+        if (
+            artifact.get("reply_streamed")
+            and delivery.text
+            and not bool(getattr(adapter, "file_caption_supported", False))
+        ):
+            try:
+                adapter.send(
+                    binding,
+                    target,
+                    delivery.text,
+                    idempotency_key=f"{delivery.idempotency_key}:caption",
+                )
+            except Exception:
+                # The file itself is already delivered; a caption is best-effort.
+                logger.warning(
+                    "渠道文件说明补发失败 delivery=%s",
+                    delivery.id,
+                    exc_info=True,
+                )
+        return sent_message_id
     return _send_artifact_link(adapter, binding, target, delivery, artifact)
 
 
@@ -765,7 +860,7 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
         and delivery.kind not in _REACTION_KINDS
         and delivery.attempts > 0
         and delivery.first_attempt_at is not None
-        and (utc_now() - delivery.first_attempt_at).total_seconds()
+        and (utc_now() - as_utc(delivery.first_attempt_at)).total_seconds()
         > _FEISHU_DEDUP_RECOVERY_SECONDS
     ):
         _finish_delivery_claim(
@@ -862,13 +957,17 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
     # handoff_notice 额外同步到 HumanHandoffRequest.notify_message_id。阶段 4 据此
     # 关联处理人的飞书引用回复(含对确认消息的再次回复)。
     if delivery.kind == "file" and sent_message_id:
-        delivery.message_id = sent_message_id
+        # Keep the local Message association intact; remote IDs live separately.
+        delivery.remote_message_id = sent_message_id
     if delivery.kind in {
         "handoff_notice",
         "handoff_ack",
         "mail_triage_notice",
         "mail_triage_ack",
     } and sent_message_id:
+        # Legacy handoff/mail matching still uses message_id for the remote ID;
+        # remote_message_id is recorded for the future unified lookup.
+        delivery.remote_message_id = sent_message_id
         delivery.message_id = sent_message_id
         if delivery.kind == "handoff_notice":
             _write_handoff_notify_message_id(db, delivery, sent_message_id)
@@ -1387,7 +1486,7 @@ def notify_handoff_assignee(
             existing_notice.status == "pending"
             or (
                 existing_notice.status == "delivered"
-                and (utc_now() - existing_notice.created_at).total_seconds()
+                and (utc_now() - as_utc(existing_notice.created_at)).total_seconds()
                 < HANDOFF_NOTIFY_RETRY_SECONDS
             )
         ):

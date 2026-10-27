@@ -305,9 +305,28 @@ WeChatInbound = ChannelInbound
 
 
 class WeChatApiError(Exception):
+    retryable = True
+
     def __init__(self, errcode: int, message: str):
         super().__init__(f"微信 iLink 接口错误 errcode={errcode}: {message}")
         self.errcode = errcode
+
+
+class WeChatPermanentError(WeChatApiError):
+    retryable = False
+
+
+class WeChatTransientError(WeChatApiError):
+    retryable = True
+
+
+_WECHAT_RETRYABLE_ERRCODES = {45009, 45011}
+
+
+def _wechat_file_error(errcode: int, message: str) -> WeChatApiError:
+    if errcode in _WECHAT_RETRYABLE_ERRCODES:
+        return WeChatTransientError(errcode, message)
+    return WeChatPermanentError(errcode, message)
 
 
 def random_wechat_uin() -> str:
@@ -468,16 +487,16 @@ class WeChatClient:
             response.raise_for_status()
             upload_data = response.json() if response.content else {}
         except (httpx.HTTPError, ValueError) as exc:
-            raise WeChatApiError(-1, "微信文件上传地址请求失败") from exc
+            raise WeChatTransientError(-1, "微信文件上传地址请求失败") from exc
         if isinstance(upload_data, dict):
             ret = upload_data.get("ret") or upload_data.get("errcode") or 0
             if ret:
-                raise WeChatApiError(int(ret), str(upload_data.get("errmsg") or ""))
+                raise _wechat_file_error(int(ret), str(upload_data.get("errmsg") or ""))
         upload_url = str((upload_data or {}).get("upload_full_url") or "").strip()
         if not upload_url:
             upload_param = str((upload_data or {}).get("upload_param") or "").strip()
             if not upload_param:
-                raise WeChatApiError(-1, "微信文件上传地址为空")
+                raise WeChatPermanentError(-1, "微信文件上传地址为空")
             upload_url = (
                 f"{WECHAT_CDN_BASE}/upload?encrypted_query_param="
                 f"{quote(upload_param, safe='')}&filekey={quote(filekey, safe='')}"
@@ -493,12 +512,18 @@ class WeChatClient:
                 timeout=120.0,
             )
         except httpx.HTTPError as exc:
-            raise WeChatApiError(-1, "微信文件上传失败") from exc
+            raise WeChatTransientError(-1, "微信文件上传失败") from exc
         if uploaded.status_code >= 400:
-            raise WeChatApiError(-1, f"微信文件上传失败 HTTP {uploaded.status_code}")
+            raise (
+                WeChatTransientError(-1, f"微信文件上传失败 HTTP {uploaded.status_code}")
+                if uploaded.status_code == 429 or uploaded.status_code >= 500
+                else WeChatPermanentError(
+                    -1, f"微信文件上传失败 HTTP {uploaded.status_code}"
+                )
+            )
         download_param = str(uploaded.headers.get("x-encrypted-param") or "").strip()
         if not download_param:
-            raise WeChatApiError(-1, "微信文件上传未返回下载参数")
+            raise WeChatPermanentError(-1, "微信文件上传未返回下载参数")
         media_ref = {
             "encrypt_query_param": download_param,
             "aes_key": base64.b64encode(aes_key.hex().encode("ascii")).decode("ascii"),
@@ -541,7 +566,7 @@ class WeChatClient:
         if isinstance(data, dict):
             errcode = data.get("errcode") or data.get("ret") or 0
             if errcode:
-                raise WeChatApiError(int(errcode), str(data.get("errmsg") or ""))
+                raise _wechat_file_error(int(errcode), str(data.get("errmsg") or ""))
 
     def get_config(self, ilink_user_id: str, context_token: str = "") -> dict[str, Any]:
         resp = self._client.post(
@@ -724,9 +749,9 @@ class WeChatAdapter:
         to_user_id = str(target.get("to_user_id") or "").strip()
         context_token = str(target.get("context_token") or "").strip()
         if not to_user_id or not context_token:
-            raise ValueError("微信文件投递目标缺少 to_user_id 或 context_token")
+            raise WeChatPermanentError(-1, "微信文件投递目标缺少 to_user_id 或 context_token")
         if len(content) > self.file_max_bytes:
-            raise ValueError("微信文件超过 25MB 上限")
+            raise WeChatPermanentError(-1, "微信文件超过 25MB 上限")
         client = self._client_factory(binding)
         client.send_file(
             to_user_id,

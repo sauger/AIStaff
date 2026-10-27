@@ -1286,6 +1286,8 @@ class ChannelDelivery(SQLModel, table=True):
     binding_id: str = Field(index=True)
     session_id: str = Field(index=True)
     message_id: Optional[str] = Field(default=None, index=True)
+    # 渠道远端返回的消息 ID；与本地 message_id 分开保存，避免覆盖本地关联。
+    remote_message_id: Optional[str] = Field(default=None, index=True)
     # 投递目标：to_user_id + context_token
     target_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # reply/file/error_notice
