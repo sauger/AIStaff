@@ -45,6 +45,7 @@ RESERVED_HARNESS_CAPABILITY_NAMES = {
     "run_skill_script",
     "knowledge_search",
     "lark_cli",
+    "wecom_oa_approval",
     "external_task_status",
     "cabinet_list",
     "cabinet_find",
@@ -90,6 +91,12 @@ class CapabilityManifestBuilder:
                 available.append(lark_descriptor)
             else:
                 unavailable.append(lark_descriptor)
+        wecom_oa_descriptor = _wecom_oa_approval_descriptor(self.db, tenant_id, agent_id)
+        if wecom_oa_descriptor is not None:
+            if wecom_oa_descriptor.available:
+                available.append(wecom_oa_descriptor)
+            else:
+                unavailable.append(wecom_oa_descriptor)
         ui_config = self.db.get(UIConfig, tenant_id)
         sandbox_enabled = bool(getattr(ui_config, "sandbox_enabled", False))
 
@@ -371,6 +378,34 @@ class CapabilityManifestBuilder:
                     )
                 )
         return unavailable
+
+
+
+def _wecom_oa_approval_descriptor(
+    db: Session, tenant_id: str, agent_id: str | None
+) -> CapabilityDescriptor | None:
+    """settings 未开启时不进入清单；开启即可调用（缺凭证由 service 返回可恢复错误）。"""
+
+    from app.config import get_settings
+    from app.wecom_oa.service import (
+        CAPABILITY_ID,
+        TOOL_NAME,
+        WECOM_OA_DESCRIPTION,
+        WECOM_OA_INPUT_SCHEMA,
+    )
+
+    del db, tenant_id, agent_id
+    if not get_settings().wecom_oa_enabled:
+        return None
+    return CapabilityDescriptor(
+        capability_id=CAPABILITY_ID,
+        name=TOOL_NAME,
+        kind="internal",
+        description=WECOM_OA_DESCRIPTION,
+        input_schema=dict(WECOM_OA_INPUT_SCHEMA),
+        metadata={"provider": CAPABILITY_ID, "side_effect": "write"},
+        available=True,
+    )
 
 
 def _lark_cli_descriptor(
