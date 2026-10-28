@@ -463,6 +463,10 @@ def delete_user(
     avatar = db.get(UserAvatar, user_id)
     if avatar:
         db.delete(avatar)
+    # SQLite 未开外键时 ON DELETE SET NULL 不会生效,这里显式解开通讯录账号链接。
+    from app.contacts.linking import clear_primary_user
+
+    clear_primary_user(db, user.id)
     db.delete(user)
     db.commit()
     return {"ok": True}

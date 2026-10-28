@@ -133,6 +133,7 @@ describe('AppSidebar agent switcher team group', () => {
     expect(screen.getByText('知识库')).toBeTruthy();
     expect(screen.getByText('文件柜')).toBeTruthy();
     expect(screen.getByText('邮件')).toBeTruthy();
+    expect(screen.getByText('通讯录')).toBeTruthy();
     expect(screen.getByText('密钥')).toBeTruthy();
     expect(screen.getByText('认证配置')).toBeTruthy();
   });

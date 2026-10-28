@@ -1013,6 +1013,55 @@ class EmployeeLoginGuide(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class Contact(SQLModel, table=True):
+    """员工通讯录里的真人权威行。渠道外部 id 是可空次级查找键，不是主键。
+
+    primary_user_id 懒连到 User.id：表单不要求已有账号。入站只在已有联系人时回填。
+    """
+
+    __tablename__ = "contacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "agent_id", "wecom_userid", name="uq_contact_agent_wecom_userid"
+        ),
+        UniqueConstraint(
+            "tenant_id", "agent_id", "feishu_openid", name="uq_contact_agent_feishu_openid"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "agent_id",
+            "dingtalk_userid",
+            name="uq_contact_agent_dingtalk_userid",
+        ),
+        UniqueConstraint(
+            "tenant_id", "agent_id", "primary_user_id", name="uq_contact_agent_primary_user"
+        ),
+        Index("ix_contact_agent", "tenant_id", "agent_id"),
+        Index("ix_contact_primary_user", "tenant_id", "primary_user_id"),
+        Index("ix_contact_wecom_userid", "tenant_id", "wecom_userid"),
+        Index("ix_contact_feishu_openid", "tenant_id", "feishu_openid"),
+        Index("ix_contact_dingtalk_userid", "tenant_id", "dingtalk_userid"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("contact"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    title: Optional[str] = None
+    city: Optional[str] = None
+    notes: Optional[str] = None
+    wecom_userid: Optional[str] = None
+    feishu_openid: Optional[str] = None
+    dingtalk_userid: Optional[str] = None
+    primary_user_id: Optional[str] = Field(
+        default=None, foreign_key="users.id", ondelete="SET NULL", index=True
+    )
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Tool(SQLModel, table=True):
     __tablename__ = "tools"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tool_tenant_name"),)
@@ -1945,7 +1994,10 @@ class WecomOaAppCredential(SQLModel, table=True):
 
 
 class WecomTempIdentityBinding(SQLModel, table=True):
-    """组织架构上线前的临时身份绑定：staffdeck_user_id → 企微 userid。"""
+    """组织架构上线前的临时身份绑定：staffdeck_user_id → 企微 userid。
+
+    TODO: 以后迁到 Contact.wecom_userid。通讯录 v1 不迁移本表，解析顺序也不改。
+    """
 
     __tablename__ = "wecom_temp_identity_bindings"
     __table_args__ = (

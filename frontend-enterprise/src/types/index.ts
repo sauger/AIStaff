@@ -1476,6 +1476,29 @@ export type LoginGuideGalleryItem = {
   updated_at: string;
 };
 
+export type ContactRead = {
+  id: string;
+  agent_id: string;
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  title?: string | null;
+  city?: string | null;
+  notes?: string | null;
+  wecom_userid?: string | null;
+  feishu_openid?: string | null;
+  dingtalk_userid?: string | null;
+  primary_user_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContactListResponse = {
+  agent_id: string;
+  can_write: boolean;
+  contacts: ContactRead[];
+};
+
 export type LoginResult = {
   success: boolean;
   login_guide_name: string;

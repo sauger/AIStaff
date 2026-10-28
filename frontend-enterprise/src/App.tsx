@@ -53,6 +53,7 @@ import GeneralSkillsPage, {
 import KnowledgeManagePage, { KnowledgeAddPage } from "./pages/KnowledgePage";
 import CabinetPage from "./pages/CabinetPage";
 import MailPage from "./pages/MailPage";
+import ContactsPage from "./pages/ContactsPage";
 import SecretsPage from "./pages/SecretsPage";
 import LoginGuidesPage from "./pages/LoginGuidesPage";
 import LoginPage from "./pages/LoginPage";
@@ -392,6 +393,7 @@ function Shell({
     "/enterprise/knowledge",
     "/enterprise/cabinet",
     "/enterprise/mail",
+    "/enterprise/contacts",
     "/enterprise/secrets",
     "/enterprise/login-guides",
     "/enterprise/general-skills",
@@ -687,6 +689,15 @@ function Shell({
                 path="/enterprise/mail"
                 element={
                   <MailPage
+                    currentUser={auth.user}
+                    onLogout={onLogout}
+                  />
+                }
+              />
+              <Route
+                path="/enterprise/contacts"
+                element={
+                  <ContactsPage
                     currentUser={auth.user}
                     onLogout={onLogout}
                   />
