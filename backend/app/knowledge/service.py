@@ -20,6 +20,7 @@ from app import paths
 from app.db import engine
 from app.time_utils import as_utc
 from app.db.models import (
+    AgentKnowledgeBranch,
     KnowledgeBucket,
     KnowledgeBase,
     KnowledgeChunk,
@@ -423,6 +424,32 @@ class KnowledgeService:
         source_sha256: str,
     ) -> None:
         target_id = str(job.target_document_id or "").strip()
+        job_metadata = (
+            (job.metadata_json or {}).get("metadata")
+            if isinstance((job.metadata_json or {}).get("metadata"), dict)
+            else {}
+        )
+        expected_updated_at = str(
+            job.expected_updated_at or job_metadata.get("expected_updated_at") or ""
+        ).strip()
+        source_document_id = str(job_metadata.get("source_document_id") or "").strip()
+        if source_document_id and expected_updated_at:
+            source = self.db.get(KnowledgeDocument, source_document_id)
+            if source is not None:
+                source_updated = as_utc(source.updated_at)
+                if source_updated is None or source_updated.isoformat() != expected_updated_at:
+                    raise KnowledgeParseError("文档已被其他人修改，本次覆盖已取消。")
+        agent_id = str(job_metadata.get("agent_id") or "").strip()
+        if agent_id:
+            branch = self.db.exec(
+                select(AgentKnowledgeBranch).where(
+                    AgentKnowledgeBranch.tenant_id == job.tenant_id,
+                    AgentKnowledgeBranch.agent_id == agent_id,
+                    AgentKnowledgeBranch.knowledge_base_id == job.knowledge_base_id,
+                )
+            ).first()
+            if branch is not None and branch.head_version != job.knowledge_base_version_id:
+                raise KnowledgeParseError("知识库版本已更新，本次覆盖已取消。")
         target = self.db.get(KnowledgeDocument, target_id) if target_id else None
         if (
             target is None

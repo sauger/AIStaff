@@ -629,6 +629,7 @@ def confirm_knowledge_update_proposal(
             )
             or ""
         ).strip()
+        source_target_id = target.id
         target = _document_for_version(db, target, version.id)
         target_version_id = str(target.knowledge_base_version_id or version.id)
         job_target_document_id = target.id
@@ -655,6 +656,11 @@ def confirm_knowledge_update_proposal(
                 "session_id": proposal.session_id,
                 "channel": proposal.channel,
                 "user_id": confirmed_by_user_id,
+                "agent_id": proposal.agent_id,
+                "source_document_id": (
+                    source_target_id if normalized_action == "replace" else None
+                ),
+                "expected_updated_at": expected_value,
             },
         )
     )
