@@ -85,7 +85,12 @@ def search_capability_descriptors(
     limit = max(1, min(int(limit), CAPABILITY_SEARCH_MAX_RESULTS))
     ranked: list[tuple[float, str, CapabilityDescriptor]] = []
     for descriptor in descriptors:
-        if not descriptor.available or descriptor.kind == "internal":
+        if not descriptor.available:
+            continue
+        # Internal tools are normally expanded already, but the knowledge
+        # proposal tool is a user-facing write path and must be discoverable
+        # by explicit searches such as "加入知识库".
+        if descriptor.kind == "internal" and descriptor.name != "knowledge_ingest_proposal":
             continue
         if kinds and descriptor.kind not in kinds:
             continue

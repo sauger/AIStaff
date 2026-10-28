@@ -815,6 +815,33 @@ class HarnessCapabilityInvoker:
             for item in recent
         ]
 
+    def _remember_pending_knowledge(
+        self,
+        *,
+        attachment: ChatAttachmentRead,
+        requested_action: str,
+        details: dict[str, Any] | None,
+    ) -> None:
+        payload = {
+            "attachment": attachment.model_dump(mode="json"),
+            "requested_action": requested_action,
+            "targets": list((details or {}).get("knowledge_bases") or []),
+        }
+        state = dict(getattr(self.session, "context_state_json", None) or {})
+        state["knowledge_pending"] = payload
+        self.session.context_state_json = state
+        self.db.add(self.session)
+        self.db.commit()
+
+    def _clear_pending_knowledge(self) -> None:
+        state = dict(getattr(self.session, "context_state_json", None) or {})
+        if "knowledge_pending" not in state:
+            return
+        state.pop("knowledge_pending", None)
+        self.session.context_state_json = state
+        self.db.add(self.session)
+        self.db.commit()
+
     def _knowledge_ingest_proposal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         attachment_id = str(arguments.get("attachment_id") or "").strip()
         attachment, candidates = self._resolve_proposal_attachment(attachment_id)
@@ -829,13 +856,14 @@ class HarnessCapabilityInvoker:
                 "ATTACHMENT_NOT_FOUND",
                 "没有找到当前或最近消息中的附件，请让用户重新上传。",
             )
+        requested_action = str(arguments.get("intent") or "undecided")
         try:
             proposal = create_knowledge_update_proposal(
                 self.db,
                 chat_session=self.session,
                 attachment=attachment,
-                source_message_id=f"{self.task_frame_id}:{attachment_id}",
-                requested_action=str(arguments.get("intent") or "undecided"),
+                source_message_id=f"{self.task_frame_id}:{attachment.id}",
+                requested_action=requested_action,
                 target_knowledge_base_id=str(
                     arguments.get("target_knowledge_base_id") or ""
                 ).strip()
@@ -848,7 +876,14 @@ class HarnessCapabilityInvoker:
                 is_group=self.channel_is_group,
             )
         except KnowledgeProposalError as exc:
+            if exc.code == "KNOWLEDGE_BASE_REQUIRED":
+                self._remember_pending_knowledge(
+                    attachment=attachment,
+                    requested_action=requested_action,
+                    details=exc.details,
+                )
             return _failure(exc.code, str(exc), details=exc.details)
+        self._clear_pending_knowledge()
         knowledge_base = self.db.get(KnowledgeBase, proposal.target_knowledge_base_id)
         return {
             "success": True,

@@ -621,7 +621,7 @@ def test_proposal_has_short_confirmation_code(monkeypatch, tmp_path: Path) -> No
         )
         assert proposal.confirmation_code
         assert len(proposal.confirmation_code) == 6
-        assert proposal.confirmation_code.isupper()
+        assert proposal.confirmation_code == proposal.confirmation_code.upper()
 
 
 def test_channel_result_creates_outbox_notice(monkeypatch, tmp_path: Path) -> None:
@@ -813,3 +813,84 @@ def test_open_write_rejects_group_chat(monkeypatch, tmp_path: Path) -> None:
                 is_group=True,
             )
         assert exc_info.value.code == "CHANNEL_IDENTITY_NOT_BOUND"
+
+
+def test_confirmation_parser_accepts_trailing_words_and_bare_code() -> None:
+    from app.channels.service_intake import (
+        _KNOWLEDGE_BARE_CODE_RE,
+        _KNOWLEDGE_PROPOSAL_CONFIRM_RE,
+    )
+
+    match = _KNOWLEDGE_PROPOSAL_CONFIRM_RE.search("新增 880bf6 进行确认")
+    assert match is not None
+    assert match.group(1) == "新增"
+    assert match.group(3).upper() == "880BF6"
+    bare = _KNOWLEDGE_BARE_CODE_RE.match("880bf6")
+    assert bare is not None
+    assert bare.group(1).upper() == "880BF6"
+
+
+def test_pending_knowledge_selection_creates_proposal(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    _set_open_channels(monkeypatch, {"wecom"})
+    from types import SimpleNamespace
+
+    from app.channels.service_intake import _try_handle_pending_knowledge_selection
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        session.channel = "wecom"
+        attachment = _attachment(data="待选知识库正文".encode("utf-8"))
+        session.context_state_json = {
+            "knowledge_pending": {
+                "attachment": attachment.model_dump(mode="json"),
+                "requested_action": "create",
+                "targets": [{"id": "kb_kp", "name": "财务制度"}],
+            }
+        }
+        binding = ChannelBinding(
+            id="chan_pending",
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            channel="wecom",
+            status="active",
+            external_account_key="wecom:pending",
+        )
+        db.add(session)
+        db.add(binding)
+        db.commit()
+        inbound = SimpleNamespace(
+            text="1. 财务制度",
+            external_conv_id="conv_pending",
+            from_user_id="external-pending",
+            is_group=False,
+            event_id="event_pending",
+        )
+        handled = _try_handle_pending_knowledge_selection(
+            db,
+            binding,
+            inbound,
+            chat_session=session,
+            target={"to_user_id": "external-pending"},
+            scope="scope",
+        )
+        assert handled is True
+        proposal = db.exec(select(KnowledgeUpdateProposal)).first()
+        assert proposal is not None
+        assert proposal.target_knowledge_base_id == "kb_kp"
+        assert "knowledge_pending" not in (session.context_state_json or {})
+
+
+def test_capability_search_exposes_knowledge_proposal() -> None:
+    from app.core.capability_discovery import search_capability_descriptors
+    from app.core.task_request_compiler import CapabilityDescriptor
+
+    descriptor = CapabilityDescriptor(
+        capability_id="builtin.knowledge.proposal",
+        name="knowledge_ingest_proposal",
+        kind="internal",
+        description="Create a pending proposal to add an attachment to knowledge.",
+    )
+    matches = search_capability_descriptors([descriptor], "加入知识库")
+    assert [item.name for item in matches] == ["knowledge_ingest_proposal"]
