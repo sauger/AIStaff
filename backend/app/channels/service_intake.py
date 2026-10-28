@@ -35,6 +35,7 @@ from app.channels.service_routing import (
     run_command,
 )
 from app.channels.service_session import find_or_create_channel_session
+from app.contacts.linking import link_inbound_contact
 from app.knowledge.confirmation import (
     CANCEL_SELECTION,
     confirmation_hint,
@@ -1752,6 +1753,15 @@ def process_inbound(
             scope,
             name_resolver=_build_name_resolver(binding),
         )
+        # 通讯录懒连接：不创建联系人。group: 发送者跳过；已有行按账号或次级渠道 id 回填。
+        if not str(external_id).startswith("group:"):
+            link_inbound_contact(
+                db,
+                tenant_id=binding.tenant_id,
+                channel=binding.channel,
+                external_id=external_id,
+                user_id=user.id,
+            )
         # 先在仍保持原 external_conv_id 的历史会话中去重。身份不一致会在后续
         # session 创建时隔离旧会话，若等隔离后再查会漏掉已落库的 turn。
         if _client_turn_seen_in_conv(
