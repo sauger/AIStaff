@@ -547,6 +547,8 @@ class HarnessCapabilityInvoker:
             return self._list_published_deliverables(arguments)
         if name == "read_published_deliverable":
             return self._read_published_deliverable(arguments)
+        if name == "knowledge_ingest_proposal":
+            return self._knowledge_ingest_proposal(arguments)
         if name == "lark_cli":
             from app.lark_cli.service import invoke_lark_cli
 

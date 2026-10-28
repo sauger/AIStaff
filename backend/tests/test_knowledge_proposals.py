@@ -737,3 +737,15 @@ def test_proposal_attachment_falls_back_to_previous_user_message(tmp_path: Path)
         assert attachment is not None
         assert attachment.id == "att_prev"
         assert candidates == []
+
+
+def test_internal_dispatch_routes_knowledge_proposal() -> None:
+    from app.core.harness_capability_invoker import HarnessCapabilityInvoker
+
+    invoker = object.__new__(HarnessCapabilityInvoker)
+    invoker._knowledge_ingest_proposal = lambda arguments: {"success": True, "data": arguments}
+    result = invoker._invoke_internal(
+        "knowledge_ingest_proposal", {"attachment_id": "att_dispatch"}
+    )
+    assert result["success"] is True
+    assert result["data"]["attachment_id"] == "att_dispatch"
