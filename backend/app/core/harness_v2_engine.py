@@ -992,6 +992,9 @@ class HarnessV2Engine:
                 trace_sink=trace,
                 step_deadline_monotonic=step_deadline_monotonic,
                 attachments=list(request.attachments or []),
+                channel_external_user_id=request.channel_external_user_id,
+                channel_external_account_scope=request.channel_external_account_scope,
+                channel_target_json=request.channel_target_json,
             )
             invoker.inbound_mail_auto_complete = bool(request.inbound_mail_auto_complete)
             invoker.inbound_mail_message_id = (

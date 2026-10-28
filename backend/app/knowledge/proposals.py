@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import difflib
 import hashlib
+import secrets
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from app.agents.branching import (
 from app.channels.media import MAX_CHANNEL_MEDIA_BYTES
 from app.async_jobs import enqueue_async_job
 from app.db.models import (
+    ChannelDelivery,
     ChannelIdentity,
     ChatSession,
     KnowledgeBase,
@@ -64,6 +66,20 @@ class KnowledgeProposalError(RuntimeError):
         self.code = code
         self.details = details or {}
         self.retryable = retryable
+
+
+def _new_confirmation_code(db: Session, tenant_id: str) -> str:
+    for _ in range(20):
+        code = secrets.token_hex(3).upper()
+        exists = db.exec(
+            select(KnowledgeUpdateProposal.id).where(
+                KnowledgeUpdateProposal.tenant_id == tenant_id,
+                KnowledgeUpdateProposal.confirmation_code == code,
+            )
+        ).first()
+        if not exists:
+            return code
+    raise KnowledgeProposalError("CONFIRMATION_CODE_FAILED", "无法生成确认码，请重试。", retryable=True)
 
 
 def _normalize_action(value: str | None) -> str:
@@ -317,6 +333,7 @@ def create_knowledge_update_proposal(
     external_user_id: str | None = None,
     external_account_scope: str | None = None,
     binding_id: str | None = None,
+    target_json: dict[str, Any] | None = None,
 ) -> KnowledgeUpdateProposal:
     """Create a durable proposal only; never ingest or overwrite here."""
 
@@ -391,6 +408,18 @@ def create_knowledge_update_proposal(
     if existing is not None:
         return existing
 
+    existing_same_file = db.exec(
+        select(KnowledgeUpdateProposal).where(
+            KnowledgeUpdateProposal.tenant_id == chat_session.tenant_id,
+            KnowledgeUpdateProposal.session_id == chat_session.id,
+            KnowledgeUpdateProposal.target_knowledge_base_id == knowledge_base_id,
+            KnowledgeUpdateProposal.source_sha256 == source_sha256,
+            KnowledgeUpdateProposal.status.in_({"pending", "executing"}),
+        )
+    ).first()
+    if existing_same_file is not None:
+        return existing_same_file
+
     candidates = _candidate_documents(
         db,
         tenant_id=chat_session.tenant_id,
@@ -426,8 +455,10 @@ def create_knowledge_update_proposal(
         filename=attachment.filename,
         content_type=attachment.content_type,
         size=len(data),
+        confirmation_code=_new_confirmation_code(db, chat_session.tenant_id),
         target_knowledge_base_id=knowledge_base_id,
         target_knowledge_base_version_id=version_id,
+        target_json=dict(target_json or {}),
         proposed_action=proposed_action,
         candidates_json=candidates,
         metadata_json={
@@ -686,3 +717,50 @@ def confirm_knowledge_update_proposal(
     db.add(proposal)
     db.commit()
     return job
+
+
+def notify_knowledge_proposal_result(
+    db: Session,
+    job: KnowledgeIngestJob,
+    *,
+    error: str | None = None,
+) -> None:
+    """Update proposal state and enqueue a channel result notice when applicable."""
+
+    proposal_id = str(job.proposal_id or "").strip()
+    if not proposal_id:
+        return
+    proposal = db.get(KnowledgeUpdateProposal, proposal_id)
+    if proposal is None:
+        return
+    succeeded = not error and job.status == "succeeded"
+    proposal.status = "succeeded" if succeeded else "failed"
+    proposal.updated_at = utc_now()
+    db.add(proposal)
+    if proposal.channel != "web" and proposal.binding_id and proposal.target_json:
+        name = proposal.filename
+        text = (
+            f"知识库更新完成：《{name}》已生效，可以直接检索。"
+            if succeeded
+            else f"知识库更新失败：{name}。{error or '请查看知识库任务。'}"
+        )
+        key = f"knowledge-proposal-result:{proposal.id}"
+        existing = db.exec(
+            select(ChannelDelivery).where(ChannelDelivery.idempotency_key == key)
+        ).first()
+        if existing is None:
+            db.add(
+                ChannelDelivery(
+                    tenant_id=proposal.tenant_id,
+                    binding_id=proposal.binding_id,
+                    session_id=proposal.session_id,
+                    message_id=None,
+                    target_json=dict(proposal.target_json),
+                    kind="notice",
+                    text=text,
+                    status="pending",
+                    next_attempt_at=utc_now(),
+                    idempotency_key=key,
+                )
+            )
+    db.commit()

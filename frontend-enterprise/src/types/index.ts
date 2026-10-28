@@ -1000,6 +1000,7 @@ export type KnowledgeProposalCandidate = {
 
 export type KnowledgeProposalRead = {
   id: string;
+  confirmation_code?: string | null;
   status: string;
   proposed_action: string;
   filename: string;

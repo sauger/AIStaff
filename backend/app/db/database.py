@@ -2506,6 +2506,26 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                     )
                 )
 
+    if "knowledge_update_proposals" in tables:
+        proposal_columns = {
+            column["name"]
+            for column in inspector.get_columns("knowledge_update_proposals")
+        }
+        if "confirmation_code" not in proposal_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE knowledge_update_proposals "
+                    "ADD COLUMN confirmation_code VARCHAR"
+                )
+            )
+        if "target_json" not in proposal_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE knowledge_update_proposals "
+                    "ADD COLUMN target_json JSON NOT NULL DEFAULT '{}'"
+                )
+            )
+
     resolved_version_ids: dict[str, str] = {}
     if "knowledge_base_versions" in tables and "knowledge_bases" in tables:
         knowledge_bases = conn.execute(text("SELECT * FROM knowledge_bases")).mappings().all()

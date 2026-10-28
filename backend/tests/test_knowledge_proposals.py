@@ -14,6 +14,8 @@ from app.db.models import (
     ChatSession,
     KnowledgeBase,
     KnowledgeBaseVersion,
+    ChannelBinding,
+    ChannelDelivery,
     KnowledgeDocument,
     KnowledgeIngestJob,
     KnowledgeUpdateProposal,
@@ -587,3 +589,110 @@ def test_run_replace_ingest_job_updates_target_without_new_document(
         assert job.document_id == "kdoc_run_replace"
         assert target is not None and "新制度" in (target.metadata_json or {}).get("raw_text", "")
         assert len(db.exec(select(KnowledgeDocument)).all()) == 1
+
+
+def test_proposal_has_short_confirmation_code(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    with Session(_engine()) as db:
+        session = _seed(db)
+        attachment = _attachment(data="确认码正文".encode("utf-8"))
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_code",
+            requested_action="create",
+        )
+        assert proposal.confirmation_code
+        assert len(proposal.confirmation_code) == 6
+        assert proposal.confirmation_code.isupper()
+
+
+def test_channel_result_creates_outbox_notice(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    from app.knowledge.proposals import notify_knowledge_proposal_result
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        attachment = _attachment(data="渠道结果正文".encode("utf-8"))
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_result",
+            requested_action="create",
+        )
+        proposal.channel = "wecom"
+        proposal.binding_id = "chan_wecom"
+        proposal.target_json = {"to_user_id": "u1", "context_token": "ctx"}
+        db.add(proposal)
+        db.commit()
+        job = KnowledgeIngestJob(
+            id="kjob_result",
+            tenant_id="tenant_kp",
+            knowledge_base_id="kb_kp",
+            knowledge_base_version_id="kbver_kp",
+            filename="制度.txt",
+            status="succeeded",
+            proposal_id=proposal.id,
+        )
+        db.add(job)
+        db.commit()
+        notify_knowledge_proposal_result(db, job)
+        delivery = db.exec(select(ChannelDelivery)).first()
+        assert delivery is not None
+        assert delivery.kind == "notice"
+        assert "完成" in delivery.text
+        assert db.get(KnowledgeUpdateProposal, proposal.id).status == "succeeded"
+
+
+def test_channel_confirmation_cancel_marks_proposal_cancelled(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    from types import SimpleNamespace
+
+    from app.channels.service_intake import _try_handle_knowledge_proposal_confirmation
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        session.channel = "wecom"
+        binding = ChannelBinding(
+            id="chan_kp",
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            channel="wecom",
+            status="active",
+            external_account_key="wecom:test",
+        )
+        db.add(binding)
+        db.add(session)
+        db.commit()
+        attachment = _attachment(data="取消正文".encode("utf-8"))
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_cancel",
+            requested_action="create",
+        )
+        inbound = SimpleNamespace(
+            text=f"取消 {proposal.confirmation_code}",
+            external_conv_id="wecom_conv",
+            from_user_id="external-user",
+            is_group=False,
+            event_id="event_cancel",
+        )
+        handled = _try_handle_knowledge_proposal_confirmation(
+            db,
+            binding,
+            inbound,
+            user=SimpleNamespace(id="user_owner"),
+            chat_session=session,
+            target={"to_user_id": "external-user", "context_token": "ctx"},
+            scope="scope",
+        )
+        assert handled is True
+        assert db.get(KnowledgeUpdateProposal, proposal.id).status == "cancelled"
+        assert db.exec(select(ChannelDelivery)).first() is not None

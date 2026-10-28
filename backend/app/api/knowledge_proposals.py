@@ -29,6 +29,7 @@ class KnowledgeProposalConfirmRequest(BaseModel):
 
 class KnowledgeProposalRead(BaseModel):
     id: str
+    confirmation_code: str | None = None
     status: str
     proposed_action: str
     filename: str
@@ -65,6 +66,7 @@ def _proposal_read(db: Session, proposal: KnowledgeUpdateProposal) -> KnowledgeP
     knowledge_base = db.get(KnowledgeBase, proposal.target_knowledge_base_id)
     return KnowledgeProposalRead(
         id=proposal.id,
+        confirmation_code=proposal.confirmation_code,
         status=proposal.status,
         proposed_action=proposal.proposed_action,
         filename=proposal.filename,

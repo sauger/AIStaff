@@ -416,6 +416,16 @@ class KnowledgeService:
         self._finalize_cancelled_job(job, "入库任务已取消")
         return job
 
+    def _notify_knowledge_proposal(self, job: KnowledgeIngestJob, *, error: str | None = None) -> None:
+        if not job.proposal_id:
+            return
+        try:
+            from app.knowledge.proposals import notify_knowledge_proposal_result
+
+            notify_knowledge_proposal_result(self.db, job, error=error)
+        except Exception:
+            logger.exception("知识库提案结果通知失败 job=%s", job.id)
+
     def _run_replace_ingest_job(
         self,
         job: KnowledgeIngestJob,
@@ -487,6 +497,7 @@ class KnowledgeService:
             },
         )
         self._clear_embedded_content(job)
+        self._notify_knowledge_proposal(job)
 
     def run_ingest_job(self, job_id: str) -> None:
         with Session(engine) as db:
@@ -666,6 +677,7 @@ class KnowledgeService:
                     "chunk_count": chunk_count,
                 },
             )
+            self._notify_knowledge_proposal(job)
             self._clear_embedded_content(job)
         except KnowledgeIngestCancelled as exc:
             self._finalize_cancelled_job(job, str(exc) or "入库任务已取消")
@@ -685,6 +697,7 @@ class KnowledgeService:
                 finished_at=utc_now(),
                 detail=str(exc),
             )
+            self._notify_knowledge_proposal(job, error=str(exc))
             self._clear_embedded_content(job)
 
     def search(self, request: KnowledgeSearchRequest, model_config: ModelConfig | None = None) -> KnowledgeSearchResponse:

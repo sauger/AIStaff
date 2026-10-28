@@ -107,6 +107,9 @@ class HarnessCapabilityInvoker:
         trace_sink: Callable[[str, dict[str, Any]], None] | None = None,
         step_deadline_monotonic: float | None = None,
         attachments: list[Any] | None = None,
+        channel_external_user_id: str | None = None,
+        channel_external_account_scope: str | None = None,
+        channel_target_json: dict[str, Any] | None = None,
     ) -> None:
         self.db = db
         self.tenant_id = tenant_id
@@ -125,6 +128,9 @@ class HarnessCapabilityInvoker:
         self.trace_sink = trace_sink
         self.step_deadline_monotonic = step_deadline_monotonic
         self.attachments = list(attachments or [])
+        self.channel_external_user_id = channel_external_user_id
+        self.channel_external_account_scope = channel_external_account_scope
+        self.channel_target_json = dict(channel_target_json or {})
         self.run_id = str(run_id or new_id("hrun"))
         self.workspace_root = _workspace_root(
             tenant_id, session.id, task_frame_id, db=self.db
@@ -774,6 +780,9 @@ class HarnessCapabilityInvoker:
                 or None,
                 binding_id=str(getattr(self.session, "channel_binding_id", "") or "")
                 or None,
+                external_user_id=self.channel_external_user_id,
+                external_account_scope=self.channel_external_account_scope,
+                target_json=self.channel_target_json,
             )
         except KnowledgeProposalError as exc:
             return _failure(exc.code, str(exc), details=exc.details)
@@ -782,6 +791,7 @@ class HarnessCapabilityInvoker:
             "success": True,
             "data": {
                 "proposal_id": proposal.id,
+                "confirmation_code": proposal.confirmation_code,
                 "status": proposal.status,
                 "proposed_action": proposal.proposed_action,
                 "filename": proposal.filename,

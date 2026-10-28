@@ -671,6 +671,7 @@ class KnowledgeUpdateProposal(SQLModel, table=True):
 
     id: str = Field(default_factory=lambda: new_id("kprop"), primary_key=True)
     tenant_id: str = Field(index=True)
+    confirmation_code: Optional[str] = Field(default=None, index=True)
     agent_id: str = Field(index=True)
     session_id: str = Field(index=True)
     binding_id: Optional[str] = Field(default=None, index=True)
@@ -686,6 +687,7 @@ class KnowledgeUpdateProposal(SQLModel, table=True):
     target_knowledge_base_id: str = Field(index=True)
     target_knowledge_base_version_id: Optional[str] = Field(default=None, index=True)
     target_document_id: Optional[str] = Field(default=None, index=True)
+    target_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     expected_updated_at: Optional[str] = None
     proposed_action: str = Field(default="undecided", index=True)
     candidates_json: list[dict[str, Any]] = Field(

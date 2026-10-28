@@ -172,7 +172,7 @@ export default function KnowledgeProposalPanel({
                   : '确认新增'}
             </button>
             <span className="text-[11px] text-[#a2a8b8]">
-              操作 {proposal.id.slice(-8)} · 30 分钟内有效
+              操作 {proposal.confirmation_code || proposal.id.slice(-8)} · 30 分钟内有效
             </span>
           </div>
         </section>
