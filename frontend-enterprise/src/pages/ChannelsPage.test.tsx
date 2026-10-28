@@ -375,7 +375,7 @@ describe('ChannelsPage', () => {
         return jsonResponse({
           ...agentBinding,
           agent_id: 'agent-2',
-          agents: [{ agent_id: 'agent-2', name: '小北', is_default: true, sort_order: 1 }],
+          agents: [{ agent_id: 'agent-2', name: '小北', is_default: true, sort_order: 0 }],
         });
       }
       return makeFetchMock({ bindings: [agentBinding], agents })(input, init);
