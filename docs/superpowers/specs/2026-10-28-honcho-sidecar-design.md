@@ -2,7 +2,7 @@
 
 日期：2026-10-28  
 仓库：sauger/AIStaff  
-状态：待实现（设计已与药 李子对齐）
+状态：待实现（设计已与药 李子对齐；2026-10-28 修订：组织架构/通讯录先于 Honcho）
 
 ## 1. 目标与非目标
 
@@ -15,14 +15,29 @@
 - 覆盖网页对话 + 已接入**私聊**渠道
 - Honcho 失败/超时则**跳过记忆，对话照常**
 
-### 非目标（第一期不做）
+Honcho 的 peer 稳键是 `user:{User.id}` / `agent:{agent_id}`。同一渠道上的跨会话画像可以落在现有 `User.id` 上；**跨渠道同一人**（企微 / 飞书 / 邮箱 / 网页）要先由组织架构/通讯录（或显式绑定）收成同一个 `User.id`。因此组织架构/通讯录是第一交付物，Honcho 建在其上。
+
+### 依赖与交付顺序
+
+1. **组织架构/通讯录（第一交付物）** — 跨渠道身份解析的基础：`ChannelIdentity → User.id`，并由通讯录/组织把同一人在 wecom、飞书、邮箱、网页上合并到同一个 `User.id`。Honcho 的 peer 映射依赖这一层，不能用渠道 external id 代替。
+2. **Honcho 侧车** — 在已经稳定的 `User.id` 上做双写与 representation 注入。实现排在组织架构/通讯录之后。
+
+自动审办已决内容保持不变，不并进 Honcho，也不被上述顺序改写：
+
+- 自动审办第一期仍用临时身份绑定表（`staffdeck_user_id` → 企微 userid）。
+- 调用方走已预留的身份解析接口（`IdentityResolver`），不把解析写死在临时表上。
+- 组织架构上线后，该解析迁到通讯录/组织。临时表不是跨渠道人物主键，也不是 Honcho peer 键。
+
+### 非目标（Honcho 第一期不做）
 
 - 不替换知识库 / 知识提案确认短路
 - 不替换本地 `MemoryService`（profile/preference/fact）
 - 不做群聊写入或群级 peer
 - 不接 Honcho Cloud
 - 不挂 `peer.chat` 员工工具（可后续加）
-- 不改 ChannelBinding / OA / 组织架构权威数据
+- 不在 Honcho 中改写 ChannelBinding / OA，也不把组织架构/通讯录的权威数据存进 Honcho（组织权威由前置交付维护）
+- 不把自动审办临时身份绑定表写死为长期身份源，或当作 Honcho 的跨渠道合并实现
+- 不靠 peer/session metadata 中的渠道 external id 把不同渠道收成同一个 peer
 
 ## 2. 架构
 
@@ -49,6 +64,12 @@
 | 渠道 `(channel, account_scope, external_user_id)` | 仅写入 peer/session **metadata**，不作稳键 |
 
 跨会话画像依赖同一 `user:{id}` peer 上累积的 conclusions；Honcho session 与 Staff 会话 1:1，便于按会话取 context，不把多人/多会话糊进一条 session。
+
+**单渠道今天即可。** 渠道入站经 `ChannelIdentity` 懒建或解析到一个 `User`（`resolve_or_provision_user`）。同一渠道、同一 external id 的多次会话共享这个 `User.id`，因此 peer `user:{User.id}` 能累积该渠道上的跨会话画像。网页账号同理，稳键就是登录用户的 `User.id`。
+
+**跨渠道同一人不是 metadata 能完成的。** 企微、飞书、邮箱、网页若没有绑到同一个 `User`，懒建会各自落到不同的 `User.id`，Honcho 上就是不同 peer。渠道三元组只进 metadata，不能把这些 external id 收成同一个 `user:{User.id}`。要让同一个人在 wecom / feishu / email / web 上共享画像，必须先有组织架构/通讯录的合并，或显式绑定到同一个 `User`。在那之前，Honcho 只保证单渠道、以及已经显式落到同一 `User.id` 的记忆。
+
+自动审办第一期的临时身份绑定表解决的是「Staff 用户 → 企微 userid」代发，不是跨渠道人物合并，也不能当作 Honcho 的 peer 合并键。解析走已预留接口，组织架构落地后替换实现，不把临时表写进 Honcho。
 
 群聊第一期：检测到 `channel_is_group`（或等价）则**不双写、不注入**。
 
@@ -127,6 +148,8 @@
 4. Honcho 超时或 5xx → 对话仍 200/流式成功，无用户可见错误  
 5. 知识库确认/否定短路路径不变，不触发双写  
 6. 群聊不双写、不注入  
+7. 渠道 external id 只出现在 metadata；不同渠道未收成同一个 `User.id` 时保持不同 peer  
+8. 单渠道（或已显式绑定到同一 `User`）可见跨会话画像；跨渠道同一人画像以组织架构/通讯录（或显式绑定）为前提，不在 Honcho 第一期里用 metadata 冒充合并
 
 ## 8. 风险与缓解
 
@@ -136,15 +159,29 @@
 | 与本地 memory 内容重复 | 分块标注；后续再调去重 |
 | representation 陈旧 | 本轮以会话上下文为准 |
 | 身份迁移 | peer 稳键 = User.id |
+| 用 external id metadata 误并跨渠道同一人 | peer 只用 User.id；未合并或未显式绑定则保持不同 peer |
+| 临时绑定表被写成长期身份源 | 自动审办继续走预留接口；组织架构上线后迁移，Honcho 不读取该表做 peer |
 | 租户串数据 | workspace 强制绑 tenant_id |
 | AGPL 自托管改源码义务 | 第一期尽量不改 Honcho 本体，只旁挂 |
 | 运维负担 | 文档 + 健康检查；默认可关 |
 
 ## 9. 实现分期建议
 
+交付顺序：**组织架构/通讯录先于 Honcho**。Honcho 设计保留，实现排在身份基础之后。
+
+### 9.1 前置交付：组织架构/通讯录
+
+第一交付物是跨渠道同一人解析：wecom / 飞书 / 邮箱 / 网页收成同一个 `User.id`（或显式绑定到已有 User）。这是 Honcho `user:{User.id}` / `agent:{agent_id}` 的基础。`ChannelIdentity → User.id` 的单渠道懒建今天已存在；缺的是通讯录/组织把同一个人跨渠道合并。
+
+自动审办第一期的决定保持不变：继续用临时身份绑定表；调用走已预留接口，不写死临时方案；组织架构上线后把解析迁到通讯录/组织。该表不充当 Honcho 的跨渠道合并实现。
+
+### 9.2 Honcho（依赖 9.1）
+
 1. Compose 自托管 + 全局配置 + client/ids  
 2. harness 双写 job + representation 注入 + 修 ResponseGenerator memory 传递  
 3. 员工 metadata 开关 + 配置页 UI  
 4. 单测/集成测按 §7；选 1 个员工灰度  
 
-设计评审通过后，另开实现计划（writing-plans）再动代码。
+单渠道跨会话可以沿用现有懒建 `User`（见 §3），但不改变上述交付顺序，也不把跨渠道同一人画像提前到组织架构/通讯录之前。
+
+设计评审通过后，另开实现计划（writing-plans）再动代码。组织架构/通讯录与 Honcho 分开计划；Honcho 计划以 9.1 的 `User.id` 稳键为前提。
