@@ -147,7 +147,7 @@ def stage_payload(
     )
     turn_time = metadata.get("current_turn_time") if isinstance(metadata, dict) else None
     memory_text = ""
-    if phase in {"Router", "TurnPlanner"}:
+    if phase in {"Router", "TurnPlanner", "Response Generator"}:
         memory_text = (
             _memory_text(memory_context)
             if isinstance(memory_context, list)

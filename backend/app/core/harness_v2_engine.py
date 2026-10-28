@@ -63,6 +63,7 @@ from app.db.models import (
     Skill,
     Team,
 )
+from app.honcho.service import inject_honcho_representation, schedule_honcho_message
 from app.knowledge.citations import compact_knowledge_citation_labels
 from app.memory.service import memory_read
 from app.session.helpers import public_session
@@ -315,6 +316,20 @@ class HarnessV2Engine:
         self.db.commit()
         self.db.refresh(session)
         self._raise_if_cancelled(request, session)
+        schedule_honcho_message(
+            self.db,
+            request,
+            session,
+            role="user",
+            content=request.message,
+            message_id=user_message.id,
+        )
+        memory_context = inject_honcho_representation(
+            self.db,
+            request,
+            session,
+            memory_context,
+        )
         conversation_context = self.owner._conversation_context(
             session, model_config=model_config
         )
@@ -750,6 +765,13 @@ class HarnessV2Engine:
         )
         self.db.commit()
         self.db.refresh(session)
+        schedule_honcho_message(
+            self.db,
+            request,
+            session,
+            role="assistant",
+            content=reply,
+        )
         if request.message_visibility == "visible":
             self.owner._enqueue_memory_capture(
                 request,

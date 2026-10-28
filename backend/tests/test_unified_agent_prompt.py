@@ -96,7 +96,7 @@ def test_four_agent_stages_use_identical_system_and_stage_local_user_content(
     assert "统一执行引擎" in next(iter(systems.values()))
     for phase, payload in payloads.items():
         assert payload["_agent_stage"]["memory"] == (
-            "- 用户偏好简洁回答" if phase == "Router" else ""
+            "- 用户偏好简洁回答" if phase in {"Router", "Response Generator"} else ""
         )
         assert payload["_agent_stage"]["turn_time"] == "2026-07-13T20:45:00+08:00"
         assert payload["user_message"] == "当前问题"

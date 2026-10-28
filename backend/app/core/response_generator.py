@@ -92,7 +92,7 @@ class ResponseGenerator:
             conversation_context,
             task_results,
         )
-        payload = self._stage_payload(raw_payload, persona_prompt)
+        payload = self._stage_payload(raw_payload, persona_prompt, memory_context)
         try:
             if tool_result and not tool_result.success and not task_results:
                 return tool_failure_reply(tool_result)
@@ -135,7 +135,7 @@ class ResponseGenerator:
             conversation_context,
             task_results,
         )
-        payload = self._stage_payload(raw_payload, persona_prompt)
+        payload = self._stage_payload(raw_payload, persona_prompt, memory_context)
         try:
             if tool_result and not tool_result.success and not task_results:
                 yield from self.chunk_text(tool_failure_reply(tool_result))
@@ -457,7 +457,10 @@ class ResponseGenerator:
         return unified_system_prompt()
 
     def _stage_payload(
-        self, payload: dict[str, object], persona_prompt: str | None
+        self,
+        payload: dict[str, object],
+        persona_prompt: str | None,
+        memory_context: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         stage_data = {
             key: value
@@ -472,7 +475,7 @@ class ResponseGenerator:
             conversation_context=payload.get("conversation_context")
             if isinstance(payload.get("conversation_context"), dict)
             else {},
-            memory_context=None,
+            memory_context=memory_context,
             instructions=PROMPT_PATH.read_text(encoding="utf-8"),
             stage_data=stage_data,
             output_contract=(

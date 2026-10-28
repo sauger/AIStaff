@@ -3739,5 +3739,7 @@
   "删除部门": "Delete department",
   "删除后该部门的任职和负责人记录也会去掉。下级部门需要先移走。": "Deleting this department also removes its tenures and head records. Move child departments first.",
   "添加下级": "Add child",
-  "保存任职": "Save tenure"
+  "保存任职": "Save tenure",
+  "长期用户画像": "Long-term user portrait",
+  "开启后，该员工在网页和单渠道私聊里累积跨会话用户画像。群聊不写入。服务端总开关关闭时不会调用 Honcho。": "When on, this employee keeps a cross-session portrait for web chat and single-channel private chats. Group chats are skipped. No Honcho calls are made while the server switch is off."
 }

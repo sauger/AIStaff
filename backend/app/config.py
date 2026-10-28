@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     # 回滚为逐行展示的旧样式；binding 的 config_json.compact_trace=false 可对单个
     # 绑定回滚。
     channel_feishu_trace_compact_sop: bool = True
+    # Honcho sidecar. The master switch defaults off so a deploy makes no calls.
+    honcho_enabled: bool = False
+    honcho_base_url: str = ""
+    honcho_api_key: str = ""
+    honcho_timeout_ms: int = 200
+    honcho_workspace_prefix: str = "tenant:"
 
     model_config = SettingsConfigDict(
         env_file=_os.environ.get("ULTRARAG_DOTENV", ".env"),
