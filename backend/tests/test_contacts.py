@@ -11,7 +11,7 @@ from app.channels.service_intake import process_inbound
 from app.contacts.api import get_contacts, patch_contact, post_contact, remove_contact
 from app.contacts.linking import link_inbound_contact
 from app.contacts.schema import ContactWriteRequest
-from app.db.models import AgentProfile, ChannelBinding, Contact, Tenant, User
+from app.db.models import AgentProfile, ChannelBinding, ChannelIdentity, Contact, Tenant, User
 
 
 def _engine():
@@ -159,6 +159,56 @@ def test_owner_creates_lists_and_edits_contact_without_requiring_user(contact_db
     assert updated.primary_user_id is None
     stored = _contact(db, created.id)
     assert stored.primary_user_id is None
+
+
+def test_duplicate_secondary_key_on_commit_returns_409(contact_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _engine = contact_db
+    post_contact(_write(name="张三"), agent_id=agent_a.id, db=db, current_user=owner)
+    monkeypatch.setattr(
+        "app.contacts.service._ensure_unique_secondary", lambda *args, **kwargs: None
+    )
+    with pytest.raises(HTTPException) as error:
+        post_contact(_write(name="同号"), agent_id=agent_a.id, db=db, current_user=owner)
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "CONTACT_DUPLICATE_KEY"
+    names = [row.name for row in db.exec(select(Contact)).all()]
+    assert names == ["张三"]
+
+
+def test_update_duplicate_secondary_key_on_commit_returns_409(contact_db, monkeypatch) -> None:
+    db, (owner, _other, _admin, agent_a, _agent_b), _engine = contact_db
+    first = post_contact(
+        _write(name="张三", wecom_userid="zhangsan"),
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    second = post_contact(
+        _write(name="李四", wecom_userid="lisi", feishu_openid=None, dingtalk_userid=None),
+        agent_id=agent_a.id,
+        db=db,
+        current_user=owner,
+    )
+    monkeypatch.setattr(
+        "app.contacts.service._ensure_unique_secondary", lambda *args, **kwargs: None
+    )
+    with pytest.raises(HTTPException) as error:
+        patch_contact(
+            second.id,
+            _write(
+                name="李四",
+                wecom_userid="zhangsan",
+                feishu_openid=None,
+                dingtalk_userid=None,
+            ),
+            agent_id=agent_a.id,
+            db=db,
+            current_user=owner,
+        )
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "CONTACT_DUPLICATE_KEY"
+    assert _contact(db, second.id).wecom_userid == "lisi"
+    assert _contact(db, first.id).wecom_userid == "zhangsan"
 
 
 def test_duplicate_secondary_key_on_same_employee_is_rejected(contact_db) -> None:
@@ -390,6 +440,76 @@ def test_inbound_secondary_match_does_not_replace_existing_primary_user(contact_
     )
     db.commit()
     assert _contact(db, row.id).primary_user_id == "user_other"
+
+
+def test_soft_fill_unique_conflict_does_not_abort_inbound(contact_db, monkeypatch) -> None:
+    import app.channels.adapters.wecom  # noqa: F401
+
+    db, _seeded, engine = contact_db
+
+    class _Loop:
+        def __init__(self, _db, *, event_sink=None):
+            self.db = _db
+
+        def handle_turn(self, request):
+            return None
+
+    monkeypatch.setattr("app.core.agent_loop.AgentLoop", _Loop)
+    monkeypatch.setattr(
+        "app.contacts.linking._other_has_secondary", lambda *args, **kwargs: False
+    )
+    holder = Contact(
+        tenant_id="tenant_demo",
+        agent_id="agent_a",
+        name="已占用",
+        wecom_userid="zhangsan",
+    )
+    target = Contact(
+        tenant_id="tenant_demo",
+        agent_id="agent_a",
+        name="已关联",
+        primary_user_id="user_owner",
+    )
+    binding = ChannelBinding(
+        tenant_id="tenant_demo",
+        agent_id="agent_a",
+        channel="wecom",
+        status="active",
+        config_json={},
+    )
+    db.add(holder)
+    db.add(target)
+    db.add(binding)
+    db.commit()
+    db.add(
+        ChannelIdentity(
+            tenant_id="tenant_demo",
+            channel="wecom",
+            external_account_scope=binding.id,
+            external_user_id="zhangsan",
+            staffdeck_user_id="user_owner",
+        )
+    )
+    db.commit()
+    db.refresh(binding)
+    db.expunge(binding)
+
+    inbound = ChannelInbound(
+        channel="wecom",
+        event_id="evt_conflict",
+        from_user_id="zhangsan",
+        to_user_id="bot",
+        session_id="zhangsan",
+        group_id="",
+        context_token="zhangsan",
+        text="你好",
+        is_group=False,
+        raw={},
+    )
+    assert process_inbound(binding, inbound, db_engine=engine) is True
+    assert db.get(User, "user_owner") is not None
+    assert _contact(db, target.id).wecom_userid is None
+    assert _contact(db, holder.id).wecom_userid == "zhangsan"
 
 
 def test_process_inbound_links_contact_for_direct_sender_only(contact_db, monkeypatch) -> None:

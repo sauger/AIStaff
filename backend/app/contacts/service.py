@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.contacts.errors import ContactError
@@ -70,7 +71,7 @@ def create_contact(
     _ensure_unique_secondary(db, tenant_id, agent_id, values)
     row = Contact(tenant_id=tenant_id, agent_id=agent_id, **values)
     db.add(row)
-    db.commit()
+    _commit(db)
     db.refresh(row)
     return contact_read(row)
 
@@ -89,7 +90,7 @@ def update_contact(
         setattr(row, key, value)
     row.updated_at = utc_now()
     db.add(row)
-    db.commit()
+    _commit(db)
     db.refresh(row)
     return contact_read(row)
 
@@ -117,6 +118,18 @@ def contact_read(row: Contact) -> ContactRead:
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
+
+
+def _commit(db: Session) -> None:
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise ContactError(
+            "CONTACT_DUPLICATE_KEY",
+            "该渠道 id 已在这本通讯录中。",
+            status_code=409,
+        ) from error
 
 
 def _require_contact(db: Session, tenant_id: str, agent_id: str, contact_id: str) -> Contact:
