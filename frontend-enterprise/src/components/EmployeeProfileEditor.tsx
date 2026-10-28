@@ -39,6 +39,7 @@ type EmployeeProfileFormValues = {
   harnessMaxActions: number;
   status: 'active' | 'archived';
   publishedToGallery: boolean;
+  honchoEnabled: boolean;
 };
 
 const STYLE_OPTIONS = ['目标明确', '证据优先', '动作可追溯', '事实先行', '流程推进', '风险克制', '及时追问'];
@@ -58,6 +59,7 @@ const BLANK_FORM: EmployeeProfileFormValues = {
   harnessMaxActions: 32,
   status: 'active',
   publishedToGallery: false,
+  honchoEnabled: false,
 };
 
 export default function EmployeeProfileEditor({
@@ -98,6 +100,7 @@ export default function EmployeeProfileEditor({
       harnessMaxActions: Math.max(1, Math.min(100, agent.harness_max_actions || 32)),
       status: agent.status === 'archived' ? 'archived' : 'active',
       publishedToGallery: agent.metadata?.published_to_gallery === true,
+      honchoEnabled: agent.metadata?.honcho_enabled === true,
     });
   }, [agent, open, profile]);
 
@@ -120,6 +123,7 @@ export default function EmployeeProfileEditor({
         expertise_tags: compactTags(form.expertiseTags),
         work_modes: compactTags(form.workModes),
         published_to_gallery: form.publishedToGallery,
+        honcho_enabled: form.honchoEnabled,
       };
       if (form.publishedToGallery && !wasPublished) {
         metadata.gallery_published_at = new Date().toISOString();
@@ -264,6 +268,20 @@ export default function EmployeeProfileEditor({
               )}
 
               {agent?.id && <WecomOaAgentConfigPanel agentId={agent.id} />}
+
+              <div className="employee-profile-publish">
+                <div>
+                  <strong className="text-[13px] text-[#18181a]">长期用户画像</strong>
+                  <p className="m-0 mt-[4px] text-[12px] text-muted-foreground">
+                    开启后，该员工在网页和单渠道私聊里累积跨会话用户画像。群聊不写入。服务端总开关关闭时不会调用 Honcho。
+                  </p>
+                </div>
+                <Switch
+                  checked={form.honchoEnabled}
+                  onCheckedChange={(next) => update({ honchoEnabled: next })}
+                  aria-label="长期用户画像"
+                />
+              </div>
 
               <div className="employee-profile-publish">
                 <div>
