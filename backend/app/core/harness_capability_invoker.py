@@ -112,6 +112,7 @@ class HarnessCapabilityInvoker:
         channel_external_user_id: str | None = None,
         channel_external_account_scope: str | None = None,
         channel_target_json: dict[str, Any] | None = None,
+        channel_is_group: bool = False,
     ) -> None:
         self.db = db
         self.tenant_id = tenant_id
@@ -133,6 +134,7 @@ class HarnessCapabilityInvoker:
         self.channel_external_user_id = channel_external_user_id
         self.channel_external_account_scope = channel_external_account_scope
         self.channel_target_json = dict(channel_target_json or {})
+        self.channel_is_group = channel_is_group
         self.run_id = str(run_id or new_id("hrun"))
         self.workspace_root = _workspace_root(
             tenant_id, session.id, task_frame_id, db=self.db
@@ -843,6 +845,7 @@ class HarnessCapabilityInvoker:
                 external_user_id=self.channel_external_user_id,
                 external_account_scope=self.channel_external_account_scope,
                 target_json=self.channel_target_json,
+                is_group=self.channel_is_group,
             )
         except KnowledgeProposalError as exc:
             return _failure(exc.code, str(exc), details=exc.details)

@@ -124,6 +124,18 @@ def _visible(monkeypatch) -> None:
     )
 
 
+def _set_open_channels(monkeypatch, channels: set[str]) -> None:
+    from types import SimpleNamespace
+
+    import app.knowledge.proposals as proposals
+
+    monkeypatch.setattr(
+        proposals,
+        "get_settings",
+        lambda: SimpleNamespace(knowledge_open_write_channel_set=channels),
+    )
+
+
 def test_create_proposal_without_candidates(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     _visible(monkeypatch)
@@ -361,6 +373,7 @@ def test_body_similarity_candidate(monkeypatch, tmp_path: Path) -> None:
 def test_channel_sender_requires_bound_identity(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     _visible(monkeypatch)
+    _set_open_channels(monkeypatch, set())
     with Session(_engine()) as db:
         session = _seed(db)
         session.channel = "wecom"
@@ -383,6 +396,7 @@ def test_channel_sender_requires_bound_identity(monkeypatch, tmp_path: Path) -> 
 def test_channel_bound_identity_can_propose(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     _visible(monkeypatch)
+    _set_open_channels(monkeypatch, set())
     with Session(_engine()) as db:
         session = _seed(db)
         session.channel = "wecom"
@@ -749,3 +763,53 @@ def test_internal_dispatch_routes_knowledge_proposal() -> None:
     )
     assert result["success"] is True
     assert result["data"]["attachment_id"] == "att_dispatch"
+
+
+def test_open_write_channels_allow_unbound_private_senders(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    _set_open_channels(
+        monkeypatch, {"wecom", "feishu", "dingtalk", "wechat_kf", "wechat"}
+    )
+    for channel in ("wecom", "feishu", "dingtalk", "wechat_kf", "wechat"):
+        with Session(_engine()) as db:
+            session = _seed(db)
+            session.channel = channel
+            db.add(session)
+            db.commit()
+            attachment = _attachment(data=f"{channel} 正文".encode("utf-8"))
+            proposal = create_knowledge_update_proposal(
+                db,
+                chat_session=session,
+                attachment=attachment,
+                source_message_id=f"turn_open_{channel}",
+                requested_action="create",
+                external_user_id=f"external-{channel}",
+                external_account_scope=f"scope-{channel}",
+            )
+            assert proposal.status == "pending"
+            assert proposal.metadata_json["authorization_mode"] == "channel_open_phase1"
+
+
+def test_open_write_rejects_group_chat(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    _set_open_channels(monkeypatch, {"wecom"})
+    with Session(_engine()) as db:
+        session = _seed(db)
+        session.channel = "wecom"
+        db.add(session)
+        db.commit()
+        attachment = _attachment(data="群聊正文".encode("utf-8"))
+        with pytest.raises(KnowledgeProposalError) as exc_info:
+            create_knowledge_update_proposal(
+                db,
+                chat_session=session,
+                attachment=attachment,
+                source_message_id="turn_group",
+                requested_action="create",
+                external_user_id="external-group-user",
+                external_account_scope="scope-group",
+                is_group=True,
+            )
+        assert exc_info.value.code == "CHANNEL_IDENTITY_NOT_BOUND"

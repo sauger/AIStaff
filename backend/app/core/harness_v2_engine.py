@@ -995,6 +995,7 @@ class HarnessV2Engine:
                 channel_external_user_id=request.channel_external_user_id,
                 channel_external_account_scope=request.channel_external_account_scope,
                 channel_target_json=request.channel_target_json,
+                channel_is_group=request.channel_is_group,
             )
             invoker.inbound_mail_auto_complete = bool(request.inbound_mail_auto_complete)
             invoker.inbound_mail_message_id = (

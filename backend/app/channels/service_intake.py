@@ -1754,6 +1754,7 @@ def process_inbound(
                 channel_external_user_id=inbound.from_user_id,
                 channel_external_account_scope=scope,
                 channel_target_json=dict(target),
+                channel_is_group=inbound.is_group,
                 client_turn_id=inbound.event_id,
                 attachments=attachments,
                 interaction_mode=interaction_mode,

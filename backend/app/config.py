@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     allow_local_artifact_links: bool = False
     # 聊天附件暂存目录；为空时使用用户数据目录下的 harness_uploads。
     harness_uploads_path: str = ""
+    # 第一期开放写入的渠道白名单，逗号分隔；空字符串表示关闭。
+    knowledge_open_write_channels: str = ""
     public_api_enabled: bool = True
     public_api_key_pepper: str = ""
     public_api_idempotency_ttl_seconds: int = 60 * 60 * 24
@@ -94,6 +96,14 @@ class Settings(BaseSettings):
     @property
     def normalized_tool_base_url(self) -> str:
         return self.tool_base_url.rstrip("/")
+
+    @property
+    def knowledge_open_write_channel_set(self) -> set[str]:
+        return {
+            item.strip().lower()
+            for item in self.knowledge_open_write_channels.split(",")
+            if item.strip()
+        }
 
     @property
     def normalized_public_base_url(self) -> str:

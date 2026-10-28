@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import difflib
+import logging
 import hashlib
 import secrets
 from datetime import timedelta
@@ -13,10 +14,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.agents.branching import (
+    get_agent,
     knowledge_version_for_upload,
     visible_knowledge_base_versions,
 )
 from app.channels.media import MAX_CHANNEL_MEDIA_BYTES
+from app.config import get_settings
 from app.async_jobs import enqueue_async_job
 from app.db.models import (
     ChannelDelivery,
@@ -41,6 +44,8 @@ MAX_CHAT_ATTACHMENT_BYTES = 12 * 1024 * 1024
 MAX_KNOWLEDGE_CANDIDATES = 3
 SIMILARITY_THRESHOLD = 0.85
 PROPOSAL_TTL_MINUTES = 30
+logger = logging.getLogger(__name__)
+
 SUPPORTED_KNOWLEDGE_SUFFIXES = {
     ".txt",
     ".md",
@@ -121,6 +126,7 @@ def _resolve_actor_user_id(
     *,
     external_user_id: str | None,
     external_account_scope: str | None,
+    allow_unbound: bool = False,
 ) -> str:
     if not external_user_id:
         return str(chat_session.user_id or "").strip()
@@ -137,6 +143,8 @@ def _resolve_actor_user_id(
         )
     ).first()
     if identity is None:
+        if allow_unbound:
+            return str(chat_session.user_id or "").strip()
         raise KnowledgeProposalError(
             "CHANNEL_IDENTITY_NOT_BOUND",
             "当前渠道账号还没有绑定 StaffDeck 用户，不能更新知识库。",
@@ -150,21 +158,34 @@ def _ensure_writable_agent(
     *,
     external_user_id: str | None,
     external_account_scope: str | None,
-) -> tuple[str, str]:
+    is_group: bool = False,
+) -> tuple[str, str, str]:
+    channel = str(chat_session.channel or "").strip().lower()
+    open_channels = get_settings().knowledge_open_write_channel_set
+    open_write = bool(channel in open_channels and not is_group)
     user_id = _resolve_actor_user_id(
         db,
         chat_session,
         external_user_id=external_user_id,
         external_account_scope=external_account_scope,
+        allow_unbound=open_write,
     )
     if not user_id:
         raise KnowledgeProposalError("AUTH_REQUIRED", "当前会话没有可用的 StaffDeck 用户。")
-    user = db.get(User, user_id)
-    if user is None or user.tenant_id != chat_session.tenant_id:
-        raise KnowledgeProposalError("AUTH_REQUIRED", "当前用户不存在或不属于该租户。")
     agent_id = str(chat_session.agent_id or "").strip()
     if not agent_id:
         raise KnowledgeProposalError("AGENT_REQUIRED", "当前会话没有关联数字员工。")
+    if open_write:
+        agent = get_agent(db, chat_session.tenant_id, agent_id)
+        if agent is None or agent.is_overall:
+            raise KnowledgeProposalError(
+                "OPEN_GALLERY_WRITE_UNSUPPORTED",
+                "聊天只允许更新员工私有知识库；开放画廊请使用网页知识库后台。",
+            )
+        return agent_id, user_id, "channel_open_phase1"
+    user = db.get(User, user_id)
+    if user is None or user.tenant_id != chat_session.tenant_id:
+        raise KnowledgeProposalError("AUTH_REQUIRED", "当前用户不存在或不属于该租户。")
     try:
         agent = ensure_agent_scope_manager(db, chat_session.tenant_id, agent_id, user)
     except HTTPException as exc:
@@ -178,8 +199,7 @@ def _ensure_writable_agent(
             "OPEN_GALLERY_WRITE_UNSUPPORTED",
             "聊天只允许更新员工私有知识库；开放画廊请使用网页知识库后台。",
         )
-    return agent_id, user_id
-
+    return agent_id, user_id, "admin_or_owner"
 
 def _resolve_target_knowledge_base(
     db: Session,
@@ -334,6 +354,7 @@ def create_knowledge_update_proposal(
     external_account_scope: str | None = None,
     binding_id: str | None = None,
     target_json: dict[str, Any] | None = None,
+    is_group: bool = False,
 ) -> KnowledgeUpdateProposal:
     """Create a durable proposal only; never ingest or overwrite here."""
 
@@ -384,11 +405,12 @@ def create_knowledge_update_proposal(
             "EMPTY_DOCUMENT", "文件没有可提取的文本内容，不能加入知识库。"
         )
 
-    agent_id, user_id = _ensure_writable_agent(
+    agent_id, user_id, authorization_mode = _ensure_writable_agent(
         db,
         chat_session,
         external_user_id=external_user_id,
         external_account_scope=external_account_scope,
+        is_group=is_group,
     )
     knowledge_base_id, version_id = _resolve_target_knowledge_base(
         db,
@@ -466,10 +488,23 @@ def create_knowledge_update_proposal(
             "suffix": suffix,
             "extracted_chars": len(text),
             "acting_user_id": user_id,
+            "authorization_mode": authorization_mode,
+            "external_user_id": external_user_id,
+            "is_group": is_group,
         },
         status="pending",
         expires_at=utc_now() + timedelta(minutes=PROPOSAL_TTL_MINUTES),
     )
+    if authorization_mode == "channel_open_phase1":
+        logger.warning(
+            "知识库开放期写入 proposal=%s channel=%s session=%s agent=%s external_user=%s filename=%s",
+            proposal.id,
+            channel,
+            chat_session.id,
+            agent_id,
+            external_user_id,
+            attachment.filename,
+        )
     db.add(proposal)
     try:
         db.commit()
