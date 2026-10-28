@@ -22,7 +22,7 @@
 2. 部门树。邻接表 `parent_id`，加上物化路径 `path`。路径是 id 拼出来的：根为 `/{id}`，子部门为 `{parent.path}/{id}`。没有闭包表。
 3. 人与部门的任职（affiliation）。
 4. 每个部门的负责人。单独的负责人行，不塞进任职的布尔标记。
-5. 任职和负责人都有 `valid_from` / `valid_to`。`valid_to` 为空表示至今。两端都包含当天。
+5. 任职和负责人都有 `valid_from` / `valid_to`。`valid_to` 为空表示至今。两端都包含当天。没传日期时，默认「今天」按 `Asia/Shanghai` 的日历日，和定时任务的默认时区一致。调用方传入的 `as_of` 是日期，不再做时区换算。
 
 可以新建、修改、删除部门。可以按部门加上查询日期列出当天的直接成员。v1 不把子部门的人算进上级。
 
@@ -43,15 +43,15 @@ v1 的取舍（尽量少改已有通讯录）：
 
 ## 4. 数据
 
-新表由启动时的 `SQLModel.metadata.create_all` 建出来，和 `contacts` 一样。这个仓库没有 Alembic；新表不需要 ALTER。
+新表由启动时的 `SQLModel.metadata.create_all` 建出来，和 `contacts` 一样。这个仓库没有 Alembic。已经按第一版建过表的 SQLite 库，启动时把根的 `parent_id` 从 NULL 回填成 `''`，并补上同级部门名的唯一索引。
 
 | 表 | 要点 |
 |---|---|
-| `org_departments` | `tenant_id`、`name`、可空 `parent_id`、`path`、`sort_order`。同一上级下部门名不重复。根部门之间也不重复。 |
+| `org_departments` | `tenant_id`、`name`、`parent_id`、`path`、`sort_order`。根部门的 `parent_id` 存空字符串，不存 NULL，也不是外键。接口仍把根显示为 `parent_id: null`。`UNIQUE(tenant_id, parent_id, name)` 因此对根和子部门都生效。应用层仍先检查重名；唯一约束冲突返回 409。 | |
 | `org_affiliations` | `department_id` + `contact_id` + `valid_from` + 可空 `valid_to`。允许同一人多条任职，包括时间重叠。 |
 | `org_department_heads` | 同样的人和区间。同一天若有多条覆盖，查询取 `valid_from` 最晚的一条当作当前负责人。历史行留着。 |
 
-移动部门时改写自己和所有下级的 `path` 前缀。不能把部门移到自己或自己的下级下面。还有下级时不能删除；删叶子部门时一并删掉它的任职和负责人。重命名不改路径，因为路径用的是 id。
+移动部门时先在 SQLite 上取得写锁，再在同一事务里重新读出本节点和新上级的路径，然后改写自己和所有下级的 `path` 前缀。不能把部门移到自己或自己的下级下面。还有下级时不能删除；删叶子部门时一并删掉它的任职和负责人。重命名不改路径，因为路径用的是 id。查人和负责人时，联系人与所属员工都再按 `tenant_id` 过滤。
 
 ## 5. 接口
 

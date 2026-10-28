@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.contacts.api import post_contact, remove_contact
 from app.contacts.schema import ContactWriteRequest
+from app.db.database import ensure_org_department_sibling_unique
 from app.db.models import (
     AgentProfile,
+    Contact,
     OrgAffiliation,
     OrgDepartment,
     OrgDepartmentHead,
@@ -124,7 +129,17 @@ def _stored_department(db: Session, department_id: str) -> OrgDepartment:
 def test_org_tables_use_adjacency_and_materialized_path(org_db) -> None:
     db, _seeded = org_db
     columns = {column["name"]: column for column in inspect(db.get_bind()).get_columns("org_departments")}
-    assert columns["parent_id"]["nullable"] is True
+    assert columns["parent_id"]["nullable"] is False
+    unique_names = {
+        item["name"]
+        for item in inspect(db.get_bind()).get_unique_constraints("org_departments")
+    }
+    unique_names.update(
+        item["name"]
+        for item in inspect(db.get_bind()).get_indexes("org_departments")
+        if item.get("unique")
+    )
+    assert "uq_org_department_sibling_name" in unique_names
     assert "path" in columns
     assert "closure" not in inspect(db.get_bind()).get_table_names()
     affiliation = {
@@ -168,7 +183,7 @@ def test_create_move_and_reject_cycle_maintains_paths(org_db) -> None:
         patch_department(child.id, _dept("研发中心", grand.id), db=db, current_user=admin)
     assert error.value.status_code == 400
     assert error.value.detail["code"] == "ORG_DEPARTMENT_CYCLE"
-    assert _stored_department(db, child.id).parent_id is None
+    assert _stored_department(db, child.id).parent_id == ""
 
 
 def test_duplicate_sibling_name_and_child_delete_rules(org_db) -> None:
@@ -434,3 +449,107 @@ def test_inverted_tenure_is_rejected(org_db) -> None:
         )
     assert error.value.status_code == 400
     assert error.value.detail["code"] == "ORG_DATE_RANGE"
+
+
+def test_duplicate_root_name_is_rejected_by_the_unique_constraint(org_db, monkeypatch) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
+    post_department(_dept("公司"), db=db, current_user=admin)
+    monkeypatch.setattr("app.org.service._ensure_sibling_name", lambda *args, **kwargs: None)
+    with pytest.raises(HTTPException) as error:
+        post_department(_dept("公司"), db=db, current_user=admin)
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "ORG_DEPARTMENT_NAME_DUPLICATE"
+    stored = db.exec(select(OrgDepartment).where(OrgDepartment.name == "公司")).all()
+    assert len(stored) == 1
+    assert stored[0].parent_id == ""
+
+
+def test_department_people_does_not_read_another_tenants_contact(org_db) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
+    db.add(Tenant(id="tenant_other", name="Other"))
+    db.add(
+        AgentProfile(
+            id="agent_other",
+            tenant_id="tenant_other",
+            name="别家员工",
+            is_overall=False,
+            metadata_json={},
+        )
+    )
+    db.add(
+        Contact(
+            id="contact_other",
+            tenant_id="tenant_other",
+            agent_id="agent_other",
+            name="机密",
+        )
+    )
+    db.commit()
+    department = post_department(_dept("研发"), db=db, current_user=admin)
+    db.add(
+        OrgAffiliation(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            contact_id="contact_other",
+            valid_from=date(2026, 1, 1),
+        )
+    )
+    db.commit()
+    listed = get_department_people(
+        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-03-01"
+    )
+    assert listed.people == []
+    assert listed.affiliations == []
+
+
+def test_sqlite_migration_backfills_null_roots_and_rejects_a_duplicate_name() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE org_departments (
+                id VARCHAR PRIMARY KEY,
+                tenant_id VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                parent_id VARCHAR,
+                path VARCHAR NOT NULL,
+                sort_order INTEGER NOT NULL,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        connection.execute(
+            text(
+                "INSERT INTO org_departments "
+                "(id, tenant_id, name, parent_id, path, sort_order) "
+                "VALUES ('d1', 't', '公司', NULL, '/d1', 0), ('d2', 't', '市场', NULL, '/d2', 0)"
+            )
+        )
+    with engine.begin() as connection:
+        ensure_org_department_sibling_unique(connection)
+        parents = connection.execute(
+            text("SELECT parent_id FROM org_departments ORDER BY id")
+        ).scalars().all()
+    assert parents == ["", ""]
+    with engine.begin() as connection, pytest.raises(IntegrityError):
+        connection.execute(
+            text(
+                "INSERT INTO org_departments "
+                "(id, tenant_id, name, parent_id, path, sort_order) "
+                "VALUES ('d3', 't', '公司', '', '/d3', 0)"
+            )
+        )
+
+
+def test_sibling_unique_migration_is_safe_on_the_current_schema(org_db) -> None:
+    db, _seeded = org_db
+    post_department(_dept("公司"), db=db, current_user=_seeded[1])
+    ensure_org_department_sibling_unique(db.connection())
+    db.commit()
+    stored = db.exec(select(OrgDepartment)).one()
+    assert stored.parent_id == ""

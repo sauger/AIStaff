@@ -1062,23 +1062,31 @@ class Contact(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+# 根部门的 parent_id。空字符串才能让 UNIQUE(tenant_id, parent_id, name) 对根生效；
+# SQLite 里 NULL 不等于 NULL，可空 parent_id 挡不住两个同名根。接口仍把根显示为 null。
+ORG_ROOT_PARENT_ID = ""
+
+
 class OrgDepartment(SQLModel, table=True):
     """租户级部门。邻接表 parent_id，加上物化路径，不用闭包表。
 
     path 形如 /{id} 或 {parent.path}/{id}。移动子树时改写前缀。
+    根的 parent_id 是空字符串，不是 NULL，也不是外键。
     """
 
     __tablename__ = "org_departments"
     __table_args__ = (
         UniqueConstraint("tenant_id", "path", name="uq_org_department_path"),
+        UniqueConstraint(
+            "tenant_id", "parent_id", "name", name="uq_org_department_sibling_name"
+        ),
         Index("ix_org_department_parent", "tenant_id", "parent_id"),
-        Index("ix_org_department_tenant_name", "tenant_id", "name"),
     )
 
     id: str = Field(default_factory=lambda: new_id("dept"), primary_key=True)
     tenant_id: str = Field(index=True)
     name: str
-    parent_id: Optional[str] = Field(default=None, foreign_key="org_departments.id", index=True)
+    parent_id: str = Field(default=ORG_ROOT_PARENT_ID, nullable=False, index=True)
     path: str = Field(index=True)
     sort_order: int = Field(default=0)
     created_at: datetime = Field(default_factory=utc_now)

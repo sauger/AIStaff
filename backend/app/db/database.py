@@ -65,7 +65,32 @@ def init_db() -> None:
     _configure_sqlite_runtime()
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_skill_schema()
+    _migrate_org_department_sibling_names()
     _purge_orphaned_chat_sessions()
+
+
+def ensure_org_department_sibling_unique(connection) -> None:
+    """Backfill root parent_id and enforce sibling names, including roots.
+
+    Existing v1 databases stored roots as NULL. UNIQUE then did not cover them.
+    """
+    tables = set(inspect(connection).get_table_names())
+    if "org_departments" not in tables:
+        return
+    connection.execute(text("UPDATE org_departments SET parent_id = '' WHERE parent_id IS NULL"))
+    connection.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_org_department_sibling_name "
+            "ON org_departments (tenant_id, parent_id, name)"
+        )
+    )
+
+
+def _migrate_org_department_sibling_names() -> None:
+    if not database_url.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        ensure_org_department_sibling_unique(connection)
 
 
 def _purge_orphaned_chat_sessions() -> None:

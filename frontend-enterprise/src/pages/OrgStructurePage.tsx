@@ -38,7 +38,13 @@ const SELECT_CLASS =
   'h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground';
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  // Match the server org calendar (Asia/Shanghai), not the UTC date from toISOString.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
 function apiErrorMessage(error: unknown): string {

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.db.models import (
+    ORG_ROOT_PARENT_ID,
     AgentProfile,
     Contact,
     OrgAffiliation,
@@ -34,6 +36,8 @@ from app.org.schema import (
 
 _NAME_LIMIT = 80
 _ENTERPRISE_NAME_LIMIT = 120
+# Same default calendar as scheduled tasks. Tenure is a date, inclusive on both ends.
+_ORG_CALENDAR = ZoneInfo("Asia/Shanghai")
 
 
 def read_settings(db: Session, tenant_id: str) -> OrgSettingsRead:
@@ -66,10 +70,11 @@ def list_departments(db: Session, tenant_id: str) -> DepartmentListResponse:
 def create_department(
     db: Session, tenant_id: str, request: DepartmentWriteRequest
 ) -> DepartmentRead:
+    _sqlite_write_lock(db)
     _require_tenant(db, tenant_id)
     name = _require_department_name(request.name)
     parent = _optional_parent(db, tenant_id, request.parent_id)
-    parent_id = parent.id if parent else None
+    parent_id = _parent_key(parent)
     _ensure_sibling_name(db, tenant_id, parent_id, name)
     department_id = new_id("dept")
     row = OrgDepartment(
@@ -89,12 +94,13 @@ def create_department(
 def update_department(
     db: Session, tenant_id: str, department_id: str, request: DepartmentWriteRequest
 ) -> DepartmentRead:
+    _sqlite_write_lock(db)
     row = _require_department(db, tenant_id, department_id)
     name = _require_department_name(request.name)
     parent = _optional_parent(db, tenant_id, request.parent_id)
-    _ensure_not_cycle(row, parent)
-    parent_id = parent.id if parent else None
+    parent_id = _parent_key(parent)
     _ensure_sibling_name(db, tenant_id, parent_id, name, exclude_id=row.id)
+    row, parent = _reload_move(db, row, parent)
     row.name = name
     row.sort_order = _sort_order(request.sort_order)
     if row.parent_id != parent_id:
@@ -108,7 +114,9 @@ def update_department(
 
 
 def delete_department(db: Session, tenant_id: str, department_id: str) -> None:
+    _sqlite_write_lock(db)
     row = _require_department(db, tenant_id, department_id)
+    db.refresh(row)
     child = db.exec(
         select(OrgDepartment).where(
             OrgDepartment.tenant_id == tenant_id,
@@ -131,7 +139,7 @@ def list_org_contacts(db: Session, tenant_id: str) -> OrgContactListResponse:
     rows = db.exec(
         select(Contact).where(Contact.tenant_id == tenant_id).order_by(Contact.name, Contact.id)
     ).all()
-    agents = _agents_by_id(db, {row.agent_id for row in rows})
+    agents = _agents_by_id(db, tenant_id, {row.agent_id for row in rows})
     return OrgContactListResponse(
         contacts=[
             OrgContactOption(
@@ -158,10 +166,10 @@ def department_people(
     return DepartmentPeopleResponse(
         department_id=department.id,
         as_of=day.isoformat(),
-        people=_person_reads(db, people),
-        affiliations=_person_reads(db, affiliations),
-        heads=_head_reads(db, heads),
-        current_head=_head_read(db, current) if current is not None else None,
+        people=_person_reads(db, tenant_id, people),
+        affiliations=_person_reads(db, tenant_id, affiliations),
+        heads=_head_reads(db, tenant_id, heads),
+        current_head=_head_read(db, tenant_id, current) if current is not None else None,
     )
 
 
@@ -181,7 +189,7 @@ def create_affiliation(
     db.add(row)
     _commit(db)
     db.refresh(row)
-    people = _person_reads(db, [row])
+    people = _person_reads(db, tenant_id, [row])
     return people[0]
 
 
@@ -199,7 +207,7 @@ def update_affiliation(
     db.add(row)
     _commit(db)
     db.refresh(row)
-    return _person_reads(db, [row])[0]
+    return _person_reads(db, tenant_id, [row])[0]
 
 
 def delete_affiliation(db: Session, tenant_id: str, affiliation_id: str) -> None:
@@ -224,7 +232,7 @@ def create_head(db: Session, tenant_id: str, request: HeadWriteRequest) -> OrgHe
     db.add(row)
     _commit(db)
     db.refresh(row)
-    read = _head_read(db, row)
+    read = _head_read(db, tenant_id, row)
     if read is None:
         raise OrgError("ORG_CONTACT_NOT_FOUND", "联系人不存在。", status_code=404)
     return read
@@ -244,7 +252,7 @@ def update_head(
     db.add(row)
     _commit(db)
     db.refresh(row)
-    read = _head_read(db, row)
+    read = _head_read(db, tenant_id, row)
     if read is None:
         raise OrgError("ORG_CONTACT_NOT_FOUND", "联系人不存在。", status_code=404)
     return read
@@ -280,12 +288,41 @@ def department_read(row: OrgDepartment) -> DepartmentRead:
     return DepartmentRead(
         id=row.id,
         name=row.name,
-        parent_id=row.parent_id,
+        parent_id=row.parent_id or None,
         path=row.path,
         sort_order=row.sort_order,
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
+
+
+def _parent_key(parent: OrgDepartment | None) -> str:
+    return parent.id if parent is not None else ORG_ROOT_PARENT_ID
+
+
+def _sqlite_write_lock(db: Session) -> None:
+    """Take SQLite's reserved lock before reading paths or sibling names.
+
+    A later writer then cannot commit a move or insert until this transaction
+    finishes, so the cycle check and the unique name constraint see one order.
+    """
+    connection = db.connection()
+    if connection.dialect.name != "sqlite":
+        return
+    connection.exec_driver_sql("UPDATE org_departments SET sort_order = sort_order WHERE 0")
+
+
+def _reload_move(
+    db: Session, row: OrgDepartment, parent: OrgDepartment | None
+) -> tuple[OrgDepartment, OrgDepartment | None]:
+    """Re-read paths in this transaction immediately before rewriting them."""
+    db.refresh(row)
+    if parent is not None:
+        db.refresh(parent)
+        if parent.tenant_id != row.tenant_id:
+            raise OrgError("ORG_DEPARTMENT_NOT_FOUND", "部门不存在。", status_code=404)
+    _ensure_not_cycle(row, parent)
+    return row, parent
 
 
 def _path_for(parent: OrgDepartment | None, department_id: str) -> str:
@@ -330,20 +367,18 @@ def _ensure_not_cycle(row: OrgDepartment, parent: OrgDepartment | None) -> None:
 def _ensure_sibling_name(
     db: Session,
     tenant_id: str,
-    parent_id: str | None,
+    parent_id: str,
     name: str,
     *,
     exclude_id: str | None = None,
 ) -> None:
-    statement = select(OrgDepartment).where(
-        OrgDepartment.tenant_id == tenant_id,
-        OrgDepartment.name == name,
-    )
-    if parent_id is None:
-        statement = statement.where(OrgDepartment.parent_id.is_(None))
-    else:
-        statement = statement.where(OrgDepartment.parent_id == parent_id)
-    existing = db.exec(statement).first()
+    existing = db.exec(
+        select(OrgDepartment).where(
+            OrgDepartment.tenant_id == tenant_id,
+            OrgDepartment.parent_id == parent_id,
+            OrgDepartment.name == name,
+        )
+    ).first()
     if existing is not None and existing.id != exclude_id:
         raise OrgError(
             "ORG_DEPARTMENT_NAME_DUPLICATE",
@@ -406,11 +441,13 @@ def _covers(
     return end is None or end >= day
 
 
-def _person_reads(db: Session, rows: list[OrgAffiliation]) -> list[OrgPersonRead]:
+def _person_reads(
+    db: Session, tenant_id: str, rows: list[OrgAffiliation]
+) -> list[OrgPersonRead]:
     if not rows:
         return []
-    contacts = _contacts_by_id(db, {row.contact_id for row in rows})
-    agents = _agents_by_id(db, {row.agent_id for row in contacts.values()})
+    contacts = _contacts_by_id(db, tenant_id, {row.contact_id for row in rows})
+    agents = _agents_by_id(db, tenant_id, {row.agent_id for row in contacts.values()})
     people: list[OrgPersonRead] = []
     for row in rows:
         contact = contacts.get(row.contact_id)
@@ -434,20 +471,20 @@ def _person_reads(db: Session, rows: list[OrgAffiliation]) -> list[OrgPersonRead
     return people
 
 
-def _head_reads(db: Session, rows: list[OrgDepartmentHead]) -> list[OrgHeadRead]:
-    reads = [item for row in rows if (item := _head_read(db, row)) is not None]
+def _head_reads(db: Session, tenant_id: str, rows: list[OrgDepartmentHead]) -> list[OrgHeadRead]:
+    reads = [item for row in rows if (item := _head_read(db, tenant_id, row)) is not None]
     reads.sort(key=lambda item: (item.valid_from, item.head_id))
     return reads
 
 
-def _head_read(db: Session, row: OrgDepartmentHead | None) -> OrgHeadRead | None:
+def _head_read(db: Session, tenant_id: str, row: OrgDepartmentHead | None) -> OrgHeadRead | None:
     if row is None:
         return None
-    contacts = _contacts_by_id(db, {row.contact_id})
+    contacts = _contacts_by_id(db, tenant_id, {row.contact_id})
     contact = contacts.get(row.contact_id)
     if contact is None:
         return None
-    agents = _agents_by_id(db, {contact.agent_id})
+    agents = _agents_by_id(db, tenant_id, {contact.agent_id})
     agent = agents.get(contact.agent_id)
     start = _as_date(row.valid_from)
     return OrgHeadRead(
@@ -466,17 +503,23 @@ def _profile_name(profile: AgentProfile | None, fallback: str) -> str:
     return profile.name if profile is not None else fallback
 
 
-def _contacts_by_id(db: Session, contact_ids: set[str]) -> dict[str, Contact]:
+def _contacts_by_id(db: Session, tenant_id: str, contact_ids: set[str]) -> dict[str, Contact]:
     if not contact_ids:
         return {}
-    rows = db.exec(select(Contact).where(Contact.id.in_(contact_ids))).all()
+    rows = db.exec(
+        select(Contact).where(Contact.tenant_id == tenant_id, Contact.id.in_(contact_ids))
+    ).all()
     return {row.id: row for row in rows}
 
 
-def _agents_by_id(db: Session, agent_ids: set[str]) -> dict[str, AgentProfile]:
+def _agents_by_id(db: Session, tenant_id: str, agent_ids: set[str]) -> dict[str, AgentProfile]:
     if not agent_ids:
         return {}
-    rows = db.exec(select(AgentProfile).where(AgentProfile.id.in_(agent_ids))).all()
+    rows = db.exec(
+        select(AgentProfile).where(
+            AgentProfile.tenant_id == tenant_id, AgentProfile.id.in_(agent_ids)
+        )
+    ).all()
     return {row.id: row for row in rows}
 
 
@@ -543,7 +586,7 @@ def _parse_required_date(value: str | None, label: str) -> date:
 
 
 def _today() -> date:
-    return datetime.now(UTC).date()
+    return datetime.now(_ORG_CALENDAR).date()
 
 
 def _as_date(value: date | datetime | str | None) -> date | None:
@@ -618,8 +661,15 @@ def _commit(db: Session) -> None:
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise OrgError(
-            "ORG_CONFLICT",
-            "组织数据冲突，请刷新后重试。",
+        raise _integrity_error(error) from error
+
+
+def _integrity_error(error: IntegrityError) -> OrgError:
+    text = f"{error} {getattr(error, 'orig', '')}".lower()
+    if "org_departments" in text and "name" in text:
+        return OrgError(
+            "ORG_DEPARTMENT_NAME_DUPLICATE",
+            "同一上级下已有同名部门。",
             status_code=409,
-        ) from error
+        )
+    return OrgError("ORG_CONFLICT", "组织数据冲突，请刷新后重试。", status_code=409)
