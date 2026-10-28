@@ -36,6 +36,7 @@ from app.api import (
 )
 from app.cabinet.api import router as cabinet_router
 from app.contacts.api import router as contacts_router
+from app.org.api import router as org_router
 from app.mail.api import router as mail_router
 from app.secrets.api import guides_router, secrets_router
 from app.mail.poller import start_mail_poller, stop_mail_poller
@@ -147,6 +148,7 @@ app.include_router(knowledge.router)
 app.include_router(cabinet_router)
 app.include_router(mail_router)
 app.include_router(contacts_router)
+app.include_router(org_router)
 app.include_router(secrets_router)
 app.include_router(guides_router)
 app.include_router(skills.router)

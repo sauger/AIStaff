@@ -38,6 +38,7 @@ import {
   preferredEmployeeAgent,
 } from "./employee";
 import AccountsPage from "./pages/AccountsPage";
+import OrgStructurePage from "./pages/OrgStructurePage";
 import AgentsPage from "./pages/AgentsPage";
 import ChannelsPage from "./pages/ChannelsPage";
 import EmployeeAccessChannelsPage from "./pages/channels/EmployeeAccessChannelsPage";
@@ -807,6 +808,16 @@ function Shell({
                     currentUser={auth.user}
                     onLogout={onLogout}
                   />
+                }
+              />
+              <Route
+                path="/enterprise/organization"
+                element={
+                  isAdmin ? (
+                    <OrgStructurePage currentUser={auth.user} onLogout={onLogout} />
+                  ) : (
+                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                  )
                 }
               />
               <Route

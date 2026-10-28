@@ -1499,6 +1499,68 @@ export type ContactListResponse = {
   contacts: ContactRead[];
 };
 
+export type OrgSettingsRead = {
+  tenant_id: string;
+  enterprise_name: string;
+};
+
+export type OrgDepartmentRead = {
+  id: string;
+  name: string;
+  parent_id?: string | null;
+  path: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrgDepartmentListResponse = {
+  departments: OrgDepartmentRead[];
+};
+
+export type OrgContactOption = {
+  id: string;
+  name: string;
+  agent_id: string;
+  agent_name: string;
+  title?: string | null;
+};
+
+export type OrgContactListResponse = {
+  contacts: OrgContactOption[];
+};
+
+export type OrgPersonRead = {
+  affiliation_id: string;
+  contact_id: string;
+  contact_name: string;
+  agent_id: string;
+  agent_name: string;
+  title?: string | null;
+  valid_from: string;
+  valid_to?: string | null;
+};
+
+export type OrgHeadRead = {
+  head_id: string;
+  department_id: string;
+  contact_id: string;
+  contact_name: string;
+  agent_id: string;
+  agent_name: string;
+  valid_from: string;
+  valid_to?: string | null;
+};
+
+export type OrgDepartmentPeopleResponse = {
+  department_id: string;
+  as_of: string;
+  people: OrgPersonRead[];
+  affiliations: OrgPersonRead[];
+  heads: OrgHeadRead[];
+  current_head?: OrgHeadRead | null;
+};
+
 export type LoginResult = {
   success: boolean;
   login_guide_name: string;
