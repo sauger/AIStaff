@@ -62,9 +62,10 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 - typed 文件工具的相对路径默认从当前 TaskFrame workspace 起算，也接受 `..`、绝对路径和
   `~`；只有用户明确提供或任务明确需要时才访问 workspace 外部，不要猜测或虚构宿主机路径。
   实际可访问范围由 StaffDeck 进程权限及管理员配置的 OS 沙箱策略决定。
-  TaskFrame 结束时系统会发现本轮新增或修改的用户文件并提供下载，因此同一任务生成的
-  源码、图片、文档等多个相关文件都应保留。`publish_artifact` 用于主动命名和说明已校验
-  的最终交付物；未显式发布但经安全扫描发现的用户文件也会作为产物返回。
+  TaskFrame 结束时，如果本轮没有显式发布文件，系统会把本轮新增或修改的用户文件作为
+  产物返回；一旦调用 `publish_artifact` 显式发布了任一文件，自动发现即关闭，所有需要
+  交付的文件都必须逐个显式发布。`publish_artifact` 用于命名和说明已校验的最终交付物；
+  不要把脚本、中间 Markdown、缓存或构建产物发布给用户。
 - HTTP/MCP Tool 的 JSON 结果序列化后不超过 2000 字符时直接返回；更大的结果只返回
   `kind=sandbox_json_file`、`sandbox_path`、`size` 和 `sha256`，完整内容保存在当前
   TaskFrame 沙箱。`sandbox_path` 是不透明地址，调用 `read_file` 时必须将其完整值直接放入
@@ -83,7 +84,9 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 - `task_requirement.published_deliverables` 是当前会话先前 TaskFrame 已发布交付物的限量清单。
   当用户要求引用、修改或继续推进先前交付的文件时，先调用 `list_published_deliverables`
   定位，再把返回的 `task_frame_id` 和 `path` 原样交给 `read_published_deliverable` 读取；
-  `read_file` 只读取当前 TaskFrame 工作区，不得用它猜测历史交付物路径。
+  `read_file` 只读取当前 TaskFrame 工作区，不得用它猜测历史交付物路径。读取历史交付物时
+  会一并恢复其原始知识引用；如果本轮新增或修改事实，必须重新执行 `knowledge_search`，
+  不得用旧交付物的引用支撑新内容。
 - 选择能力是动作决策，不得重新判断、切换或创建 SOP/TaskFrame。
 - SOP 节点引用的能力分为“可选执行”和“强制执行”。模型仍可自主选择任何可用的通用能力；
   `required_capability_names` 和 `required_knowledge_base_ids` 仅列出当前节点明确标为强制执行的
@@ -98,6 +101,13 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 - 严格保持 TaskRequirement 的需求边界。不得把“查询相关制度”“说明某项规则”等有限目标
   自行扩写成覆盖相邻业务全生命周期的清单；只有原始 requirement 或 completion_criteria
   明确要求全面梳理时，才扩展到多个独立子主题。
+- `knowledge_ingest_proposal` 只在用户明确要求把附件加入/更新知识库时调用，使用附件上下文中
+  的附件 ID；如果本轮没有附件，工具会尝试使用最近一次用户消息中的单个附件。它只创建待确认提案，不写入知识库；必须把确认码、目标库和候选文档告诉用户，
+  等用户确认，不要在确认前声称已经入库。渠道用户回复 `覆盖 <序号> <确认码>`、
+  `新增 <确认码>` 或 `取消 <确认码>`；网页用户使用提案卡片。用户只是上传附件或要求阅读时，
+  不要调用它。确认命令由系统拦截；没有收到系统确认或工具结果时，绝不能声称“已确认/已写入”。
+  如果工具返回 `KNOWLEDGE_BASE_REQUIRED`，只列出知识库选项，下一轮用户选择由系统处理，
+  不要改用 `extract_document_text` 读取文件。
 - `knowledge_search` 成功后，先用已返回的证据逐项核对当前 requirement 和
   completion_criteria。证据已足以回答原始问题时立即结束；只有能明确指出一个尚未覆盖、
   且属于原始任务边界的事实缺口时才能再次检索。禁止仅换同义词或扩展相邻主题重复检索。

@@ -534,6 +534,8 @@ class KnowledgeDocument(SQLModel, table=True):
     file_type: str = Field(index=True)
     title: Optional[str] = None
     status: str = Field(default="processing", index=True)
+    # 原始上传内容的 SHA-256，用于同一知识库版本内的重复文件检测。
+    source_sha256: Optional[str] = Field(default=None, index=True)
     bucket_count: int = 0
     chunk_count: int = 0
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
@@ -634,6 +636,13 @@ class KnowledgeIngestJob(SQLModel, table=True):
     knowledge_base_id: str = Field(index=True)
     knowledge_base_version_id: Optional[str] = Field(default=None, index=True)
     document_id: Optional[str] = Field(default=None, index=True)
+    # create: 新建文档；replace: 覆盖 target_document_id 指向的文档
+    operation: str = Field(default="create", index=True)
+    target_document_id: Optional[str] = Field(default=None, index=True)
+    expected_updated_at: Optional[str] = None
+    source_sha256: Optional[str] = Field(default=None, index=True)
+    source_message_id: Optional[str] = Field(default=None, index=True)
+    proposal_id: Optional[str] = Field(default=None, index=True)
     filename: str
     status: str = Field(default="queued", index=True)
     stage: str = "queued"
@@ -643,6 +652,54 @@ class KnowledgeIngestJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class KnowledgeUpdateProposal(SQLModel, table=True):
+    """对话中的知识库新增/覆盖提案；确认前不得写入知识库。"""
+
+    __tablename__ = "knowledge_update_proposals"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "target_knowledge_base_id",
+            "source_sha256",
+            "source_message_id",
+            name="uq_knowledge_update_proposal_source",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("kprop"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    confirmation_code: Optional[str] = Field(default=None, index=True)
+    agent_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    binding_id: Optional[str] = Field(default=None, index=True)
+    channel: str = Field(default="web", index=True)
+    external_user_id: Optional[str] = Field(default=None)
+    external_account_scope: Optional[str] = Field(default=None)
+    source_message_id: str = Field(index=True)
+    attachment_id: str
+    source_sha256: str = Field(index=True)
+    filename: str
+    content_type: Optional[str] = None
+    size: int = 0
+    target_knowledge_base_id: str = Field(index=True)
+    target_knowledge_base_version_id: Optional[str] = Field(default=None, index=True)
+    target_document_id: Optional[str] = Field(default=None, index=True)
+    target_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    expected_updated_at: Optional[str] = None
+    proposed_action: str = Field(default="undecided", index=True)
+    candidates_json: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSON)
+    )
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    status: str = Field(default="pending", index=True)
+    job_id: Optional[str] = Field(default=None, index=True)
+    confirmed_at: Optional[datetime] = None
+    confirmed_by_user_id: Optional[str] = None
+    expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
 
@@ -1286,11 +1343,15 @@ class ChannelDelivery(SQLModel, table=True):
     binding_id: str = Field(index=True)
     session_id: str = Field(index=True)
     message_id: Optional[str] = Field(default=None, index=True)
+    # 渠道远端返回的消息 ID；与本地 message_id 分开保存，避免覆盖本地关联。
+    remote_message_id: Optional[str] = Field(default=None, index=True)
     # 投递目标：to_user_id + context_token
     target_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
-    # reply/error_notice
+    # reply/file/error_notice
     kind: str = Field(default="reply", index=True)
     text: str
+    # kind=file 时的产物引用（task_frame_id/path/display_name/size/sha256/share_token）
+    artifact_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # pending/sending/delivered/failed
     status: str = Field(default="pending", index=True)
     attempts: int = 0

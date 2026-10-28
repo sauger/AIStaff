@@ -45,13 +45,18 @@ def list_published_deliverables(
     result: list[dict[str, Any]] = []
     seen_names: set[str] = set()
     for row in rows:
-        artifacts = (row.metadata_json or {}).get("harness_artifacts")
+        metadata = row.metadata_json or {}
+        artifacts = metadata.get("harness_artifacts")
         if not isinstance(artifacts, list):
             continue
+        citations = metadata.get("knowledge_citations")
         for raw in reversed(artifacts):
-            item = _published_item(raw, frame_ids=frame_ids)
+            item = _published_item(raw, frame_ids=frame_ids, citations=citations)
             if item is None or item["task_frame_id"] == exclude_task_frame_id:
                 continue
+            # The prompt-facing inventory should stay compact; citations are
+            # restored by read_published_deliverable when the file is opened.
+            item.pop("knowledge_citations", None)
             searchable = " ".join(
                 str(item.get(key) or "")
                 for key in ("display_name", "path", "description")
@@ -101,11 +106,13 @@ def find_published_deliverable(
         .order_by(Message.created_at.desc())
     ).all()
     for row in rows:
-        artifacts = (row.metadata_json or {}).get("harness_artifacts")
+        metadata = row.metadata_json or {}
+        artifacts = metadata.get("harness_artifacts")
         if not isinstance(artifacts, list):
             continue
+        citations = metadata.get("knowledge_citations")
         for raw in reversed(artifacts):
-            item = _published_item(raw, frame_ids={task_frame_id})
+            item = _published_item(raw, frame_ids={task_frame_id}, citations=citations)
             if item is None:
                 continue
             if item["task_frame_id"] == task_frame_id and item["path"] == requested_path:
@@ -119,6 +126,7 @@ def _published_item(
     raw: object,
     *,
     frame_ids: set[str],
+    citations: object = None,
 ) -> dict[str, Any] | None:
     if not isinstance(raw, dict) or raw.get("type") != "workspace_file":
         return None
@@ -138,6 +146,15 @@ def _published_item(
         "content_type": str(raw.get("content_type") or "").strip() or None,
         "size": raw.get("size") if isinstance(raw.get("size"), int) else None,
         "sha256": str(raw.get("sha256") or "").strip().lower() or None,
+        # Preserve provenance so a later TaskFrame that reads this deliverable
+        # can still show the original knowledge sources in the web UI.
+        "knowledge_citations": [
+            dict(item)
+            for item in (citations or [])
+            if isinstance(item, dict)
+        ][:8]
+        if isinstance(citations, list)
+        else [],
     }
 
 

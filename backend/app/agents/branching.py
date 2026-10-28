@@ -1317,6 +1317,7 @@ def clone_knowledge_version_assets(
                 file_type=document.file_type,
                 title=document.title,
                 status=document.status,
+                source_sha256=document.source_sha256,
                 bucket_count=document.bucket_count,
                 chunk_count=document.chunk_count,
                 metadata_json=deepcopy(document.metadata_json or {}),

@@ -133,6 +133,7 @@ def _migrate_sqlite_skill_schema() -> None:
         _migrate_feishu_channel_schema(conn, tables)
         _migrate_channel_inbound_run_schema(conn, tables)
         _migrate_channel_bind_code_constraints(conn, tables)
+        _ensure_channel_binding_team_column(conn, tables)
         _migrate_wechat_kf_accounts(conn, tables)
         _migrate_capability_scope_schema(conn, inspector, tables)
         _migrate_harness_v2_schema(conn, inspector, tables)
@@ -265,8 +266,7 @@ def _migrate_sqlite_skill_schema() -> None:
             binding_columns = {column["name"] for column in inspector.get_columns("channel_bindings")}
             if "last_connected_at" not in binding_columns:
                 conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN last_connected_at DATETIME"))
-            if "team_id" not in binding_columns:
-                conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN team_id VARCHAR"))
+            _ensure_channel_binding_team_column(conn, tables)
             if "name" not in binding_columns:
                 conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN name VARCHAR"))
 
@@ -281,6 +281,17 @@ def _migrate_sqlite_skill_schema() -> None:
                     text(
                         "ALTER TABLE channel_deliveries ADD COLUMN delivery_generation "
                         "INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            if "artifact_json" not in delivery_columns:
+                conn.execute(
+                    text("ALTER TABLE channel_deliveries ADD COLUMN artifact_json JSON")
+                )
+            if "remote_message_id" not in delivery_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE channel_deliveries "
+                        "ADD COLUMN remote_message_id VARCHAR"
                     )
                 )
 
@@ -1214,6 +1225,21 @@ def _migrate_channel_bindings_multi(conn, inspector, tables: set[str]) -> None:
         text("INSERT INTO app_data_migrations (id) VALUES (:id)"),
         {"id": _CHANNEL_BINDINGS_MULTI_MIGRATION_ID},
     )
+
+
+def _ensure_channel_binding_team_column(conn, tables: set[str]) -> None:
+    """Add channel_bindings.team_id before migrations that select it."""
+
+    if "channel_bindings" not in tables:
+        return
+    columns = {
+        row[1]
+        for row in conn.execute(text("PRAGMA table_info(channel_bindings)")).fetchall()
+    }
+    if "team_id" not in columns:
+        conn.execute(
+            text("ALTER TABLE channel_bindings ADD COLUMN team_id VARCHAR")
+        )
 
 
 def _migrate_wechat_kf_accounts(conn, tables: set[str]) -> None:
@@ -2444,6 +2470,61 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                     text(f"UPDATE {table_name} SET {column_name} = :knowledge_base_id WHERE tenant_id = :tenant_id AND ({column_name} IS NULL OR {column_name} = '')"),
                     {"tenant_id": tenant_id, "knowledge_base_id": _default_knowledge_base_id(tenant_id)},
                 )
+
+    if "knowledge_documents" in tables:
+        document_columns = {
+            column["name"] for column in inspector.get_columns("knowledge_documents")
+        }
+        if "source_sha256" not in document_columns:
+            conn.execute(
+                text("ALTER TABLE knowledge_documents ADD COLUMN source_sha256 VARCHAR")
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_knowledge_documents_source_sha256 "
+                "ON knowledge_documents(source_sha256)"
+            )
+        )
+
+    if "knowledge_ingest_jobs" in tables:
+        job_columns = {
+            column["name"] for column in inspector.get_columns("knowledge_ingest_jobs")
+        }
+        for column_name, column_type in (
+            ("operation", "VARCHAR NOT NULL DEFAULT 'create'"),
+            ("target_document_id", "VARCHAR"),
+            ("expected_updated_at", "VARCHAR"),
+            ("source_sha256", "VARCHAR"),
+            ("source_message_id", "VARCHAR"),
+            ("proposal_id", "VARCHAR"),
+        ):
+            if column_name not in job_columns:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE knowledge_ingest_jobs "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
+                )
+
+    if "knowledge_update_proposals" in tables:
+        proposal_columns = {
+            column["name"]
+            for column in inspector.get_columns("knowledge_update_proposals")
+        }
+        if "confirmation_code" not in proposal_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE knowledge_update_proposals "
+                    "ADD COLUMN confirmation_code VARCHAR"
+                )
+            )
+        if "target_json" not in proposal_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE knowledge_update_proposals "
+                    "ADD COLUMN target_json JSON NOT NULL DEFAULT '{}'"
+                )
+            )
 
     resolved_version_ids: dict[str, str] = {}
     if "knowledge_base_versions" in tables and "knowledge_bases" in tables:

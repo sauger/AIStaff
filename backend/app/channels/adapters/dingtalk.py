@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import time
+from pathlib import PurePath
 from urllib.parse import quote_plus
 from urllib.parse import urlparse
 from datetime import UTC, datetime
@@ -40,6 +41,9 @@ DINGTALK_API_BASE = "https://api.dingtalk.com/v1.0"
 DINGTALK_OPEN_CONNECTION_API = f"{DINGTALK_API_BASE}/gateway/connections/open"
 DINGTALK_ACCESS_TOKEN_API = f"{DINGTALK_API_BASE}/oauth2/accessToken"
 DINGTALK_EMOTION_API = f"{DINGTALK_API_BASE}/robot/emotion"
+DINGTALK_MEDIA_UPLOAD_API = "https://oapi.dingtalk.com/media/upload"
+DINGTALK_GROUP_FILE_API = f"{DINGTALK_API_BASE}/robot/groupMessages/send"
+DINGTALK_P2P_FILE_API = f"{DINGTALK_API_BASE}/robot/oToMessages/batchSend"
 DINGTALK_TEXT_LIMIT = 2000
 DINGTALK_WEBHOOK_HOSTS = {"oapi.dingtalk.com", "api.dingtalk.com"}
 TOKEN_REFRESH_SKEW_SECONDS = 300
@@ -366,6 +370,7 @@ class DingTalkAdapter:
     # 参数固定且可重复提交，因此重试路径直接重发而不是回查。
     reaction_attach_idempotent = True
     reaction_token = DINGTALK_ACK_EMOTION_NAME
+    file_max_bytes = 20 * 1024 * 1024
 
     def __init__(
         self,
@@ -535,6 +540,133 @@ class DingTalkAdapter:
         if response.status_code != 200:
             raise DingTalkTransientError(f"钉钉附件下载失败 HTTP {response.status_code}")
         return response.content
+
+    def _upload_file(
+        self,
+        binding: ChannelBinding,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        media_type: str,
+    ) -> str:
+        token = self._tokens.get(binding)
+        try:
+            with self._client_factory() as client:
+                response = client.post(
+                    DINGTALK_MEDIA_UPLOAD_API,
+                    params={"access_token": token, "type": media_type},
+                    files={
+                        "media": (
+                            filename,
+                            content,
+                            content_type or "application/octet-stream",
+                        )
+                    },
+                )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise DingTalkTransientError("钉钉文件上传暂时失败") from exc
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise DingTalkTransientError("钉钉文件上传响应格式无效") from exc
+        if response.status_code == 429 or response.status_code >= 500:
+            raise DingTalkTransientError("钉钉文件服务暂时不可用")
+        if response.status_code >= 400 or int(data.get("errcode", 0) or 0) != 0:
+            raise DingTalkPermanentError("钉钉拒绝文件上传")
+        media_id = str(data.get("media_id") or "").strip()
+        if not media_id:
+            raise DingTalkTransientError("钉钉文件上传未返回 media_id")
+        return media_id
+
+    def send_file(
+        self,
+        binding: ChannelBinding,
+        target: dict[str, Any],
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        caption: str = "",
+        idempotency_key: str | None = None,
+    ) -> None:
+        if not filename or not content:
+            raise DingTalkPermanentError("钉钉文件投递内容为空")
+        if len(content) > self.file_max_bytes:
+            raise DingTalkPermanentError("钉钉文件超过 20MB 上限")
+        is_image = str(content_type or "").lower().startswith("image/")
+        file_type = PurePath(filename).suffix.lower().lstrip(".")
+        if not is_image and file_type not in {
+            "pdf",
+            "doc",
+            "docx",
+            "xls",
+            "xlsx",
+            "ppt",
+            "pptx",
+            "zip",
+            "rar",
+        }:
+            raise DingTalkPermanentError("钉钉文件类型不支持")
+        media_id = self._upload_file(
+            binding,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+            media_type="image" if is_image else "file",
+        )
+        to_user = str(target.get("to_user_id") or "").strip()
+        conversation_id = str(target.get("conversation_id") or "").strip()
+        if not to_user and not conversation_id:
+            raise DingTalkPermanentError("钉钉文件投递目标无效")
+        robot_code, _ = _credential(binding)
+        token = self._tokens.get(binding)
+        if is_image:
+            msg_key = "sampleImageMsg"
+            msg_param = json.dumps({"photoURL": media_id}, ensure_ascii=False)
+        else:
+            msg_key = "sampleFile"
+            msg_param = json.dumps(
+                {
+                    "mediaId": media_id,
+                    "fileName": filename[:180],
+                    "fileType": file_type,
+                },
+                ensure_ascii=False,
+            )
+        if conversation_id:
+            url = DINGTALK_GROUP_FILE_API
+            body = {
+                "robotCode": robot_code,
+                "openConversationId": conversation_id,
+                "msgKey": msg_key,
+                "msgParam": msg_param,
+            }
+        else:
+            url = DINGTALK_P2P_FILE_API
+            body = {
+                "robotCode": robot_code,
+                "userIds": [to_user],
+                "msgKey": msg_key,
+                "msgParam": msg_param,
+            }
+        try:
+            with self._client_factory() as client:
+                response = client.post(
+                    url,
+                    json=body,
+                    headers={"x-acs-dingtalk-access-token": token},
+                )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise DingTalkTransientError("钉钉文件消息发送暂时失败") from exc
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise DingTalkTransientError("钉钉文件消息响应格式无效") from exc
+        if response.status_code == 429 or response.status_code >= 500:
+            raise DingTalkTransientError("钉钉文件消息服务暂时不可用")
+        if response.status_code >= 400 or int(data.get("errcode", 0) or 0) != 0:
+            raise DingTalkPermanentError("钉钉文件消息发送失败")
 
     def send(
         self,

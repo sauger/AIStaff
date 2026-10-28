@@ -85,7 +85,8 @@ def attachment_context_lines(attachments: Iterable[ChatAttachmentRead | dict[str
         sandbox_path = attachment.sandbox_path or sandbox_attachment_path(attachment, index)
         relative_path = sandbox_path.removeprefix("/workspace/")
         lines.append(
-            f"{index}. 文件名：{attachment.filename}；类型：{attachment.kind}/{attachment.content_type}；"
+            f"{index}. 附件 ID：{attachment.id}；文件名：{attachment.filename}；"
+            f"类型：{attachment.kind}/{attachment.content_type}；"
             f"大小：{attachment.size} bytes；"
             f"exec_command 相对路径：{relative_path}；typed 文件工具路径：{sandbox_path}"
         )

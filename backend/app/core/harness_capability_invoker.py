@@ -41,6 +41,8 @@ from app.db.models import (
     ChatSession,
     ExternalBusinessTask,
     GeneralSkill,
+    Message,
+    KnowledgeBase,
     HarnessInvocationRecord,
     ModelConfig,
     Skill,
@@ -66,8 +68,13 @@ from app.harness.execution_context import SANDBOX_WORKSPACE
 from app.harness.sandbox import parse_network_policy
 from app.knowledge.citations import knowledge_citations_from_results
 from app.knowledge.schema import KnowledgeSearchRequest
+from app.knowledge.proposals import (
+    KnowledgeProposalError,
+    create_knowledge_update_proposal,
+)
 from app.knowledge.service import KnowledgeService
 from app.mail.confirm import skill_requires_mail_confirm
+from app.session.session_schema import ChatAttachmentRead
 from app.skills.tool_authorization import current_sop_tool_authorization
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import ToolCall
@@ -101,6 +108,11 @@ class HarnessCapabilityInvoker:
         ensure_execution_lease: Any | None = None,
         trace_sink: Callable[[str, dict[str, Any]], None] | None = None,
         step_deadline_monotonic: float | None = None,
+        attachments: list[Any] | None = None,
+        channel_external_user_id: str | None = None,
+        channel_external_account_scope: str | None = None,
+        channel_target_json: dict[str, Any] | None = None,
+        channel_is_group: bool = False,
     ) -> None:
         self.db = db
         self.tenant_id = tenant_id
@@ -118,6 +130,11 @@ class HarnessCapabilityInvoker:
         self.ensure_execution_lease = ensure_execution_lease
         self.trace_sink = trace_sink
         self.step_deadline_monotonic = step_deadline_monotonic
+        self.attachments = list(attachments or [])
+        self.channel_external_user_id = channel_external_user_id
+        self.channel_external_account_scope = channel_external_account_scope
+        self.channel_target_json = dict(channel_target_json or {})
+        self.channel_is_group = channel_is_group
         self.run_id = str(run_id or new_id("hrun"))
         self.workspace_root = _workspace_root(
             tenant_id, session.id, task_frame_id, db=self.db
@@ -532,6 +549,8 @@ class HarnessCapabilityInvoker:
             return self._list_published_deliverables(arguments)
         if name == "read_published_deliverable":
             return self._read_published_deliverable(arguments)
+        if name == "knowledge_ingest_proposal":
+            return self._knowledge_ingest_proposal(arguments)
         if name == "lark_cli":
             from app.lark_cli.service import invoke_lark_cli
 
@@ -734,7 +753,156 @@ class HarnessCapabilityInvoker:
                 "published_at": artifact.get("published_at"),
             }
         )
-        return {"success": True, "data": data}
+        citations = artifact.get("knowledge_citations")
+        return {
+            "success": True,
+            "data": data,
+            "citations": citations if isinstance(citations, list) else [],
+        }
+
+    def _resolve_proposal_attachment(
+        self,
+        attachment_id: str,
+    ) -> tuple[ChatAttachmentRead | None, list[dict[str, Any]]]:
+        """Resolve a current or most-recent-user-turn attachment for a proposal."""
+
+        current = [
+            item for item in self.attachments
+            if isinstance(item, ChatAttachmentRead)
+        ]
+        if attachment_id:
+            for item in current:
+                if item.id == attachment_id:
+                    return item, []
+        rows = self.db.exec(
+            select(Message)
+            .where(
+                Message.tenant_id == self.tenant_id,
+                Message.session_id == self.session.id,
+                Message.role == "user",
+            )
+            .order_by(Message.created_at.desc())
+            .limit(20)
+        ).all()
+        recent: list[ChatAttachmentRead] = []
+        for row in rows:
+            raw_items = (row.metadata_json or {}).get("attachments")
+            if not isinstance(raw_items, list):
+                continue
+            for raw in raw_items:
+                try:
+                    recent.append(ChatAttachmentRead.model_validate(raw))
+                except Exception:
+                    continue
+            if recent:
+                break
+        if attachment_id:
+            for item in recent:
+                if item.id == attachment_id:
+                    return item, []
+            return None, []
+        if not recent:
+            return None, []
+        if len(recent) == 1:
+            return recent[0], []
+        return None, [
+            {
+                "attachment_id": item.id,
+                "filename": item.filename,
+                "content_type": item.content_type,
+                "size": item.size,
+            }
+            for item in recent
+        ]
+
+    def _remember_pending_knowledge(
+        self,
+        *,
+        attachment: ChatAttachmentRead,
+        requested_action: str,
+        details: dict[str, Any] | None,
+    ) -> None:
+        payload = {
+            "attachment": attachment.model_dump(mode="json"),
+            "requested_action": requested_action,
+            "targets": list((details or {}).get("knowledge_bases") or []),
+            "created_at": utc_now().isoformat(),
+        }
+        state = dict(getattr(self.session, "context_state_json", None) or {})
+        state["knowledge_pending"] = payload
+        self.session.context_state_json = state
+        self.db.add(self.session)
+        self.db.commit()
+
+    def _clear_pending_knowledge(self) -> None:
+        state = dict(getattr(self.session, "context_state_json", None) or {})
+        if "knowledge_pending" not in state:
+            return
+        state.pop("knowledge_pending", None)
+        self.session.context_state_json = state
+        self.db.add(self.session)
+        self.db.commit()
+
+    def _knowledge_ingest_proposal(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        attachment_id = str(arguments.get("attachment_id") or "").strip()
+        attachment, candidates = self._resolve_proposal_attachment(attachment_id)
+        if attachment is None and candidates:
+            return _failure(
+                "ATTACHMENT_SELECTION_REQUIRED",
+                "最近一次消息有多个附件，请让用户指定要加入知识库的附件。",
+                details={"attachments": candidates},
+            )
+        if attachment is None:
+            return _failure(
+                "ATTACHMENT_NOT_FOUND",
+                "没有找到当前或最近消息中的附件，请让用户重新上传。",
+            )
+        requested_action = str(arguments.get("intent") or "undecided")
+        try:
+            proposal = create_knowledge_update_proposal(
+                self.db,
+                chat_session=self.session,
+                attachment=attachment,
+                source_message_id=f"{self.task_frame_id}:{attachment.id}",
+                requested_action=requested_action,
+                target_knowledge_base_id=str(
+                    arguments.get("target_knowledge_base_id") or ""
+                ).strip()
+                or None,
+                binding_id=str(getattr(self.session, "channel_binding_id", "") or "")
+                or None,
+                external_user_id=self.channel_external_user_id,
+                external_account_scope=self.channel_external_account_scope,
+                target_json=self.channel_target_json,
+                is_group=self.channel_is_group,
+            )
+        except KnowledgeProposalError as exc:
+            if exc.code == "KNOWLEDGE_BASE_REQUIRED":
+                self._remember_pending_knowledge(
+                    attachment=attachment,
+                    requested_action=requested_action,
+                    details=exc.details,
+                )
+            return _failure(exc.code, str(exc), details=exc.details)
+        self._clear_pending_knowledge()
+        knowledge_base = self.db.get(KnowledgeBase, proposal.target_knowledge_base_id)
+        return {
+            "success": True,
+            "data": {
+                "proposal_id": proposal.id,
+                "confirmation_code": proposal.confirmation_code,
+                "status": proposal.status,
+                "proposed_action": proposal.proposed_action,
+                "filename": proposal.filename,
+                "target_knowledge_base_id": proposal.target_knowledge_base_id,
+                "target_knowledge_base_name": (
+                    knowledge_base.name if knowledge_base else proposal.target_knowledge_base_id
+                ),
+                "candidates": list(proposal.candidates_json or []),
+                "expires_at": proposal.expires_at.isoformat(),
+                "notice": "提案已创建，尚未写入知识库；需要用户确认。",
+            },
+        }
 
     def _search_capabilities(self, arguments: dict[str, Any]) -> dict[str, Any]:
         query = str(arguments.get("query") or "").strip()

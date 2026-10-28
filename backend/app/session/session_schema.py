@@ -222,6 +222,11 @@ class ChatTurnRequest(BaseModel):
     message: str
     attachments: list["ChatAttachmentRead"] = Field(default_factory=list)
     channel: str = "web"
+    # Server-only channel context for conversational knowledge proposals.
+    channel_external_user_id: Optional[str] = Field(default=None, exclude=True)
+    channel_external_account_scope: Optional[str] = Field(default=None, exclude=True)
+    channel_target_json: Optional[dict[str, Any]] = Field(default=None, exclude=True)
+    channel_is_group: bool = Field(default=False, exclude=True)
     interaction_mode: Literal["normal", "scheduled_task", "team_task", "team_tl"] = "normal"
     team_context: Optional["TeamPlannerContext"] = Field(default=None, exclude=True)
     # Server-only prompt prefix. It is consumed by the runtime but never persisted as

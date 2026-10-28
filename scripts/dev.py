@@ -19,6 +19,16 @@ from pathlib import Path
 from process_utils import pid_alive
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# Make backend/.env available to the supervisor and app processes. paths.py
+# reads ULTRARAG_DATA_DIR directly from os.environ, so loading the file only in
+# pydantic settings is not enough.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT_DIR / "backend" / ".env")
+except ImportError:  # pragma: no cover - only when dev deps are incomplete
+    pass
 RUN_DIR = ROOT_DIR / ".dev"
 LOG_DIR = RUN_DIR / "logs"
 SERVICE_NAMES = ("supervisor", "app", "backend", "enterprise", "chat")

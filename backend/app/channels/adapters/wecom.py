@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import queue
@@ -11,6 +13,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 import httpx
 from sqlalchemy import text, update
@@ -30,6 +33,7 @@ from app.channels.media import (
 )
 from app.db import engine
 from app.db.models import ChannelBinding, GeneralSkill, Skill, Tool, utc_now
+from app.time_utils import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -921,6 +925,7 @@ class WeComStreamManager:
                     return
                 # 时间基准:最近成功连接时间;从未连上过则以最近更新(保存凭证)时刻起算
                 baseline = binding.last_connected_at or binding.updated_at
+                baseline = as_utc(baseline)
                 if not baseline or utc_now() - baseline < timedelta(
                     minutes=WECOM_DISCONNECT_ALERT_MINUTES
                 ):
@@ -1083,6 +1088,75 @@ class WeComStreamManager:
                 logger.warning("企微事件循环关闭失败 binding=%s", binding_id, exc_info=True)
 
 
+class WeComFilePermanentError(RuntimeError):
+    retryable = False
+
+
+class WeComFileTransientError(RuntimeError):
+    pass
+
+
+async def _upload_wecom_file(
+    client,
+    *,
+    filename: str,
+    content: bytes,
+    media_type: str,
+) -> str:
+    """Upload a temporary media asset over the active WeCom bot WS connection."""
+
+    chunk_size = 512 * 1024
+    chunks = [
+        content[index : index + chunk_size]
+        for index in range(0, len(content), chunk_size)
+    ]
+    if not chunks or len(chunks) > 100:
+        raise WeComFilePermanentError("企微文件分片数量无效")
+    init_req_id = f"staffdeck-upload-init-{uuid4().hex}"
+    frame = await client._ws_manager.send_reply(
+        init_req_id,
+        {
+            "type": media_type,
+            "filename": filename[:256],
+            "total_size": len(content),
+            "total_chunks": len(chunks),
+            "md5": hashlib.md5(content).hexdigest(),
+        },
+        "aibot_upload_media_init",
+    )
+    body = frame.get("body") if isinstance(frame, dict) else None
+    errcode = int((frame or {}).get("errcode") or (body or {}).get("errcode") or 0)
+    upload_id = str((body or {}).get("upload_id") or "").strip()
+    if errcode or not upload_id:
+        raise WeComFileTransientError("企微文件上传初始化失败")
+    for index, chunk in enumerate(chunks):
+        chunk_req_id = f"staffdeck-upload-chunk-{uuid4().hex}"
+        frame = await client._ws_manager.send_reply(
+            chunk_req_id,
+            {
+                "upload_id": upload_id,
+                "chunk_index": index,
+                "base64_data": base64.b64encode(chunk).decode("ascii"),
+            },
+            "aibot_upload_media_chunk",
+        )
+        errcode = int((frame or {}).get("errcode") or 0)
+        if errcode:
+            raise WeComFileTransientError("企微文件分片上传失败")
+    finish_req_id = f"staffdeck-upload-finish-{uuid4().hex}"
+    frame = await client._ws_manager.send_reply(
+        finish_req_id,
+        {"upload_id": upload_id},
+        "aibot_upload_media_finish",
+    )
+    body = frame.get("body") if isinstance(frame, dict) else None
+    errcode = int((frame or {}).get("errcode") or (body or {}).get("errcode") or 0)
+    media_id = str((body or {}).get("media_id") or "").strip()
+    if errcode or not media_id:
+        raise WeComFileTransientError("企微文件上传完成接口未返回 media_id")
+    return media_id
+
+
 class WeComAdapter:
     """企微适配器:归一化 + 出站 send_message(run_coroutine_threadsafe)+ ingress。
 
@@ -1093,6 +1167,7 @@ class WeComAdapter:
         return normalize_wecom_frame(raw)
 
     _token_provider: WeComTokenProvider | None = None
+    file_max_bytes = 20 * 1024 * 1024
 
     def _get_token_provider(self) -> WeComTokenProvider:
         if self._token_provider is None:
@@ -1204,6 +1279,58 @@ class WeComAdapter:
             body = {"msgtype": "markdown", "markdown": {"content": chunk}}
             future = asyncio.run_coroutine_threadsafe(client.send_message(chat_id, body), loop)
             future.result(timeout=SEND_TIMEOUT_SECONDS)
+
+    def send_file(
+        self,
+        binding: ChannelBinding,
+        target: dict[str, Any],
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        caption: str = "",
+        idempotency_key: str | None = None,
+    ) -> None:
+        chat_id = str(target.get("to_user_id") or "").strip()
+        if not chat_id:
+            raise WeComFilePermanentError("企微文件投递目标缺少 to_user_id(chatid)")
+        if not filename or not content:
+            raise WeComFilePermanentError("企微文件投递内容为空")
+        is_image = str(content_type or "").lower().startswith("image/")
+        limit = 10 * 1024 * 1024 if is_image else self.file_max_bytes
+        if len(content) > limit:
+            raise WeComFilePermanentError("企微文件超过大小上限")
+        from app.channels import get_wecom_stream_manager
+
+        stream = get_wecom_stream_manager().get_stream(binding.id)
+        if not stream:
+            raise WeComFileTransientError(f"企微连接未就绪 binding={binding.id}")
+        client, loop = stream
+        future = asyncio.run_coroutine_threadsafe(
+            _upload_wecom_file(
+                client,
+                filename=filename,
+                content=content,
+                media_type="image" if is_image else "file",
+            ),
+            loop,
+        )
+        try:
+            media_id = future.result(timeout=120.0)
+        except WeComFilePermanentError:
+            raise
+        except Exception as exc:
+            raise WeComFileTransientError("企微文件上传失败") from exc
+        body = (
+            {"msgtype": "image", "image": {"media_id": media_id}}
+            if is_image
+            else {"msgtype": "file", "file": {"media_id": media_id}}
+        )
+        send_future = asyncio.run_coroutine_threadsafe(
+            client.send_message(chat_id, body),
+            loop,
+        )
+        send_future.result(timeout=SEND_TIMEOUT_SECONDS)
 
     def create_stream_reply(
         self,

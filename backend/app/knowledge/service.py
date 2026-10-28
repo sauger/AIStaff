@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -17,9 +18,12 @@ from sqlmodel import Session, select
 from app.capability_scope import normalize_capability_scope
 from app import paths
 from app.db import engine
+from app.time_utils import as_utc
 from app.db.models import (
+    AgentKnowledgeBranch,
     KnowledgeBucket,
     KnowledgeBase,
+    KnowledgeBaseVersion,
     KnowledgeChunk,
     KnowledgeConcept,
     KnowledgeDiscoverySuggestion,
@@ -113,6 +117,12 @@ class IngestPayload:
     knowledge_base_version_id: str | None = None
     title: str | None = None
     metadata: dict[str, Any] | None = None
+    operation: str = "create"
+    target_document_id: str | None = None
+    expected_updated_at: str | None = None
+    source_sha256: str | None = None
+    source_message_id: str | None = None
+    proposal_id: str | None = None
 
 
 class KnowledgeDiscoveryValidationError(ValueError):
@@ -220,6 +230,12 @@ class KnowledgeService:
             knowledge_base_id=payload.knowledge_base_id,
             knowledge_base_version_id=payload.knowledge_base_version_id
             or _default_knowledge_base_version_id(payload.knowledge_base_id),
+            operation=payload.operation,
+            target_document_id=payload.target_document_id,
+            expected_updated_at=payload.expected_updated_at,
+            source_sha256=payload.source_sha256,
+            source_message_id=payload.source_message_id,
+            proposal_id=payload.proposal_id,
             filename=payload.filename,
             status="queued",
             stage="queued",
@@ -242,6 +258,7 @@ class KnowledgeService:
         *,
         title: str | None = None,
         status: str | None = None,
+        source_sha256: str | None = None,
     ) -> KnowledgeDocument:
         """Replace editable source text and rebuild every derived knowledge layer."""
         normalized_text = _normalize_text(content_md)
@@ -275,6 +292,8 @@ class KnowledgeService:
         document.title = resolved_title
         document.status = status or "ready"
         document.error = None
+        if source_sha256:
+            document.source_sha256 = source_sha256
         document.metadata_json = metadata
         document.updated_at = utc_now()
         self.db.add(document)
@@ -392,11 +411,105 @@ class KnowledgeService:
     ) -> KnowledgeIngestJob | None:
         if job.status != "cancel_requested":
             return None
-        last_update = job.updated_at or job.created_at
-        if utc_now() - last_update < grace_period:
+        last_update = as_utc(job.updated_at or job.created_at)
+        if last_update is None or utc_now() - last_update < grace_period:
             return None
         self._finalize_cancelled_job(job, "入库任务已取消")
         return job
+
+    def _notify_knowledge_proposal(
+        self,
+        job: KnowledgeIngestJob,
+        *,
+        error: str | None = None,
+        status: str | None = None,
+    ) -> None:
+        if not job.proposal_id:
+            return
+        try:
+            from app.knowledge.proposals import notify_knowledge_proposal_result
+
+            notify_knowledge_proposal_result(
+                self.db,
+                job,
+                error=error,
+                status=status,
+            )
+        except Exception:
+            logger.exception("知识库提案结果通知失败 job=%s", job.id)
+
+    def _run_replace_ingest_job(
+        self,
+        job: KnowledgeIngestJob,
+        normalized_text: str,
+        *,
+        source_sha256: str,
+    ) -> None:
+        target_id = str(job.target_document_id or "").strip()
+        job_metadata = (
+            (job.metadata_json or {}).get("metadata")
+            if isinstance((job.metadata_json or {}).get("metadata"), dict)
+            else {}
+        )
+        expected_updated_at = str(
+            job.expected_updated_at or job_metadata.get("expected_updated_at") or ""
+        ).strip()
+        source_document_id = str(job_metadata.get("source_document_id") or "").strip()
+        if source_document_id and expected_updated_at:
+            source = self.db.get(KnowledgeDocument, source_document_id)
+            if source is not None:
+                source_updated = as_utc(source.updated_at)
+                if source_updated is None or source_updated.isoformat() != expected_updated_at:
+                    raise KnowledgeParseError("文档已被其他人修改，本次覆盖已取消。")
+        agent_id = str(job_metadata.get("agent_id") or "").strip()
+        if agent_id:
+            branch = self.db.exec(
+                select(AgentKnowledgeBranch).where(
+                    AgentKnowledgeBranch.tenant_id == job.tenant_id,
+                    AgentKnowledgeBranch.agent_id == agent_id,
+                    AgentKnowledgeBranch.knowledge_base_id == job.knowledge_base_id,
+                )
+            ).first()
+            if branch is not None and branch.head_version != job.knowledge_base_version_id:
+                raise KnowledgeParseError("知识库版本已更新，本次覆盖已取消。")
+        target = self.db.get(KnowledgeDocument, target_id) if target_id else None
+        if (
+            target is None
+            or target.tenant_id != job.tenant_id
+            or target.knowledge_base_id != job.knowledge_base_id
+            or target.knowledge_base_version_id != job.knowledge_base_version_id
+        ):
+            raise KnowledgeParseError("覆盖目标文档不存在或版本不匹配。")
+        if job.source_sha256 and job.source_sha256 != source_sha256:
+            raise KnowledgeParseError("覆盖文件内容已变化，请重新确认。")
+        job.document_id = target.id
+        self.db.add(job)
+        self.db.commit()
+        self._update_ingest_stage(
+            job,
+            "bucketing",
+            detail="正在重建覆盖文档的分桶、切片与引用来源",
+            document_id=target.id,
+        )
+        target = self.replace_document_content(
+            target,
+            normalized_text,
+            source_sha256=source_sha256,
+        )
+        self._update_ingest_stage(
+            job,
+            "done",
+            status="succeeded",
+            finished_at=utc_now(),
+            document_id=target.id,
+            detail=f"覆盖完成：{target.chunk_count} 个引用来源",
+            stats={
+                "bucket_count": target.bucket_count,
+                "chunk_count": target.chunk_count,
+            },
+        )
+        self._clear_embedded_content(job)
+        self._notify_knowledge_proposal(job)
 
     def run_ingest_job(self, job_id: str) -> None:
         with Session(engine) as db:
@@ -417,6 +530,7 @@ class KnowledgeService:
             )
             metadata = job.metadata_json or {}
             content = base64.b64decode(str(metadata.get("content_base64") or ""))
+            source_sha256 = hashlib.sha256(content).hexdigest()
             text, file_type = extract_text(job.filename, content)
             self._raise_if_ingest_cancelled(job)
             self._update_ingest_stage(
@@ -428,6 +542,13 @@ class KnowledgeService:
             if not normalized_text:
                 raise KnowledgeParseError("文档没有可用文本内容。")
             self._raise_if_ingest_cancelled(job)
+            if job.operation == "replace":
+                self._run_replace_ingest_job(
+                    job,
+                    normalized_text,
+                    source_sha256=source_sha256,
+                )
+                return
 
             self._update_ingest_stage(
                 job,
@@ -452,6 +573,7 @@ class KnowledgeService:
                 file_type=file_type,
                 title=str(metadata.get("title") or Path(job.filename).stem),
                 status="processing",
+                source_sha256=source_sha256,
                 metadata_json={
                     **(metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}),
                     "ingest_schema_version": KNOWLEDGE_INGEST_SCHEMA_VERSION,
@@ -462,6 +584,8 @@ class KnowledgeService:
                         "section_count": len(section_nodes),
                         "paragraph_count": len(_paragraph_blocks(normalized_text)),
                     },
+                    # Bounded excerpt for duplicate/similarity checks in chat proposals.
+                    "raw_text_excerpt": normalized_text[:4_000],
                 },
             )
             self.db.add(document)
@@ -565,11 +689,14 @@ class KnowledgeService:
                     "chunk_count": chunk_count,
                 },
             )
+            self._notify_knowledge_proposal(job)
             self._clear_embedded_content(job)
         except KnowledgeIngestCancelled as exc:
             self._finalize_cancelled_job(job, str(exc) or "入库任务已取消")
         except Exception as exc:  # noqa: BLE001 - persist stable job failure.
-            if job.document_id:
+            if job.operation == "replace":
+                self._rollback_replace_head(job)
+            elif job.document_id:
                 document = self.db.get(KnowledgeDocument, job.document_id)
                 if document:
                     document.status = "failed"
@@ -584,6 +711,7 @@ class KnowledgeService:
                 finished_at=utc_now(),
                 detail=str(exc),
             )
+            self._notify_knowledge_proposal(job, error=str(exc))
             self._clear_embedded_content(job)
 
     def search(self, request: KnowledgeSearchRequest, model_config: ModelConfig | None = None) -> KnowledgeSearchResponse:
@@ -1432,26 +1560,72 @@ class KnowledgeService:
 
     def _finalize_cancelled_job(self, job: KnowledgeIngestJob, detail: str) -> None:
         cancelled_document_id = job.document_id
-        if cancelled_document_id:
+        if job.operation == "replace":
+            self._rollback_replace_head(job)
+        elif cancelled_document_id:
             self._delete_partial_ingest_document(job)
         metadata = dict(job.metadata_json or {})
         metadata.pop("content_base64", None)
         metadata["stage_label"] = "已取消"
         metadata["stage_detail"] = detail
         metadata["cancelled_at"] = utc_now().isoformat()
-        if cancelled_document_id:
+        if cancelled_document_id and job.operation != "replace":
             metadata["cancelled_document_id"] = cancelled_document_id
         metadata["ingest_steps"] = _ingest_steps_for(job.stage, float(job.progress or 0.0), "cancelled")
         job.metadata_json = metadata
-        self._update_job(
-            job,
-            status="cancelled",
-            stage="cancelled",
-            progress=float(job.progress or 0.0),
-            error=None,
-            finished_at=utc_now(),
-            document_id=None,
-        )
+        changes: dict[str, Any] = {
+            "status": "cancelled",
+            "stage": "cancelled",
+            "progress": float(job.progress or 0.0),
+            "error": None,
+            "finished_at": utc_now(),
+        }
+        if job.operation != "replace":
+            changes["document_id"] = None
+        self._update_job(job, **changes)
+        self._notify_knowledge_proposal(job, error=detail, status="cancelled")
+
+    def _rollback_replace_head(self, job: KnowledgeIngestJob) -> None:
+        """Move the agent branch back when a replace clone should not stay searchable."""
+
+        if job.operation != "replace":
+            return
+        nested = (job.metadata_json or {}).get("metadata")
+        if not isinstance(nested, dict):
+            return
+        previous_id = str(nested.get("previous_knowledge_base_version_id") or "").strip()
+        agent_id = str(nested.get("agent_id") or "").strip()
+        if not previous_id or not agent_id:
+            return
+        previous = self.db.get(KnowledgeBaseVersion, previous_id)
+        if (
+            previous is None
+            or previous.tenant_id != job.tenant_id
+            or previous.knowledge_base_id != job.knowledge_base_id
+        ):
+            return
+        branch = self.db.exec(
+            select(AgentKnowledgeBranch).where(
+                AgentKnowledgeBranch.tenant_id == job.tenant_id,
+                AgentKnowledgeBranch.agent_id == agent_id,
+                AgentKnowledgeBranch.knowledge_base_id == job.knowledge_base_id,
+            )
+        ).first()
+        if branch is None:
+            return
+        current = self.db.exec(
+            select(KnowledgeBaseVersion).where(
+                KnowledgeBaseVersion.tenant_id == job.tenant_id,
+                KnowledgeBaseVersion.knowledge_base_id == job.knowledge_base_id,
+                KnowledgeBaseVersion.version == branch.head_version,
+            )
+        ).first()
+        if current is None or current.id != job.knowledge_base_version_id:
+            return
+        branch.head_version = previous.version
+        branch.updated_at = utc_now()
+        self.db.add(branch)
+        self.db.commit()
 
     def _delete_partial_ingest_document(self, job: KnowledgeIngestJob) -> None:
         document_id = job.document_id

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from datetime import timedelta
@@ -34,8 +35,22 @@ from app.channels.service_routing import (
     run_command,
 )
 from app.channels.service_session import find_or_create_channel_session
+from app.knowledge.confirmation import (
+    CANCEL_SELECTION,
+    confirmation_hint,
+    is_knowledge_confirm_intent,
+    parse_knowledge_confirmation,
+    pending_created_at,
+    select_pending_knowledge_base,
+)
+from app.knowledge.proposals import (
+    KnowledgeProposalError,
+    confirm_knowledge_update_proposal,
+    create_knowledge_update_proposal,
+)
 from app.config import get_settings
 from app.db import engine
+from app.time_utils import as_utc
 from app.db.models import (
     AgentEvent,
     ChannelBindCode,
@@ -45,6 +60,7 @@ from app.db.models import (
     ChannelInboundEvent,
     ChatSession,
     HumanHandoffRequest,
+    KnowledgeUpdateProposal,
     MemoryRecord,
     Message,
     Team,
@@ -54,7 +70,7 @@ from app.db.models import (
     utc_now,
 )
 from app.observability.spans import bind_span_sink
-from app.session.session_schema import ChatTurnRequest
+from app.session.session_schema import ChatAttachmentRead, ChatTurnRequest
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +192,7 @@ def _claim_stale_event(db: Session, event_id: str) -> bool:
                 ChannelInboundEvent.processor_lease_expires_at <= utc_now(),
             ),
         )
+        .execution_options(synchronize_session=False)
         .values(
             processor_run_id=run_id,
             processor_lease_expires_at=_inbound_lease_deadline(),
@@ -183,6 +200,7 @@ def _claim_stale_event(db: Session, event_id: str) -> bool:
         )
     )
     db.commit()
+    db.expire_all()
     return result.rowcount == 1
 
 
@@ -688,6 +706,7 @@ def _claim_bind_code(
             ChannelBindCode.used_at.is_(None),
             ChannelBindCode.expires_at > now,
         )
+        .execution_options(synchronize_session=False)
         .values(used_at=now)
     )
     return claim.rowcount == 1
@@ -715,7 +734,11 @@ def _bind_external_identity(
             ChannelBindCode.code == code,
         )
     ).first()
-    if not record or record.used_at is not None or record.expires_at <= now:
+    if (
+        not record
+        or record.used_at is not None
+        or as_utc(record.expires_at) <= now
+    ):
         _record_bind_failure(binding.tenant_id, binding.channel, scope, external_id)
         return "绑定码无效或已过期，请在 StaffDeck 网页端重新生成后再试。"
     owner = db.get(User, record.user_id)
@@ -1174,6 +1197,325 @@ def _run_handoff_reply_command(
     return _HANDOFF_REPLY_HANDLED
 
 
+def _try_handle_knowledge_proposal_confirmation(
+    db: Session,
+    binding: ChannelBinding,
+    inbound: ChannelInbound,
+    *,
+    user: User,
+    chat_session: ChatSession,
+    target: dict,
+    scope: str,
+) -> bool:
+    text = str(inbound.text or "").strip()
+    command = parse_knowledge_confirmation(text)
+    if command is None:
+        if is_knowledge_confirm_intent(text):
+            pending = db.exec(
+                select(KnowledgeUpdateProposal).where(
+                    KnowledgeUpdateProposal.tenant_id == binding.tenant_id,
+                    KnowledgeUpdateProposal.session_id == chat_session.id,
+                    KnowledgeUpdateProposal.status == "pending",
+                )
+            ).first()
+            if pending is not None:
+                hint = confirmation_hint(
+                    str(pending.confirmation_code or ""),
+                    pending.candidates_json,
+                )
+                _stage_notice(
+                    db,
+                    binding,
+                    inbound.external_conv_id,
+                    target,
+                    f"要确认这次知识库操作，请回复：{hint}",
+                    final_for_event=True,
+                    idempotency_key=(
+                        f"knowledge-proposal-need-code:{pending.id}:{inbound.event_id}"
+                    ),
+                )
+                return True
+        return False
+    proposal = db.exec(
+        select(KnowledgeUpdateProposal).where(
+            KnowledgeUpdateProposal.tenant_id == binding.tenant_id,
+            KnowledgeUpdateProposal.session_id == chat_session.id,
+            KnowledgeUpdateProposal.confirmation_code == command.code,
+        )
+    ).first()
+    if proposal is None:
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            "没有找到这个知识库操作，可能已过期，请重新发送“把这个文件加入知识库”。",
+            final_for_event=True,
+            idempotency_key=f"knowledge-proposal-missing:{binding.id}:{inbound.event_id}",
+        )
+        return True
+    if command.kind == "negative":
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            f"这次没有写入知识库。要取消请回复：取消 {proposal.confirmation_code}",
+            final_for_event=True,
+            idempotency_key=f"knowledge-proposal-negative:{proposal.id}:{inbound.event_id}",
+        )
+        return True
+    candidates = list(proposal.candidates_json or [])
+    action_text = ""
+    index_text = None
+    if command.kind == "bare":
+        if candidates:
+            _stage_notice(
+                db,
+                binding,
+                inbound.external_conv_id,
+                target,
+                (
+                    f"请回复：{confirmation_hint(str(proposal.confirmation_code or ''), candidates)}。"
+                    f"如果要另存为新文档，请回复：新增 {proposal.confirmation_code}"
+                ),
+                final_for_event=True,
+                idempotency_key=f"knowledge-proposal-bare-replace:{proposal.id}:{inbound.event_id}",
+            )
+            return True
+        action_text = "新增"
+    elif command.kind == "cancel":
+        action_text = "取消"
+    elif command.kind == "create":
+        action_text = "新增"
+    else:
+        action_text = "覆盖"
+        index_text = str(command.index) if command.index else None
+        if index_text is None and len(candidates) == 1:
+            index_text = "1"
+    if proposal.external_user_id and proposal.external_user_id != inbound.from_user_id:
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            "只有发起这次知识库操作的用户可以确认。",
+            final_for_event=True,
+            idempotency_key=f"knowledge-proposal-owner:{proposal.id}:{inbound.event_id}",
+        )
+        return True
+    if action_text == "取消":
+        if proposal.status == "pending":
+            proposal.status = "cancelled"
+            proposal.updated_at = utc_now()
+            db.add(proposal)
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            "已取消这次知识库操作。",
+            final_for_event=True,
+            idempotency_key=f"knowledge-proposal-cancel:{proposal.id}",
+        )
+        return True
+    # 群聊的 session user 是共享用户；确认人必须按原始发送者身份解析。
+    actor_id = str(user.id or "").strip()
+    if inbound.is_group:
+        identity = find_channel_identity(
+            db,
+            binding.tenant_id,
+            binding.channel,
+            inbound.from_user_id,
+            scope,
+        )
+        actor_id = str(identity.staffdeck_user_id or "").strip() if identity else ""
+    if not actor_id:
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            "你的渠道账号还没有绑定 StaffDeck 用户，不能更新知识库。",
+            final_for_event=True,
+            idempotency_key=f"knowledge-proposal-identity:{proposal.id}",
+        )
+        return True
+    target_document_id = None
+    expected_updated_at = None
+    action = "create" if action_text == "新增" else "replace"
+    if action == "replace":
+        candidates = list(proposal.candidates_json or [])
+        try:
+            index = int(index_text or "0") - 1
+        except ValueError:
+            index = -1
+        if index < 0 or index >= len(candidates):
+            _stage_notice(
+                db,
+                binding,
+                inbound.external_conv_id,
+                target,
+                "候选序号无效，请按提示重新回复。",
+                final_for_event=True,
+                idempotency_key=f"knowledge-proposal-index:{proposal.id}:{inbound.event_id}",
+            )
+            return True
+        candidate = candidates[index]
+        target_document_id = str(candidate.get("document_id") or "").strip()
+        expected_updated_at = str(candidate.get("expected_updated_at") or "").strip()
+    try:
+        job = confirm_knowledge_update_proposal(
+            db,
+            proposal,
+            action=action,
+            confirmed_by_user_id=actor_id,
+            target_document_id=target_document_id,
+            expected_updated_at=expected_updated_at,
+        )
+    except KnowledgeProposalError as exc:
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            str(exc),
+            final_for_event=True,
+            idempotency_key=f"knowledge-proposal-error:{proposal.id}:{inbound.event_id}",
+        )
+        return True
+    _stage_notice(
+        db,
+        binding,
+        inbound.external_conv_id,
+        target,
+        "已确认知识库操作，正在处理；完成后会在这里通知你。",
+        final_for_event=True,
+        idempotency_key=f"knowledge-proposal-accepted:{proposal.id}",
+    )
+    logger.info(
+        "知识库提案确认 proposal=%s action=%s job=%s binding=%s",
+        proposal.id,
+        action,
+        job.id,
+        binding.id,
+    )
+    return True
+
+
+def _try_handle_pending_knowledge_selection(
+    db: Session,
+    binding: ChannelBinding,
+    inbound: ChannelInbound,
+    *,
+    chat_session: ChatSession,
+    target: dict,
+    scope: str,
+) -> bool:
+    state = dict(getattr(chat_session, "context_state_json", None) or {})
+    pending = state.get("knowledge_pending")
+    if not isinstance(pending, dict):
+        return False
+    text = str(inbound.text or "").strip()
+    targets = [
+        item for item in (pending.get("targets") or [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    if not targets:
+        return False
+    created_at = pending.get("created_at")
+    created = pending_created_at(created_at)
+    if created is not None and created + timedelta(minutes=30) <= utc_now():
+        state.pop("knowledge_pending", None)
+        chat_session.context_state_json = state
+        db.add(chat_session)
+        db.commit()
+        return False
+    selected = select_pending_knowledge_base(text, targets)
+    if selected is None:
+        return False
+    if selected is CANCEL_SELECTION:
+        state.pop("knowledge_pending", None)
+        chat_session.context_state_json = state
+        db.add(chat_session)
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            "已取消这次知识库操作。",
+            final_for_event=True,
+            idempotency_key=f"knowledge-pending-cancel:{chat_session.id}:{inbound.event_id}",
+        )
+        return True
+    try:
+        attachment = ChatAttachmentRead.model_validate(pending.get("attachment"))
+    except Exception:
+        state.pop("knowledge_pending", None)
+        chat_session.context_state_json = state
+        db.add(chat_session)
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            "附件信息已失效，请重新上传文件。",
+            final_for_event=True,
+            idempotency_key=f"knowledge-pending-invalid:{chat_session.id}",
+        )
+        return True
+    try:
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=chat_session,
+            attachment=attachment,
+            source_message_id=f"{inbound.event_id}:{attachment.id}",
+            requested_action=str(pending.get("requested_action") or "undecided"),
+            target_knowledge_base_id=str(selected.get("id") or ""),
+            external_user_id=inbound.from_user_id,
+            external_account_scope=scope,
+            binding_id=binding.id,
+            target_json=dict(target),
+            is_group=inbound.is_group,
+        )
+    except KnowledgeProposalError as exc:
+        state.pop("knowledge_pending", None)
+        chat_session.context_state_json = state
+        db.add(chat_session)
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            str(exc),
+            final_for_event=True,
+            idempotency_key=f"knowledge-pending-error:{chat_session.id}:{inbound.event_id}",
+        )
+        return True
+    state.pop("knowledge_pending", None)
+    chat_session.context_state_json = state
+    db.add(chat_session)
+    target_name = str(selected.get("name") or selected.get("id") or "")
+    action_hint = confirmation_hint(
+        str(proposal.confirmation_code or ""),
+        proposal.candidates_json,
+    )
+    _stage_notice(
+        db,
+        binding,
+        inbound.external_conv_id,
+        target,
+        (
+            f"知识库提案已创建。\n目标知识库：{target_name}\n"
+            f"确认码：{proposal.confirmation_code}\n"
+            f"请回复：{action_hint}"
+        ),
+        final_for_event=True,
+        idempotency_key=f"knowledge-pending-created:{proposal.id}",
+    )
+    return True
+
+
 def process_inbound(
     binding: ChannelBinding,
     msg: dict | ChannelInbound,
@@ -1203,6 +1545,9 @@ def process_inbound(
         "to_user_id": inbound.conv_key if inbound.is_group else inbound.from_user_id,
         "context_token": inbound.context_token,
     }
+    if binding.channel == "dingtalk":
+        # 钉钉原生文件消息走服务端 API，群聊需要 openConversationId。
+        target["conversation_id"] = inbound.session_id
     if inbound.is_group:
         target["reply_to_user_id"] = inbound.from_user_id
         target["is_group"] = True
@@ -1490,6 +1835,35 @@ def process_inbound(
         # 群聊回复投递到群会话，私聊投递到发言人
         chat_session.channel_target_json = target
         db.add(chat_session)
+        if _try_handle_knowledge_proposal_confirmation(
+            db,
+            binding,
+            inbound,
+            user=user,
+            chat_session=chat_session,
+            target=target,
+            scope=scope,
+        ):
+            event.status = "done"
+            event.processed_at = utc_now()
+            event.updated_at = utc_now()
+            db.add(event)
+            db.commit()
+            return False
+        if _try_handle_pending_knowledge_selection(
+            db,
+            binding,
+            inbound,
+            chat_session=chat_session,
+            target=target,
+            scope=scope,
+        ):
+            event.status = "done"
+            event.processed_at = utc_now()
+            event.updated_at = utc_now()
+            db.add(event)
+            db.commit()
+            return False
         if route_decision and route_decision.switched:
             names = agent_names(db, binding.tenant_id, [current_agent_id])
             routed_name = names.get(current_agent_id) or current_agent_id
@@ -1572,6 +1946,10 @@ def process_inbound(
                 message=user_message,
                 context_injection=context_injection,
                 channel=binding.channel,
+                channel_external_user_id=inbound.from_user_id,
+                channel_external_account_scope=scope,
+                channel_target_json=dict(target),
+                channel_is_group=inbound.is_group,
                 client_turn_id=inbound.event_id,
                 attachments=attachments,
                 interaction_mode=interaction_mode,

@@ -991,6 +991,11 @@ class HarnessV2Engine:
                 ),
                 trace_sink=trace,
                 step_deadline_monotonic=step_deadline_monotonic,
+                attachments=list(request.attachments or []),
+                channel_external_user_id=request.channel_external_user_id,
+                channel_external_account_scope=request.channel_external_account_scope,
+                channel_target_json=request.channel_target_json,
+                channel_is_group=request.channel_is_group,
             )
             invoker.inbound_mail_auto_complete = bool(request.inbound_mail_auto_complete)
             invoker.inbound_mail_message_id = (
@@ -1934,10 +1939,26 @@ def _citation_identity(citation: dict[str, Any]) -> str:
 def _aggregate_artifacts(
     results: list[TaskExecutionResult],
 ) -> list[dict[str, Any]]:
+    # 显式发布优先且跨步骤生效：某个步骤 publish_artifact 后，其他步骤的
+    # 自动发现结果也不得混入，否则 build_docx.py/content.md 仍可能从另一
+    # 个步骤漏到最终下载列表。
+    has_explicit_file = any(
+        isinstance(artifact, dict)
+        and artifact.get("type") == "workspace_file"
+        and str(artifact.get("path") or "").strip()
+        and artifact.get("source") != "harness.workspace_discovery"
+        for result in results
+        for artifact in result.artifacts
+    )
     artifacts: list[dict[str, Any]] = []
     seen: set[str] = set()
     for result in results:
         for artifact in result.artifacts:
+            if (
+                has_explicit_file
+                and artifact.get("source") == "harness.workspace_discovery"
+            ):
+                continue
             identity = "|".join(
                 str(artifact.get(field) or "")
                 for field in ("type", "task_frame_id", "path", "handoff_id")
@@ -1955,6 +1976,17 @@ def _merge_discovered_artifacts(
     result: TaskExecutionResult,
     discovered: list[dict[str, Any]],
 ) -> None:
+    # 显式 publish_artifact / GeneralSkill artifacts 才是交付契约。只要本轮
+    # 已经显式发布了文件，就不再自动补登本轮其他改动，否则 build_docx.py、
+    # content.md 这类中间文件会和最终 docx 一起出现在下载列表里。
+    has_explicit_file = any(
+        isinstance(item, dict)
+        and item.get("type") == "workspace_file"
+        and str(item.get("path") or "").strip()
+        for item in result.artifacts
+    )
+    if has_explicit_file:
+        return
     known_paths = {
         str(item.get("path") or "")
         for item in result.artifacts

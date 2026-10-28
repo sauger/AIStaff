@@ -472,8 +472,10 @@ def test_daemon_retries_with_backoff_then_fails(monkeypatch) -> None:
         assert delivery.status == "pending"
         assert delivery.attempts == 1
         assert delivery.last_error == "模拟发送失败"
-        assert delivery.next_attempt_at > utc_now()
-        backoff = (delivery.next_attempt_at - utc_now()).total_seconds()
+        from app.time_utils import as_utc
+
+        assert as_utc(delivery.next_attempt_at) > utc_now()
+        backoff = (as_utc(delivery.next_attempt_at) - utc_now()).total_seconds()
         assert 0 < backoff <= 4
 
         # 到期后重试,达到最大次数置 failed

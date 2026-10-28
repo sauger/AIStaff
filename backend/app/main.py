@@ -10,6 +10,7 @@ from app.api import (
     agents,
     app_updates,
     auth,
+    channel_artifacts,
     channels,
     chat,
     evolution,
@@ -18,6 +19,7 @@ from app.api import (
     general_skills,
     knowledge,
     knowledge_bases,
+    knowledge_proposals,
     memories,
     mock,
     model_configs,
@@ -156,6 +158,8 @@ app.include_router(scheduled_tasks.chat_router)
 app.include_router(scheduled_tasks.chat_draft_router)
 app.include_router(ui_config.enterprise_router)
 app.include_router(channels.router)
+app.include_router(channel_artifacts.router)
+app.include_router(knowledge_proposals.router)
 app.include_router(wechat_kf.router)
 app.include_router(wecom_oa.router)
 app.include_router(wecom_oa.callback_router)

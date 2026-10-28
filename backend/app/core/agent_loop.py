@@ -1700,8 +1700,14 @@ class AgentLoop:
             reply,
             metadata=assistant_metadata,
         )
-        if not self.stream_delivery_succeeded:
-            stage_channel_delivery(self.db, chat_session, assistant_message)
+        has_channel_files = bool(assistant_metadata.get("harness_artifacts"))
+        if not self.stream_delivery_succeeded or has_channel_files:
+            stage_channel_delivery(
+                self.db,
+                chat_session,
+                assistant_message,
+                include_reply=not self.stream_delivery_succeeded,
+            )
         event_payload: dict[str, Any] = {
             "message_id": assistant_message.id,
             "assistant_message_id": assistant_message.id,
