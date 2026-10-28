@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -1058,6 +1058,67 @@ class Contact(SQLModel, table=True):
     primary_user_id: Optional[str] = Field(
         default=None, foreign_key="users.id", ondelete="SET NULL", index=True
     )
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class OrgDepartment(SQLModel, table=True):
+    """租户级部门。邻接表 parent_id，加上物化路径，不用闭包表。
+
+    path 形如 /{id} 或 {parent.path}/{id}。移动子树时改写前缀。
+    """
+
+    __tablename__ = "org_departments"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "path", name="uq_org_department_path"),
+        Index("ix_org_department_parent", "tenant_id", "parent_id"),
+        Index("ix_org_department_tenant_name", "tenant_id", "name"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("dept"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    name: str
+    parent_id: Optional[str] = Field(default=None, foreign_key="org_departments.id", index=True)
+    path: str = Field(index=True)
+    sort_order: int = Field(default=0)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class OrgAffiliation(SQLModel, table=True):
+    """人与部门的任职。人键是 Contact.id，不是 User.id。"""
+
+    __tablename__ = "org_affiliations"
+    __table_args__ = (
+        Index("ix_org_affiliation_department", "tenant_id", "department_id"),
+        Index("ix_org_affiliation_contact", "tenant_id", "contact_id"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("orgaff"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    department_id: str = Field(foreign_key="org_departments.id", index=True)
+    contact_id: str = Field(foreign_key="contacts.id", index=True)
+    valid_from: date
+    valid_to: Optional[date] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class OrgDepartmentHead(SQLModel, table=True):
+    """部门负责人，可带任职区间。同一天多条时取 valid_from 最晚的一条。"""
+
+    __tablename__ = "org_department_heads"
+    __table_args__ = (
+        Index("ix_org_department_head_department", "tenant_id", "department_id"),
+        Index("ix_org_department_head_contact", "tenant_id", "contact_id"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("orghead"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    department_id: str = Field(foreign_key="org_departments.id", index=True)
+    contact_id: str = Field(foreign_key="contacts.id", index=True)
+    valid_from: date
+    valid_to: Optional[date] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

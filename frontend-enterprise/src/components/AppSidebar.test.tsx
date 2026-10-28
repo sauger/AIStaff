@@ -71,6 +71,7 @@ function renderSidebar(props: {
   selectedAgentId: string;
   onSelectAgent?: (value: string) => void;
   scopeTeams?: TeamRead[];
+  isAdmin?: boolean;
 }) {
   return render(
     <I18nProvider>
@@ -79,7 +80,7 @@ function renderSidebar(props: {
           <AppSidebar
             selected="/enterprise/dashboard"
             onNavigate={() => {}}
-            isAdmin={false}
+            isAdmin={props.isAdmin ?? false}
             scopeAgents={[agent]}
             scopeTeams={props.scopeTeams ?? [team]}
             selectedAgentId={props.selectedAgentId}
@@ -126,6 +127,18 @@ describe('AppSidebar agent switcher team group', () => {
     const trigger = screen.getByLabelText('切换当前员工');
     expect(within(trigger).getByText('当前团队')).toBeTruthy();
     expect(within(trigger).getByText('增长团队')).toBeTruthy();
+  });
+
+  it('keeps organization structure in admin navigation, not employee capabilities', () => {
+    renderSidebar({ selectedAgentId: 'agent-1' });
+    expect(screen.queryByText('组织架构')).toBeNull();
+    cleanup();
+    renderSidebar({ selectedAgentId: 'agent-1', isAdmin: true });
+    expect(screen.getByText('组织架构')).toBeTruthy();
+    expect(screen.getByText('员工能力')).toBeTruthy();
+    expect(screen.getByText('通讯录')).toBeTruthy();
+    const capability = screen.getByText('员工能力').parentElement;
+    expect(capability?.textContent?.includes('组织架构')).toBe(false);
   });
 
   it('places the file cabinet and mail next to knowledge in capability navigation', () => {

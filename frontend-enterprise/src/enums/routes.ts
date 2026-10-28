@@ -20,6 +20,7 @@ export enum EnterpriseRoute {
   GeneralSkills = '/enterprise/general-skills',
   Skills = '/enterprise/skills',
   Tools = '/enterprise/tools',
+  Organization = '/enterprise/organization',
   Accounts = '/enterprise/accounts',
   Models = '/enterprise/models',
   RuntimeSettings = '/enterprise/runtime-settings',
