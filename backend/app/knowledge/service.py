@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 from app.capability_scope import normalize_capability_scope
 from app import paths
 from app.db import engine
+from app.time_utils import as_utc
 from app.db.models import (
     KnowledgeBucket,
     KnowledgeBase,
@@ -408,8 +409,8 @@ class KnowledgeService:
     ) -> KnowledgeIngestJob | None:
         if job.status != "cancel_requested":
             return None
-        last_update = job.updated_at or job.created_at
-        if utc_now() - last_update < grace_period:
+        last_update = as_utc(job.updated_at or job.created_at)
+        if last_update is None or utc_now() - last_update < grace_period:
             return None
         self._finalize_cancelled_job(job, "入库任务已取消")
         return job
