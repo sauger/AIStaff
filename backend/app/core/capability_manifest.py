@@ -459,7 +459,10 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
                 "properties": {
                     "attachment_id": {
                         "type": "string",
-                        "description": "Attachment id from the current turn's attachments list.",
+                        "description": (
+                            "Attachment id from the current turn, or omit to use the "
+                            "single attachment from the most recent user message."
+                        ),
                     },
                     "intent": {
                         "type": "string",
@@ -471,7 +474,6 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
                         "description": "Optional target KB id when the employee has multiple KBs.",
                     },
                 },
-                "required": ["attachment_id"],
                 "additionalProperties": False,
             },
             metadata={"provider": "harness", "side_effect": "write_proposal"},

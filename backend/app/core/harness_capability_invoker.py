@@ -41,6 +41,7 @@ from app.db.models import (
     ChatSession,
     ExternalBusinessTask,
     GeneralSkill,
+    Message,
     KnowledgeBase,
     HarnessInvocationRecord,
     ModelConfig,
@@ -73,6 +74,7 @@ from app.knowledge.proposals import (
 )
 from app.knowledge.service import KnowledgeService
 from app.mail.confirm import skill_requires_mail_confirm
+from app.session.session_schema import ChatAttachmentRead
 from app.skills.tool_authorization import current_sop_tool_authorization
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import ToolCall
@@ -754,18 +756,74 @@ class HarnessCapabilityInvoker:
             "citations": citations if isinstance(citations, list) else [],
         }
 
+    def _resolve_proposal_attachment(
+        self,
+        attachment_id: str,
+    ) -> tuple[ChatAttachmentRead | None, list[dict[str, Any]]]:
+        """Resolve a current or most-recent-user-turn attachment for a proposal."""
+
+        current = [
+            item for item in self.attachments
+            if isinstance(item, ChatAttachmentRead)
+        ]
+        if attachment_id:
+            for item in current:
+                if item.id == attachment_id:
+                    return item, []
+        rows = self.db.exec(
+            select(Message)
+            .where(
+                Message.tenant_id == self.tenant_id,
+                Message.session_id == self.session.id,
+                Message.role == "user",
+            )
+            .order_by(Message.created_at.desc())
+            .limit(20)
+        ).all()
+        recent: list[ChatAttachmentRead] = []
+        for row in rows:
+            raw_items = (row.metadata_json or {}).get("attachments")
+            if not isinstance(raw_items, list):
+                continue
+            for raw in raw_items:
+                try:
+                    recent.append(ChatAttachmentRead.model_validate(raw))
+                except Exception:
+                    continue
+            if recent:
+                break
+        if attachment_id:
+            for item in recent:
+                if item.id == attachment_id:
+                    return item, []
+            return None, []
+        if not recent:
+            return None, []
+        if len(recent) == 1:
+            return recent[0], []
+        return None, [
+            {
+                "attachment_id": item.id,
+                "filename": item.filename,
+                "content_type": item.content_type,
+                "size": item.size,
+            }
+            for item in recent
+        ]
+
     def _knowledge_ingest_proposal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         attachment_id = str(arguments.get("attachment_id") or "").strip()
-        if not attachment_id:
-            return _failure("INVALID_ARGUMENTS", "attachment_id 不能为空。")
-        attachment = next(
-            (item for item in self.attachments if str(getattr(item, "id", "")) == attachment_id),
-            None,
-        )
+        attachment, candidates = self._resolve_proposal_attachment(attachment_id)
+        if attachment is None and candidates:
+            return _failure(
+                "ATTACHMENT_SELECTION_REQUIRED",
+                "最近一次消息有多个附件，请让用户指定要加入知识库的附件。",
+                details={"attachments": candidates},
+            )
         if attachment is None:
             return _failure(
                 "ATTACHMENT_NOT_FOUND",
-                "当前轮次没有该附件，请让用户重新上传。",
+                "没有找到当前或最近消息中的附件，请让用户重新上传。",
             )
         try:
             proposal = create_knowledge_update_proposal(

@@ -18,6 +18,7 @@ from app.db.models import (
     ChannelDelivery,
     KnowledgeDocument,
     KnowledgeIngestJob,
+    Message,
     KnowledgeUpdateProposal,
     Tenant,
     User,
@@ -696,3 +697,43 @@ def test_channel_confirmation_cancel_marks_proposal_cancelled(monkeypatch, tmp_p
         assert handled is True
         assert db.get(KnowledgeUpdateProposal, proposal.id).status == "cancelled"
         assert db.exec(select(ChannelDelivery)).first() is not None
+
+
+def test_proposal_attachment_falls_back_to_previous_user_message(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from app.core.harness_capability_invoker import HarnessCapabilityInvoker
+
+    engine = _engine()
+    with Session(engine) as db:
+        db.add(
+            Message(
+                id="msg_prev",
+                tenant_id="tenant_kp",
+                session_id="session_kp",
+                role="user",
+                content="上传了制度",
+                metadata_json={
+                    "attachments": [
+                        {
+                            "id": "att_prev",
+                            "filename": "制度.txt",
+                            "content_type": "text/plain",
+                            "size": 10,
+                            "kind": "text",
+                            "sha256": "a" * 64,
+                        }
+                    ]
+                },
+            )
+        )
+        db.commit()
+        invoker = object.__new__(HarnessCapabilityInvoker)
+        invoker.db = db
+        invoker.tenant_id = "tenant_kp"
+        invoker.session = SimpleNamespace(id="session_kp")
+        invoker.attachments = []
+        attachment, candidates = invoker._resolve_proposal_attachment("")
+        assert attachment is not None
+        assert attachment.id == "att_prev"
+        assert candidates == []
