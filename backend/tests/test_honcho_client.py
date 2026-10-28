@@ -19,7 +19,7 @@ def test_add_message_uses_peer_id_and_keeps_external_id_in_metadata() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        if request.url.path.endswith("/messages/"):
+        if request.url.path.endswith("/messages"):
             return httpx.Response(200, json=[{"id": "msg_1"}])
         return httpx.Response(200, json={"id": "ok"})
 
@@ -43,11 +43,11 @@ def test_add_message_uses_peer_id_and_keeps_external_id_in_metadata() -> None:
 
     paths = [request.url.path for request in seen]
     assert paths == [
-        "/v2/workspaces",
-        "/v2/workspaces/tenant_demo/peers",
-        "/v2/workspaces/tenant_demo/peers",
-        "/v2/workspaces/tenant_demo/sessions",
-        "/v2/workspaces/tenant_demo/sessions/chat_session_1/messages/",
+        "/v3/workspaces",
+        "/v3/workspaces/tenant_demo/peers",
+        "/v3/workspaces/tenant_demo/peers",
+        "/v3/workspaces/tenant_demo/sessions",
+        "/v3/workspaces/tenant_demo/sessions/chat_session_1/messages",
     ]
     assert all(request.headers["authorization"] == "Bearer secret-token" for request in seen)
     message = seen[-1].read().decode()

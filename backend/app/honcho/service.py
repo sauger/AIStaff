@@ -160,11 +160,18 @@ def dual_write_message(
             "tenant_id": str(payload.get("tenant_id") or ""),
         },
     )
-    honcho.ensure_peer(identity.workspace_id, identity.user_peer_id, identity.user_peer_metadata)
+    # Peer get-or-create replaces metadata wholesale. Send only the stable
+    # staff_peer so a later channel does not wipe another channel's fields.
+    # Channel external ids stay on the message.
+    honcho.ensure_peer(
+        identity.workspace_id,
+        identity.user_peer_id,
+        {"staff_peer": identity.user_peer_logical},
+    )
     honcho.ensure_peer(
         identity.workspace_id,
         identity.agent_peer_id,
-        identity.agent_peer_metadata,
+        {"staff_peer": identity.agent_peer_logical},
     )
     honcho.ensure_session(
         identity.workspace_id,

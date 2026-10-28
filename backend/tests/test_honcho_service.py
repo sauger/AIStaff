@@ -288,8 +288,12 @@ def test_dual_write_job_sends_messages_with_mapped_peers_only(caplog: pytest.Log
     assert message_calls[0][3] == "user_user_abc"
     assert "zhangsan" not in message_calls[0][3]
     assert message_calls[0][5]["external_user_id"] == "zhangsan"
-    peer_ids = [call[2] for call in client.calls if call[0] == "peer"]
-    assert peer_ids == ["user_user_abc", "agent_agent_xyz"]
+    assert message_calls[0][5]["channel"] == "wecom"
+    peer_calls = [call for call in client.calls if call[0] == "peer"]
+    assert [call[2] for call in peer_calls] == ["user_user_abc", "agent_agent_xyz"]
+    assert peer_calls[0][3] == {"staff_peer": "user:user_abc"}
+    assert "external_user_id" not in peer_calls[0][3]
+    assert "channel" not in peer_calls[0][3]
     assert client.calls[0][1] == "tenant_tenant_demo"
 
 

@@ -40,7 +40,7 @@ class HonchoClient:
     def ensure_workspace(self, workspace_id: str, metadata: dict[str, Any] | None = None) -> None:
         self._request(
             "POST",
-            "/v2/workspaces",
+            "/v3/workspaces",
             {"id": workspace_id, "metadata": metadata or {}},
         )
 
@@ -52,7 +52,7 @@ class HonchoClient:
     ) -> None:
         self._request(
             "POST",
-            f"/v2/workspaces/{workspace_id}/peers",
+            f"/v3/workspaces/{workspace_id}/peers",
             {"id": peer_id, "metadata": metadata or {}},
         )
 
@@ -65,7 +65,7 @@ class HonchoClient:
     ) -> None:
         self._request(
             "POST",
-            f"/v2/workspaces/{workspace_id}/sessions",
+            f"/v3/workspaces/{workspace_id}/sessions",
             {
                 "id": session_id,
                 "metadata": metadata or {},
@@ -84,7 +84,7 @@ class HonchoClient:
     ) -> None:
         self._request(
             "POST",
-            f"/v2/workspaces/{workspace_id}/sessions/{session_id}/messages/",
+            f"/v3/workspaces/{workspace_id}/sessions/{session_id}/messages",
             {
                 "messages": [
                     {
@@ -106,7 +106,7 @@ class HonchoClient:
         # Omit session_id so the read is the peer's cross-session portrait.
         payload = self._request(
             "POST",
-            f"/v2/workspaces/{workspace_id}/peers/{peer_id}/representation",
+            f"/v3/workspaces/{workspace_id}/peers/{peer_id}/representation",
             {},
             timeout_seconds=timeout_seconds,
         )
