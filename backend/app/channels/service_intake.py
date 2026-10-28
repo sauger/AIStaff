@@ -35,6 +35,14 @@ from app.channels.service_routing import (
     run_command,
 )
 from app.channels.service_session import find_or_create_channel_session
+from app.knowledge.confirmation import (
+    CANCEL_SELECTION,
+    confirmation_hint,
+    is_knowledge_confirm_intent,
+    parse_knowledge_confirmation,
+    pending_created_at,
+    select_pending_knowledge_base,
+)
 from app.knowledge.proposals import (
     KnowledgeProposalError,
     confirm_knowledge_update_proposal,
@@ -1189,13 +1197,6 @@ def _run_handoff_reply_command(
     return _HANDOFF_REPLY_HANDLED
 
 
-_KNOWLEDGE_PROPOSAL_CONFIRM_RE = re.compile(
-    r"(覆盖|新增|取消)\s*(?:(\d+)\s*)?([0-9A-Fa-f]{6})(?![0-9A-Fa-f])"
-)
-_KNOWLEDGE_BARE_CODE_RE = re.compile(r"^\s*([0-9A-Fa-f]{6})\s*$")
-_KNOWLEDGE_CONFIRM_INTENT_RE = re.compile(r"确认|执行|提交|写入|入库|进入知识库")
-
-
 def _try_handle_knowledge_proposal_confirmation(
     db: Session,
     binding: ChannelBinding,
@@ -1207,10 +1208,9 @@ def _try_handle_knowledge_proposal_confirmation(
     scope: str,
 ) -> bool:
     text = str(inbound.text or "").strip()
-    match = _KNOWLEDGE_PROPOSAL_CONFIRM_RE.search(text)
-    bare_code = _KNOWLEDGE_BARE_CODE_RE.match(text)
-    if not match and not bare_code:
-        if _KNOWLEDGE_CONFIRM_INTENT_RE.search(text):
+    command = parse_knowledge_confirmation(text)
+    if command is None:
+        if is_knowledge_confirm_intent(text):
             pending = db.exec(
                 select(KnowledgeUpdateProposal).where(
                     KnowledgeUpdateProposal.tenant_id == binding.tenant_id,
@@ -1219,12 +1219,16 @@ def _try_handle_knowledge_proposal_confirmation(
                 )
             ).first()
             if pending is not None:
+                hint = confirmation_hint(
+                    str(pending.confirmation_code or ""),
+                    pending.candidates_json,
+                )
                 _stage_notice(
                     db,
                     binding,
                     inbound.external_conv_id,
                     target,
-                    f"要确认这次知识库操作，请回复：新增 {pending.confirmation_code}",
+                    f"要确认这次知识库操作，请回复：{hint}",
                     final_for_event=True,
                     idempotency_key=(
                         f"knowledge-proposal-need-code:{pending.id}:{inbound.event_id}"
@@ -1232,15 +1236,11 @@ def _try_handle_knowledge_proposal_confirmation(
                 )
                 return True
         return False
-    if match:
-        action_text, index_text, code = match.groups()
-    else:
-        action_text, index_text, code = "", None, bare_code.group(1)  # type: ignore[union-attr]
     proposal = db.exec(
         select(KnowledgeUpdateProposal).where(
             KnowledgeUpdateProposal.tenant_id == binding.tenant_id,
             KnowledgeUpdateProposal.session_id == chat_session.id,
-            KnowledgeUpdateProposal.confirmation_code == code.upper(),
+            KnowledgeUpdateProposal.confirmation_code == command.code,
         )
     ).first()
     if proposal is None:
@@ -1254,23 +1254,45 @@ def _try_handle_knowledge_proposal_confirmation(
             idempotency_key=f"knowledge-proposal-missing:{binding.id}:{inbound.event_id}",
         )
         return True
-    if not action_text:
-        candidates = list(proposal.candidates_json or [])
-        if proposal.proposed_action == "replace" and len(candidates) > 1:
+    if command.kind == "negative":
+        _stage_notice(
+            db,
+            binding,
+            inbound.external_conv_id,
+            target,
+            f"这次没有写入知识库。要取消请回复：取消 {proposal.confirmation_code}",
+            final_for_event=True,
+            idempotency_key=f"knowledge-proposal-negative:{proposal.id}:{inbound.event_id}",
+        )
+        return True
+    candidates = list(proposal.candidates_json or [])
+    action_text = ""
+    index_text = None
+    if command.kind == "bare":
+        if candidates:
             _stage_notice(
                 db,
                 binding,
                 inbound.external_conv_id,
                 target,
-                f"请回复：覆盖 1 {proposal.confirmation_code}",
+                (
+                    f"请回复：{confirmation_hint(str(proposal.confirmation_code or ''), candidates)}。"
+                    f"如果要另存为新文档，请回复：新增 {proposal.confirmation_code}"
+                ),
                 final_for_event=True,
-                idempotency_key=f"knowledge-proposal-bare-replace:{proposal.id}",
+                idempotency_key=f"knowledge-proposal-bare-replace:{proposal.id}:{inbound.event_id}",
             )
             return True
-        action_text = "替换" if proposal.proposed_action == "replace" else "新增"
-        index_text = "1" if proposal.proposed_action == "replace" else None
-    if action_text == "替换":
+        action_text = "新增"
+    elif command.kind == "cancel":
+        action_text = "取消"
+    elif command.kind == "create":
+        action_text = "新增"
+    else:
         action_text = "覆盖"
+        index_text = str(command.index) if command.index else None
+        if index_text is None and len(candidates) == 1:
+            index_text = "1"
     if proposal.external_user_id and proposal.external_user_id != inbound.from_user_id:
         _stage_notice(
             db,
@@ -1401,7 +1423,18 @@ def _try_handle_pending_knowledge_selection(
     ]
     if not targets:
         return False
-    if text in {"取消", "算了", "不弄了"}:
+    created_at = pending.get("created_at")
+    created = pending_created_at(created_at)
+    if created is not None and created + timedelta(minutes=30) <= utc_now():
+        state.pop("knowledge_pending", None)
+        chat_session.context_state_json = state
+        db.add(chat_session)
+        db.commit()
+        return False
+    selected = select_pending_knowledge_base(text, targets)
+    if selected is None:
+        return False
+    if selected is CANCEL_SELECTION:
         state.pop("knowledge_pending", None)
         chat_session.context_state_json = state
         db.add(chat_session)
@@ -1415,35 +1448,6 @@ def _try_handle_pending_knowledge_selection(
             idempotency_key=f"knowledge-pending-cancel:{chat_session.id}:{inbound.event_id}",
         )
         return True
-    selected: dict | None = None
-    match = re.match(r"^\s*(\d+)", text)
-    if match:
-        index = int(match.group(1)) - 1
-        if 0 <= index < len(targets):
-            selected = targets[index]
-    if selected is None:
-        for item in targets:
-            name = str(item.get("name") or "").strip()
-            if name and name in text:
-                selected = item
-                break
-    if selected is None:
-        if re.search(r"知识库|第?\d+", text):
-            names = "\n".join(
-                f"{index}. {item.get('name') or item.get('id')}"
-                for index, item in enumerate(targets, start=1)
-            )
-            _stage_notice(
-                db,
-                binding,
-                inbound.external_conv_id,
-                target,
-                f"请选择一个知识库（回复编号）：\n{names}",
-                final_for_event=True,
-                idempotency_key=f"knowledge-pending-select:{chat_session.id}:{inbound.event_id}",
-            )
-            return True
-        return False
     try:
         attachment = ChatAttachmentRead.model_validate(pending.get("attachment"))
     except Exception:
@@ -1475,6 +1479,9 @@ def _try_handle_pending_knowledge_selection(
             is_group=inbound.is_group,
         )
     except KnowledgeProposalError as exc:
+        state.pop("knowledge_pending", None)
+        chat_session.context_state_json = state
+        db.add(chat_session)
         _stage_notice(
             db,
             binding,
@@ -1489,10 +1496,10 @@ def _try_handle_pending_knowledge_selection(
     chat_session.context_state_json = state
     db.add(chat_session)
     target_name = str(selected.get("name") or selected.get("id") or "")
-    if proposal.proposed_action == "replace" and proposal.candidates_json:
-        action_hint = f"覆盖 1 {proposal.confirmation_code}"
-    else:
-        action_hint = f"新增 {proposal.confirmation_code}"
+    action_hint = confirmation_hint(
+        str(proposal.confirmation_code or ""),
+        proposal.candidates_json,
+    )
     _stage_notice(
         db,
         binding,

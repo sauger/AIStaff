@@ -342,6 +342,25 @@ def _candidate_documents(
     return candidates[:MAX_KNOWLEDGE_CANDIDATES]
 
 
+def _release_stale_proposal(
+    db: Session,
+    row: KnowledgeUpdateProposal | None,
+) -> KnowledgeUpdateProposal | None:
+    """Drop expired pending rows so the same file can start a new proposal."""
+
+    if row is None:
+        return None
+    if row.status == "pending" and as_utc(row.expires_at) <= utc_now():
+        row.status = "expired"
+        row.updated_at = utc_now()
+        db.add(row)
+        db.commit()
+        return None
+    if row.status in {"failed", "cancelled", "expired"}:
+        return None
+    return row
+
+
 def create_knowledge_update_proposal(
     db: Session,
     *,
@@ -419,26 +438,32 @@ def create_knowledge_update_proposal(
         requested_knowledge_base_id=target_knowledge_base_id,
     )
 
-    existing = db.exec(
-        select(KnowledgeUpdateProposal).where(
-            KnowledgeUpdateProposal.tenant_id == chat_session.tenant_id,
-            KnowledgeUpdateProposal.target_knowledge_base_id == knowledge_base_id,
-            KnowledgeUpdateProposal.source_sha256 == source_sha256,
-            KnowledgeUpdateProposal.source_message_id == source_message_id,
-        )
-    ).first()
-    if existing is not None:
+    existing = _release_stale_proposal(
+        db,
+        db.exec(
+            select(KnowledgeUpdateProposal).where(
+                KnowledgeUpdateProposal.tenant_id == chat_session.tenant_id,
+                KnowledgeUpdateProposal.target_knowledge_base_id == knowledge_base_id,
+                KnowledgeUpdateProposal.source_sha256 == source_sha256,
+                KnowledgeUpdateProposal.source_message_id == source_message_id,
+            )
+        ).first(),
+    )
+    if existing is not None and existing.status in {"pending", "executing", "succeeded"}:
         return existing
 
-    existing_same_file = db.exec(
-        select(KnowledgeUpdateProposal).where(
-            KnowledgeUpdateProposal.tenant_id == chat_session.tenant_id,
-            KnowledgeUpdateProposal.session_id == chat_session.id,
-            KnowledgeUpdateProposal.target_knowledge_base_id == knowledge_base_id,
-            KnowledgeUpdateProposal.source_sha256 == source_sha256,
-            KnowledgeUpdateProposal.status.in_({"pending", "executing"}),
-        )
-    ).first()
+    existing_same_file = _release_stale_proposal(
+        db,
+        db.exec(
+            select(KnowledgeUpdateProposal).where(
+                KnowledgeUpdateProposal.tenant_id == chat_session.tenant_id,
+                KnowledgeUpdateProposal.session_id == chat_session.id,
+                KnowledgeUpdateProposal.target_knowledge_base_id == knowledge_base_id,
+                KnowledgeUpdateProposal.source_sha256 == source_sha256,
+                KnowledgeUpdateProposal.status.in_({"pending", "executing"}),
+            )
+        ).first(),
+    )
     if existing_same_file is not None:
         return existing_same_file
 
@@ -603,6 +628,7 @@ def confirm_knowledge_update_proposal(
             "PERMISSION_DENIED", "只有发起该提案的用户可以确认。"
         )
     target: KnowledgeDocument | None = None
+    expected = ""
     if normalized_action == "replace":
         requested_target = str(target_document_id or "").strip()
         if not requested_target:
@@ -626,11 +652,13 @@ def confirm_knowledge_update_proposal(
             raise KnowledgeProposalError(
                 "TARGET_NOT_IN_PROPOSAL", "该文档不在本次提案的候选列表中。"
             )
-        expected = str(
-            expected_updated_at
-            or candidate.get("expected_updated_at")
-            or ""
-        ).strip()
+        frozen_expected = str(candidate.get("expected_updated_at") or "").strip()
+        client_expected = str(expected_updated_at or "").strip()
+        if client_expected and frozen_expected and client_expected != frozen_expected:
+            raise KnowledgeProposalError(
+                "DOCUMENT_CONFLICT", "文档刚被其他人修改，本次未覆盖，请重新发起。"
+            )
+        expected = frozen_expected or client_expected
         if not expected:
             raise KnowledgeProposalError(
                 "EXPECTED_VERSION_REQUIRED", "覆盖缺少文档版本信息，请重新发起提案。"
@@ -680,21 +708,11 @@ def confirm_knowledge_update_proposal(
         ) from exc
     target_version_id = version.id
     job_target_document_id: str | None = None
-    expected_value: str | None = None
+    expected_value = expected if normalized_action == "replace" else None
+    previous_version_id = str(proposal.target_knowledge_base_version_id or "").strip()
+    source_target_id: str | None = None
     if normalized_action == "replace":
         assert target is not None
-        expected_value = str(
-            expected_updated_at
-            or next(
-                (
-                    item.get("expected_updated_at")
-                    for item in proposal.candidates_json or []
-                    if str(item.get("document_id") or "") == target.id
-                ),
-                "",
-            )
-            or ""
-        ).strip()
         source_target_id = target.id
         target = _document_for_version(db, target, version.id)
         target_version_id = str(target.knowledge_base_version_id or version.id)
@@ -723,22 +741,11 @@ def confirm_knowledge_update_proposal(
                 "channel": proposal.channel,
                 "user_id": confirmed_by_user_id,
                 "agent_id": proposal.agent_id,
-                "source_document_id": (
-                    source_target_id if normalized_action == "replace" else None
-                ),
+                "previous_knowledge_base_version_id": previous_version_id or None,
+                "source_document_id": source_target_id,
                 "expected_updated_at": expected_value,
             },
         )
-    )
-    enqueue_async_job(
-        "knowledge_ingest",
-        service.run_ingest_job,
-        job.id,
-        metadata={
-            "tenant_id": proposal.tenant_id,
-            "knowledge_base_id": proposal.target_knowledge_base_id,
-            "proposal_id": proposal.id,
-        },
     )
     proposal.status = "executing"
     proposal.job_id = job.id
@@ -751,6 +758,27 @@ def confirm_knowledge_update_proposal(
     proposal.updated_at = utc_now()
     db.add(proposal)
     db.commit()
+    try:
+        enqueue_async_job(
+            "knowledge_ingest",
+            service.run_ingest_job,
+            job.id,
+            metadata={
+                "tenant_id": proposal.tenant_id,
+                "knowledge_base_id": proposal.target_knowledge_base_id,
+                "proposal_id": proposal.id,
+            },
+        )
+    except Exception as exc:
+        proposal.status = "failed"
+        proposal.updated_at = utc_now()
+        db.add(proposal)
+        db.commit()
+        raise KnowledgeProposalError(
+            "INGEST_ENQUEUE_FAILED",
+            "知识库任务暂时无法开始，请重试。",
+            retryable=True,
+        ) from exc
     return job
 
 
@@ -759,6 +787,7 @@ def notify_knowledge_proposal_result(
     job: KnowledgeIngestJob,
     *,
     error: str | None = None,
+    status: str | None = None,
 ) -> None:
     """Update proposal state and enqueue a channel result notice when applicable."""
 
@@ -766,19 +795,27 @@ def notify_knowledge_proposal_result(
     if not proposal_id:
         return
     proposal = db.get(KnowledgeUpdateProposal, proposal_id)
-    if proposal is None:
+    if proposal is None or proposal.status not in {"pending", "executing"}:
         return
-    succeeded = not error and job.status == "succeeded"
-    proposal.status = "succeeded" if succeeded else "failed"
+    if status == "cancelled":
+        proposal.status = "cancelled"
+        succeeded = False
+    elif status == "succeeded" or (status is None and not error and job.status == "succeeded"):
+        proposal.status = "succeeded"
+        succeeded = True
+    else:
+        proposal.status = "failed"
+        succeeded = False
     proposal.updated_at = utc_now()
     db.add(proposal)
     if proposal.channel != "web" and proposal.binding_id and proposal.target_json:
         name = proposal.filename
-        text = (
-            f"知识库更新完成：《{name}》已生效，可以直接检索。"
-            if succeeded
-            else f"知识库更新失败：{name}。{error or '请查看知识库任务。'}"
-        )
+        if proposal.status == "cancelled":
+            text = f"知识库更新已取消：{name}。"
+        elif succeeded:
+            text = f"知识库更新完成：《{name}》已生效，可以直接检索。"
+        else:
+            text = f"知识库更新失败：{name}。{error or '请查看知识库任务。'}"
         key = f"knowledge-proposal-result:{proposal.id}"
         existing = db.exec(
             select(ChannelDelivery).where(ChannelDelivery.idempotency_key == key)

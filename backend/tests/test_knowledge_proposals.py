@@ -816,18 +816,45 @@ def test_open_write_rejects_group_chat(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_confirmation_parser_accepts_trailing_words_and_bare_code() -> None:
-    from app.channels.service_intake import (
-        _KNOWLEDGE_BARE_CODE_RE,
-        _KNOWLEDGE_PROPOSAL_CONFIRM_RE,
-    )
+    from app.knowledge.confirmation import parse_knowledge_confirmation
 
-    match = _KNOWLEDGE_PROPOSAL_CONFIRM_RE.search("新增 880bf6 进行确认")
-    assert match is not None
-    assert match.group(1) == "新增"
-    assert match.group(3).upper() == "880BF6"
-    bare = _KNOWLEDGE_BARE_CODE_RE.match("880bf6")
-    assert bare is not None
-    assert bare.group(1).upper() == "880BF6"
+    created = parse_knowledge_confirmation("新增 880bf6 进行确认")
+    assert created is not None
+    assert created.kind == "create"
+    assert created.code == "880BF6"
+    explicit = parse_knowledge_confirmation("确认新增 880BF6")
+    assert explicit is not None and explicit.kind == "create"
+    replaced = parse_knowledge_confirmation("覆盖 1 880BF6")
+    assert replaced is not None and replaced.kind == "replace" and replaced.index == 1
+    bare = parse_knowledge_confirmation("880bf6")
+    assert bare is not None and bare.kind == "bare" and bare.code == "880BF6"
+
+
+def test_confirmation_parser_does_not_treat_negation_as_write() -> None:
+    from app.knowledge.confirmation import parse_knowledge_confirmation
+
+    assert parse_knowledge_confirmation("不要新增 880BF6").kind == "negative"
+    assert parse_knowledge_confirmation("取消新增 880BF6").kind == "cancel"
+    assert parse_knowledge_confirmation("先不要覆盖 1 880BF6").kind == "negative"
+    assert parse_knowledge_confirmation("取消 880BF6").kind == "cancel"
+    assert parse_knowledge_confirmation("好的 880BF6") is None
+    assert parse_knowledge_confirmation("请确认一下差旅标准") is None
+
+
+def test_pending_selection_uses_index_or_exact_name() -> None:
+    from app.knowledge.confirmation import CANCEL_SELECTION, select_pending_knowledge_base
+
+    targets = [
+        {"id": "kb_short", "name": "财务"},
+        {"id": "kb_long", "name": "财务-报销政策手册"},
+    ]
+    assert select_pending_knowledge_base("2024年怎么报销", targets) is None
+    assert select_pending_knowledge_base("第2个", targets) is None
+    assert select_pending_knowledge_base("2", targets)["id"] == "kb_long"
+    assert select_pending_knowledge_base("2. 财务-报销政策手册", targets)["id"] == "kb_long"
+    assert select_pending_knowledge_base("财务-报销政策手册", targets)["id"] == "kb_long"
+    assert select_pending_knowledge_base("财务", targets)["id"] == "kb_short"
+    assert select_pending_knowledge_base("取消", targets) is CANCEL_SELECTION
 
 
 def test_pending_knowledge_selection_creates_proposal(monkeypatch, tmp_path: Path) -> None:
@@ -894,3 +921,446 @@ def test_capability_search_exposes_knowledge_proposal() -> None:
     )
     matches = search_capability_descriptors([descriptor], "加入知识库")
     assert [item.name for item in matches] == ["knowledge_ingest_proposal"]
+
+
+def test_negative_confirmation_does_not_create_job(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    from types import SimpleNamespace
+
+    from app.channels.service_intake import _try_handle_knowledge_proposal_confirmation
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        session.channel = "wecom"
+        binding = ChannelBinding(
+            id="chan_neg",
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            channel="wecom",
+            status="active",
+            external_account_key="wecom:neg",
+        )
+        db.add(binding)
+        db.add(session)
+        db.commit()
+        attachment = _attachment(data="否定确认正文".encode())
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_negative",
+            requested_action="create",
+        )
+        inbound = SimpleNamespace(
+            text=f"不要新增 {proposal.confirmation_code}",
+            external_conv_id="wecom_conv",
+            from_user_id="external-user",
+            is_group=False,
+            event_id="event_negative",
+        )
+        handled = _try_handle_knowledge_proposal_confirmation(
+            db,
+            binding,
+            inbound,
+            user=SimpleNamespace(id="user_owner"),
+            chat_session=session,
+            target={"to_user_id": "external-user", "context_token": "ctx"},
+            scope="scope",
+        )
+        assert handled is True
+        saved = db.get(KnowledgeUpdateProposal, proposal.id)
+        assert saved.status == "pending"
+        assert saved.job_id is None
+        notice = db.exec(select(ChannelDelivery)).first()
+        assert notice is not None
+        assert "没有写入" in notice.text
+
+
+def test_cancel_create_phrase_cancels_instead_of_creating(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    from types import SimpleNamespace
+
+    from app.channels.service_intake import _try_handle_knowledge_proposal_confirmation
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        session.channel = "wecom"
+        binding = ChannelBinding(
+            id="chan_cancel_create",
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            channel="wecom",
+            status="active",
+            external_account_key="wecom:cancel-create",
+        )
+        db.add(binding)
+        db.add(session)
+        db.commit()
+        attachment = _attachment(data="取消新增正文".encode())
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_cancel_create",
+            requested_action="create",
+        )
+        inbound = SimpleNamespace(
+            text=f"取消新增 {proposal.confirmation_code}",
+            external_conv_id="wecom_conv",
+            from_user_id="external-user",
+            is_group=False,
+            event_id="event_cancel_create",
+        )
+        _try_handle_knowledge_proposal_confirmation(
+            db,
+            binding,
+            inbound,
+            user=SimpleNamespace(id="user_owner"),
+            chat_session=session,
+            target={"to_user_id": "external-user", "context_token": "ctx"},
+            scope="scope",
+        )
+        saved = db.get(KnowledgeUpdateProposal, proposal.id)
+        assert saved.status == "cancelled"
+        assert saved.job_id is None
+
+
+def test_bare_code_with_candidates_does_not_create(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    from types import SimpleNamespace
+
+    from app.channels.service_intake import _try_handle_knowledge_proposal_confirmation
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        session.channel = "wecom"
+        db.add(
+            KnowledgeDocument(
+                id="kdoc_bare",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_kp",
+                filename="制度.txt",
+                file_type="txt",
+                title="制度",
+                status="ready",
+                metadata_json={"raw_text_excerpt": "旧版报销制度"},
+            )
+        )
+        binding = ChannelBinding(
+            id="chan_bare",
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            channel="wecom",
+            status="active",
+            external_account_key="wecom:bare",
+        )
+        db.add(binding)
+        db.add(session)
+        db.commit()
+        attachment = _attachment(data="新版报销制度需要审批".encode())
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_bare_candidates",
+            requested_action="undecided",
+        )
+        assert proposal.candidates_json
+        inbound = SimpleNamespace(
+            text=proposal.confirmation_code,
+            external_conv_id="wecom_conv",
+            from_user_id="external-user",
+            is_group=False,
+            event_id="event_bare",
+        )
+        _try_handle_knowledge_proposal_confirmation(
+            db,
+            binding,
+            inbound,
+            user=SimpleNamespace(id="user_owner"),
+            chat_session=session,
+            target={"to_user_id": "external-user", "context_token": "ctx"},
+            scope="scope",
+        )
+        saved = db.get(KnowledgeUpdateProposal, proposal.id)
+        assert saved.status == "pending"
+        assert saved.job_id is None
+        notice = db.exec(select(ChannelDelivery)).first()
+        assert notice is not None
+        assert f"覆盖 1 {proposal.confirmation_code}" in notice.text
+
+
+def test_expired_pending_proposal_allows_new_upload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    with Session(_engine()) as db:
+        session = _seed(db)
+        attachment = _attachment(data="过期后重新上传".encode())
+        first = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_expired_1",
+            requested_action="create",
+        )
+        first.expires_at = utc_now() - timedelta(minutes=1)
+        db.add(first)
+        db.commit()
+        second = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_expired_2",
+            requested_action="create",
+        )
+        assert second.id != first.id
+        assert second.status == "pending"
+        assert db.get(KnowledgeUpdateProposal, first.id).status == "expired"
+
+
+def test_web_pending_selection_creates_proposal(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    from app.knowledge.web_turn import prepare_web_knowledge_reply
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        attachment = _attachment(data="网页选择知识库".encode())
+        session.context_state_json = {
+            "knowledge_pending": {
+                "attachment": attachment.model_dump(mode="json"),
+                "requested_action": "create",
+                "targets": [{"id": "kb_kp", "name": "财务制度"}],
+                "created_at": utc_now().isoformat(),
+            }
+        }
+        db.add(session)
+        db.commit()
+        reply = prepare_web_knowledge_reply(
+            db,
+            session,
+            text="1",
+            user_id="user_owner",
+            event_id="web_turn_1",
+        )
+        assert reply is not None
+        assert "确认码" in reply
+        proposal = db.exec(select(KnowledgeUpdateProposal)).first()
+        assert proposal is not None
+        assert proposal.target_knowledge_base_id == "kb_kp"
+        assert "knowledge_pending" not in (session.context_state_json or {})
+        ignored = prepare_web_knowledge_reply(
+            db,
+            session,
+            text="2024年怎么报销",
+            user_id="user_owner",
+            event_id="web_turn_2",
+        )
+        assert ignored is None
+
+
+def test_confirm_marks_executing_before_enqueue(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    import app.knowledge.proposals as proposals
+
+    seen: list[str] = []
+    engine = _engine()
+
+    def _enqueue(*args, **kwargs):
+        with Session(engine) as check_db:
+            row = check_db.exec(select(KnowledgeUpdateProposal)).first()
+            seen.append(row.status if row else "")
+
+    monkeypatch.setattr(
+        proposals,
+        "knowledge_version_for_upload",
+        lambda *args, **kwargs: type("V", (), {"id": "kbver_new"})(),
+    )
+    monkeypatch.setattr(proposals, "enqueue_async_job", _enqueue)
+    with Session(engine) as db:
+        session = _seed(db)
+        attachment = _attachment(data="先提交执行中".encode())
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_exec_order",
+            requested_action="create",
+        )
+        confirm_knowledge_update_proposal(
+            db,
+            proposal,
+            action="create",
+            confirmed_by_user_id="user_owner",
+        )
+    assert seen == ["executing"]
+
+
+def test_terminal_proposal_is_not_overwritten_by_later_failure(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    from app.knowledge.proposals import notify_knowledge_proposal_result
+
+    with Session(_engine()) as db:
+        session = _seed(db)
+        proposal = KnowledgeUpdateProposal(
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            session_id=session.id,
+            source_message_id="turn_terminal",
+            attachment_id="att_terminal",
+            source_sha256="a" * 64,
+            filename="制度.txt",
+            size=4,
+            target_knowledge_base_id="kb_kp",
+            confirmation_code="ABC123",
+            status="succeeded",
+            expires_at=utc_now() + timedelta(minutes=30),
+        )
+        db.add(proposal)
+        db.commit()
+        job = KnowledgeIngestJob(
+            tenant_id="tenant_kp",
+            knowledge_base_id="kb_kp",
+            filename="制度.txt",
+            status="failed",
+            proposal_id=proposal.id,
+            error="late",
+        )
+        db.add(job)
+        db.commit()
+        notify_knowledge_proposal_result(db, job, error="late")
+        assert db.get(KnowledgeUpdateProposal, proposal.id).status == "succeeded"
+
+
+def test_clone_keeps_source_sha256(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    from app.agents.branching import clone_knowledge_version_assets
+
+    with Session(_engine()) as db:
+        _seed(db)
+        db.add(
+            KnowledgeBaseVersion(
+                id="kbver_next",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                version="1.0.0-branch.agent_kp.1",
+                name="财务制度",
+                status="active",
+            )
+        )
+        db.add(
+            KnowledgeDocument(
+                id="kdoc_sha",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_kp",
+                filename="制度.txt",
+                file_type="txt",
+                title="制度",
+                status="ready",
+                source_sha256="abc123",
+            )
+        )
+        db.commit()
+        clone_knowledge_version_assets(db, "tenant_kp", "kb_kp", "kbver_kp", "kbver_next")
+        db.commit()
+        cloned = db.exec(
+            select(KnowledgeDocument).where(
+                KnowledgeDocument.knowledge_base_version_id == "kbver_next"
+            )
+        ).one()
+        assert cloned.source_sha256 == "abc123"
+        assert cloned.id != "kdoc_sha"
+
+
+def test_replace_cancel_restores_previous_head_and_keeps_document(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    from app.db.models import AgentKnowledgeBranch
+    from app.knowledge.service import KnowledgeService
+
+    with Session(_engine()) as db:
+        _seed(db)
+        db.add(
+            KnowledgeBaseVersion(
+                id="kbver_new",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                version="1.0.0-branch.agent_kp.1",
+                name="财务制度",
+                status="active",
+            )
+        )
+        db.add(
+            AgentKnowledgeBranch(
+                tenant_id="tenant_kp",
+                agent_id="agent_kp",
+                knowledge_base_id="kb_kp",
+                base_version="1.0.0",
+                head_version="1.0.0-branch.agent_kp.1",
+                status="active",
+            )
+        )
+        db.add(
+            KnowledgeDocument(
+                id="kdoc_keep",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_new",
+                filename="制度.txt",
+                file_type="txt",
+                title="制度",
+                status="ready",
+            )
+        )
+        proposal = KnowledgeUpdateProposal(
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            session_id="session_kp",
+            channel="wecom",
+            binding_id="chan_kp",
+            source_message_id="turn_cancel_replace",
+            attachment_id="att_keep",
+            source_sha256="b" * 64,
+            filename="制度.txt",
+            size=4,
+            target_knowledge_base_id="kb_kp",
+            target_json={"to_user_id": "u1", "context_token": "ctx"},
+            confirmation_code="DEF456",
+            status="executing",
+            expires_at=utc_now() + timedelta(minutes=30),
+        )
+        db.add(proposal)
+        db.commit()
+        service = KnowledgeService(db)
+        job = service.create_ingest_job(
+            __import__("app.knowledge.service", fromlist=["IngestPayload"]).IngestPayload(
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_new",
+                filename="制度.txt",
+                content_base64="YQ==",
+                operation="replace",
+                target_document_id="kdoc_keep",
+                proposal_id=proposal.id,
+                metadata={
+                    "agent_id": "agent_kp",
+                    "previous_knowledge_base_version_id": "kbver_kp",
+                },
+            )
+        )
+        job.document_id = "kdoc_keep"
+        job.status = "running"
+        db.add(job)
+        db.commit()
+        service._finalize_cancelled_job(job, "入库任务已取消")
+        branch = db.exec(select(AgentKnowledgeBranch)).one()
+        assert branch.head_version == "1.0.0"
+        assert db.get(KnowledgeDocument, "kdoc_keep") is not None
+        assert db.get(KnowledgeUpdateProposal, proposal.id).status == "cancelled"

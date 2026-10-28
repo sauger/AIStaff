@@ -43,6 +43,10 @@ export default function KnowledgeProposalPanel({
   }, [sessionId, tenantId]);
 
   useEffect(() => {
+    setSubmitted({});
+  }, [sessionId]);
+
+  useEffect(() => {
     const entries = Object.entries(submitted).filter(
       ([, item]) => !['succeeded', 'failed', 'cancelled'].includes(item.job.status),
     );
@@ -53,7 +57,10 @@ export default function KnowledgeProposalPanel({
         void api
           .get<KnowledgeIngestJobRead>(
             `/api/enterprise/knowledge/jobs/${encodeURIComponent(item.job.id)}`
-              + `?tenant_id=${encodeURIComponent(tenantId)}`,
+              + `?tenant_id=${encodeURIComponent(tenantId)}`
+              + (item.proposal.agent_id
+                ? `&agent_id=${encodeURIComponent(item.proposal.agent_id)}`
+                : ''),
           )
           .then((job) => {
             if (!cancelled) {
@@ -63,7 +70,21 @@ export default function KnowledgeProposalPanel({
               }));
             }
           })
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            if (cancelled) return;
+            const message = error instanceof Error ? error.message : '无法获取入库进度';
+            setSubmitted((current) => {
+              const currentItem = current[proposalId];
+              if (!currentItem) return current;
+              return {
+                ...current,
+                [proposalId]: {
+                  ...currentItem,
+                  job: { ...currentItem.job, status: 'failed', error: message },
+                },
+              };
+            });
+          });
       });
     }, 2500);
     return () => {
@@ -132,9 +153,9 @@ export default function KnowledgeProposalPanel({
               <span className="text-[#858b9c]"> → {proposal.target_knowledge_base_name}</span>
             </div>
             <div className="text-[11px] text-[#858b9c]">
-              {proposal.proposed_action === 'create'
-                ? '识别为新增文档，确认后开始入库。'
-                : '发现可能相关的已有文档，请确认新增；覆盖流程将在下一步开放。'}
+              {proposal.candidates.length > 0
+                ? '发现可能相关的已有文档。可以覆盖其中一份，或另存为新文档。'
+                : '识别为新增文档，确认后开始入库。'}
             </div>
           </div>
           {proposal.candidates.length > 0 && (

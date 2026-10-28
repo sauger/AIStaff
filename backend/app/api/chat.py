@@ -769,6 +769,116 @@ def _maybe_handle_scheduled_task_request(
     return response, draft
 
 
+def _maybe_handle_knowledge_web_turn(
+    db: Session,
+    request: ChatTurnRequest,
+    chat_session: ChatSession,
+) -> ChatTurnResponse | None:
+    """Confirm or create a knowledge proposal before the web model sees the turn."""
+
+    if request.channel != "web":
+        return None
+    if request.client_turn_id and is_chat_turn_cancelled(
+        chat_session.id,
+        request.client_turn_id,
+        db=db,
+        identity_kind="client",
+    ):
+        return None
+    from app.knowledge.web_turn import prepare_web_knowledge_reply
+
+    reply = prepare_web_knowledge_reply(
+        db,
+        chat_session,
+        text=request.message,
+        user_id=request.user_id,
+        event_id=request.client_turn_id or new_id("webturn"),
+    )
+    if reply is None:
+        return None
+    turn_store = HarnessTurnStore(db)
+    turn_claim = turn_store.claim(chat_session, request)
+    if turn_claim.replay is not None:
+        return turn_claim.replay
+    now = utc_now()
+    assistant_time = now + timedelta(microseconds=1)
+    chat_session.updated_at = assistant_time
+    chat_session.summary = f"最近回复：{reply[:120]}"
+    user_message = Message(
+        tenant_id=request.tenant_id,
+        session_id=chat_session.id,
+        role="user",
+        content=request.message,
+        metadata_json=_user_message_metadata(request),
+        created_at=now,
+    )
+    db.add(user_message)
+    db.flush()
+    turn_store.bind_user_message(turn_claim.record, user_message.id)
+    db.add(
+        AgentEvent(
+            tenant_id=request.tenant_id,
+            session_id=chat_session.id,
+            event_type="user_message_received",
+            payload_json={
+                "message_id": user_message.id,
+                "client_turn_id": request.client_turn_id,
+                "message": request.message,
+                "channel": request.channel,
+                "user_id": request.user_id,
+            },
+            created_at=now,
+        )
+    )
+    assistant_message = Message(
+        tenant_id=request.tenant_id,
+        session_id=chat_session.id,
+        role="assistant",
+        content=reply,
+        metadata_json={
+            "knowledge_confirmation": True,
+            "user_message_id": user_message.id,
+            "turn_id": user_message.id,
+        },
+        created_at=assistant_time,
+    )
+    db.add(assistant_message)
+    stage_channel_delivery(db, chat_session, assistant_message)
+    db.add(
+        AgentEvent(
+            tenant_id=request.tenant_id,
+            session_id=chat_session.id,
+            event_type="assistant_message_created",
+            payload_json={
+                "message_id": assistant_message.id,
+                "assistant_message_id": assistant_message.id,
+                "user_message_id": user_message.id,
+                "turn_id": user_message.id,
+                "reply": reply,
+            },
+            created_at=assistant_time,
+        )
+    )
+    state = public_session(chat_session)
+    db.add(
+        AgentEvent(
+            tenant_id=request.tenant_id,
+            session_id=chat_session.id,
+            event_type="session_state_changed",
+            payload_json=state.model_dump(),
+            created_at=assistant_time,
+        )
+    )
+    response = ChatTurnResponse(
+        reply=reply,
+        session_id=chat_session.id,
+        session_state=public_session(chat_session),
+    )
+    turn_store.complete(turn_claim.record, response)
+    db.refresh(chat_session)
+    return response
+
+
 def _add_stream_status_event(
     db: Session,
     tenant_id: str,
@@ -1050,6 +1160,15 @@ def chat_turn(
             response, _draft = scheduled_response
             _schedule_session_title_summary(request.tenant_id, request.user_id, response.session_id, request.agent_id)
             return response
+        knowledge_response = _maybe_handle_knowledge_web_turn(db, request, chat_session)
+        if knowledge_response is not None:
+            _schedule_session_title_summary(
+                request.tenant_id,
+                request.user_id,
+                knowledge_response.session_id,
+                request.agent_id,
+            )
+            return knowledge_response
     response = AgentLoop(db).handle_turn(request)
     _schedule_session_title_summary(request.tenant_id, request.user_id, response.session_id, request.agent_id)
     if team_tl_team is not None:
@@ -1248,6 +1367,54 @@ def chat_stream(
                             request.tenant_id,
                             request.user_id,
                             response.session_id,
+                            request.agent_id,
+                        )
+                        return
+                    knowledge_response = _maybe_handle_knowledge_web_turn(
+                        worker_db,
+                        request,
+                        chat_session,
+                    )
+                    if knowledge_response is not None:
+                        set_source_session(knowledge_response.session_id)
+                        message_id, client_turn_id = _resolve_turn_ids_from_events(
+                            worker_db,
+                            request.tenant_id,
+                            knowledge_response.session_id,
+                            request.client_turn_id or "",
+                        )
+                        turn_payload = {
+                            "turn_id": message_id,
+                            "user_message_id": message_id,
+                            "client_turn_id": client_turn_id or None,
+                        }
+                        for chunk in _reply_chunks(knowledge_response.reply):
+                            _persist_relay_only_event(
+                                worker_db,
+                                request.tenant_id,
+                                knowledge_response.session_id,
+                                "stream_delta",
+                                {"content": chunk, **turn_payload},
+                            )
+                        _persist_relay_only_event(
+                            worker_db,
+                            request.tenant_id,
+                            knowledge_response.session_id,
+                            "stream_end",
+                            turn_payload,
+                        )
+                        _persist_relay_only_event(
+                            worker_db,
+                            request.tenant_id,
+                            knowledge_response.session_id,
+                            "complete",
+                            {**knowledge_response.model_dump(mode="json"), **turn_payload},
+                        )
+                        worker_terminal["seen"] = True
+                        _schedule_session_title_summary(
+                            request.tenant_id,
+                            request.user_id,
+                            knowledge_response.session_id,
                             request.agent_id,
                         )
                         return

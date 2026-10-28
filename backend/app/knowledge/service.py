@@ -23,6 +23,7 @@ from app.db.models import (
     AgentKnowledgeBranch,
     KnowledgeBucket,
     KnowledgeBase,
+    KnowledgeBaseVersion,
     KnowledgeChunk,
     KnowledgeConcept,
     KnowledgeDiscoverySuggestion,
@@ -416,13 +417,24 @@ class KnowledgeService:
         self._finalize_cancelled_job(job, "入库任务已取消")
         return job
 
-    def _notify_knowledge_proposal(self, job: KnowledgeIngestJob, *, error: str | None = None) -> None:
+    def _notify_knowledge_proposal(
+        self,
+        job: KnowledgeIngestJob,
+        *,
+        error: str | None = None,
+        status: str | None = None,
+    ) -> None:
         if not job.proposal_id:
             return
         try:
             from app.knowledge.proposals import notify_knowledge_proposal_result
 
-            notify_knowledge_proposal_result(self.db, job, error=error)
+            notify_knowledge_proposal_result(
+                self.db,
+                job,
+                error=error,
+                status=status,
+            )
         except Exception:
             logger.exception("知识库提案结果通知失败 job=%s", job.id)
 
@@ -682,7 +694,9 @@ class KnowledgeService:
         except KnowledgeIngestCancelled as exc:
             self._finalize_cancelled_job(job, str(exc) or "入库任务已取消")
         except Exception as exc:  # noqa: BLE001 - persist stable job failure.
-            if job.document_id:
+            if job.operation == "replace":
+                self._rollback_replace_head(job)
+            elif job.document_id:
                 document = self.db.get(KnowledgeDocument, job.document_id)
                 if document:
                     document.status = "failed"
@@ -1546,26 +1560,72 @@ class KnowledgeService:
 
     def _finalize_cancelled_job(self, job: KnowledgeIngestJob, detail: str) -> None:
         cancelled_document_id = job.document_id
-        if cancelled_document_id:
+        if job.operation == "replace":
+            self._rollback_replace_head(job)
+        elif cancelled_document_id:
             self._delete_partial_ingest_document(job)
         metadata = dict(job.metadata_json or {})
         metadata.pop("content_base64", None)
         metadata["stage_label"] = "已取消"
         metadata["stage_detail"] = detail
         metadata["cancelled_at"] = utc_now().isoformat()
-        if cancelled_document_id:
+        if cancelled_document_id and job.operation != "replace":
             metadata["cancelled_document_id"] = cancelled_document_id
         metadata["ingest_steps"] = _ingest_steps_for(job.stage, float(job.progress or 0.0), "cancelled")
         job.metadata_json = metadata
-        self._update_job(
-            job,
-            status="cancelled",
-            stage="cancelled",
-            progress=float(job.progress or 0.0),
-            error=None,
-            finished_at=utc_now(),
-            document_id=None,
-        )
+        changes: dict[str, Any] = {
+            "status": "cancelled",
+            "stage": "cancelled",
+            "progress": float(job.progress or 0.0),
+            "error": None,
+            "finished_at": utc_now(),
+        }
+        if job.operation != "replace":
+            changes["document_id"] = None
+        self._update_job(job, **changes)
+        self._notify_knowledge_proposal(job, error=detail, status="cancelled")
+
+    def _rollback_replace_head(self, job: KnowledgeIngestJob) -> None:
+        """Move the agent branch back when a replace clone should not stay searchable."""
+
+        if job.operation != "replace":
+            return
+        nested = (job.metadata_json or {}).get("metadata")
+        if not isinstance(nested, dict):
+            return
+        previous_id = str(nested.get("previous_knowledge_base_version_id") or "").strip()
+        agent_id = str(nested.get("agent_id") or "").strip()
+        if not previous_id or not agent_id:
+            return
+        previous = self.db.get(KnowledgeBaseVersion, previous_id)
+        if (
+            previous is None
+            or previous.tenant_id != job.tenant_id
+            or previous.knowledge_base_id != job.knowledge_base_id
+        ):
+            return
+        branch = self.db.exec(
+            select(AgentKnowledgeBranch).where(
+                AgentKnowledgeBranch.tenant_id == job.tenant_id,
+                AgentKnowledgeBranch.agent_id == agent_id,
+                AgentKnowledgeBranch.knowledge_base_id == job.knowledge_base_id,
+            )
+        ).first()
+        if branch is None:
+            return
+        current = self.db.exec(
+            select(KnowledgeBaseVersion).where(
+                KnowledgeBaseVersion.tenant_id == job.tenant_id,
+                KnowledgeBaseVersion.knowledge_base_id == job.knowledge_base_id,
+                KnowledgeBaseVersion.version == branch.head_version,
+            )
+        ).first()
+        if current is None or current.id != job.knowledge_base_version_id:
+            return
+        branch.head_version = previous.version
+        branch.updated_at = utc_now()
+        self.db.add(branch)
+        self.db.commit()
 
     def _delete_partial_ingest_document(self, job: KnowledgeIngestJob) -> None:
         document_id = job.document_id

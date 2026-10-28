@@ -826,6 +826,7 @@ class HarnessCapabilityInvoker:
             "attachment": attachment.model_dump(mode="json"),
             "requested_action": requested_action,
             "targets": list((details or {}).get("knowledge_bases") or []),
+            "created_at": utc_now().isoformat(),
         }
         state = dict(getattr(self.session, "context_state_json", None) or {})
         state["knowledge_pending"] = payload
