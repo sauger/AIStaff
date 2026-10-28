@@ -636,6 +636,13 @@ class KnowledgeIngestJob(SQLModel, table=True):
     knowledge_base_id: str = Field(index=True)
     knowledge_base_version_id: Optional[str] = Field(default=None, index=True)
     document_id: Optional[str] = Field(default=None, index=True)
+    # create: 新建文档；replace: 覆盖 target_document_id 指向的文档
+    operation: str = Field(default="create", index=True)
+    target_document_id: Optional[str] = Field(default=None, index=True)
+    expected_updated_at: Optional[str] = None
+    source_sha256: Optional[str] = Field(default=None, index=True)
+    source_message_id: Optional[str] = Field(default=None, index=True)
+    proposal_id: Optional[str] = Field(default=None, index=True)
     filename: str
     status: str = Field(default="queued", index=True)
     stage: str = "queued"

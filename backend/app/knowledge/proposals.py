@@ -296,8 +296,8 @@ def _candidate_documents(
                 "filename": row.filename,
                 "knowledge_base_id": row.knowledge_base_id,
                 "knowledge_base_version_id": row.knowledge_base_version_id,
-                "updated_at": row.updated_at.isoformat(),
-                "expected_updated_at": row.updated_at.isoformat(),
+                "updated_at": _iso_datetime(row.updated_at),
+                "expected_updated_at": _iso_datetime(row.updated_at),
                 "match_reasons": reasons,
                 "score": round(score, 4),
             }
@@ -470,6 +470,39 @@ __all__ = [
 ]
 
 
+def _document_for_version(
+    db: Session,
+    source: KnowledgeDocument,
+    version_id: str,
+) -> KnowledgeDocument:
+    if source.knowledge_base_version_id == version_id:
+        return source
+    rows = db.exec(
+        select(KnowledgeDocument).where(
+            KnowledgeDocument.tenant_id == source.tenant_id,
+            KnowledgeDocument.knowledge_base_id == source.knowledge_base_id,
+            KnowledgeDocument.knowledge_base_version_id == version_id,
+            KnowledgeDocument.filename == source.filename,
+            KnowledgeDocument.file_type == source.file_type,
+        )
+    ).all()
+    if not rows:
+        raise KnowledgeProposalError(
+            "KNOWLEDGE_VERSION_COPY_NOT_FOUND", "目标文档的版本副本不存在。"
+        )
+    exact = [
+        row
+        for row in rows
+        if row.title == source.title and row.created_at == source.created_at
+    ]
+    return exact[0] if exact else rows[0]
+
+
+def _iso_datetime(value: Any) -> str:
+    parsed = as_utc(value) if value is not None else None
+    return parsed.isoformat() if parsed else ""
+
+
 def confirm_knowledge_update_proposal(
     db: Session,
     proposal: KnowledgeUpdateProposal,
@@ -503,12 +536,44 @@ def confirm_knowledge_update_proposal(
         raise KnowledgeProposalError(
             "PERMISSION_DENIED", "只有发起该提案的用户可以确认。"
         )
+    target: KnowledgeDocument | None = None
     if normalized_action == "replace":
-        raise KnowledgeProposalError(
-            "REPLACE_NOT_IMPLEMENTED",
-            "覆盖流程尚未开放，请先选择新增或使用网页知识库后台。",
+        requested_target = str(target_document_id or "").strip()
+        if not requested_target:
+            raise KnowledgeProposalError("TARGET_REQUIRED", "请选择要覆盖的文档。")
+        target = db.get(KnowledgeDocument, requested_target)
+        if (
+            target is None
+            or target.tenant_id != proposal.tenant_id
+            or target.knowledge_base_id != proposal.target_knowledge_base_id
+        ):
+            raise KnowledgeProposalError("TARGET_NOT_FOUND", "要覆盖的文档不存在。")
+        candidate = next(
+            (
+                item
+                for item in proposal.candidates_json or []
+                if str(item.get("document_id") or "") == requested_target
+            ),
+            None,
         )
-    if target_document_id:
+        if candidate is None:
+            raise KnowledgeProposalError(
+                "TARGET_NOT_IN_PROPOSAL", "该文档不在本次提案的候选列表中。"
+            )
+        expected = str(
+            expected_updated_at
+            or candidate.get("expected_updated_at")
+            or ""
+        ).strip()
+        if not expected:
+            raise KnowledgeProposalError(
+                "EXPECTED_VERSION_REQUIRED", "覆盖缺少文档版本信息，请重新发起提案。"
+            )
+        if _iso_datetime(target.updated_at) != expected:
+            raise KnowledgeProposalError(
+                "DOCUMENT_CONFLICT", "文档刚被其他人修改，本次未覆盖，请重新发起。"
+            )
+    elif target_document_id:
         raise KnowledgeProposalError(
             "INVALID_TARGET", "新增提案不能指定覆盖文档。"
         )
@@ -547,12 +612,38 @@ def confirm_knowledge_update_proposal(
         raise KnowledgeProposalError(
             "KNOWLEDGE_BASE_NOT_WRITABLE", "目标知识库当前不可写。"
         ) from exc
+    target_version_id = version.id
+    job_target_document_id: str | None = None
+    expected_value: str | None = None
+    if normalized_action == "replace":
+        assert target is not None
+        expected_value = str(
+            expected_updated_at
+            or next(
+                (
+                    item.get("expected_updated_at")
+                    for item in proposal.candidates_json or []
+                    if str(item.get("document_id") or "") == target.id
+                ),
+                "",
+            )
+            or ""
+        ).strip()
+        target = _document_for_version(db, target, version.id)
+        target_version_id = str(target.knowledge_base_version_id or version.id)
+        job_target_document_id = target.id
     service = KnowledgeService(db)
     job = service.create_ingest_job(
         IngestPayload(
             tenant_id=proposal.tenant_id,
             knowledge_base_id=proposal.target_knowledge_base_id,
-            knowledge_base_version_id=version.id,
+            knowledge_base_version_id=target_version_id,
+            operation=normalized_action,
+            target_document_id=job_target_document_id,
+            expected_updated_at=expected_value,
+            source_sha256=proposal.source_sha256,
+            source_message_id=proposal.source_message_id,
+            proposal_id=proposal.id,
             filename=proposal.filename,
             content_base64=base64.b64encode(data).decode("ascii"),
             title=Path(proposal.filename).stem or proposal.filename,
@@ -579,10 +670,12 @@ def confirm_knowledge_update_proposal(
     )
     proposal.status = "executing"
     proposal.job_id = job.id
-    proposal.target_knowledge_base_version_id = version.id
+    proposal.proposed_action = normalized_action
+    proposal.target_document_id = target.id if target is not None else None
+    proposal.target_knowledge_base_version_id = target_version_id
     proposal.confirmed_at = utc_now()
     proposal.confirmed_by_user_id = confirmed_by_user_id
-    proposal.expected_updated_at = expected_updated_at or proposal.expected_updated_at
+    proposal.expected_updated_at = expected_value or proposal.expected_updated_at
     proposal.updated_at = utc_now()
     db.add(proposal)
     db.commit()

@@ -158,7 +158,11 @@ def confirm_knowledge_proposal(
             expected_updated_at=request.expected_updated_at,
         )
     except KnowledgeProposalError as exc:
-        status_code = 409 if exc.code in {"PROPOSAL_EXPIRED", "PROPOSAL_NOT_PENDING"} else 422
+        status_code = 409 if exc.code in {
+            "PROPOSAL_EXPIRED",
+            "PROPOSAL_NOT_PENDING",
+            "DOCUMENT_CONFLICT",
+        } else 422
         if exc.code in {"PERMISSION_DENIED", "CHANNEL_IDENTITY_NOT_BOUND"}:
             status_code = 403
         raise HTTPException(

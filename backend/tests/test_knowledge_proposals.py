@@ -448,92 +448,142 @@ def test_confirm_creates_existing_ingest_job(monkeypatch, tmp_path: Path) -> Non
         assert enqueued[0][0] == "knowledge_ingest"
 
 
-def test_confirm_replace_is_not_implemented(monkeypatch, tmp_path: Path) -> None:
+def test_confirm_replace_creates_replace_job(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     _visible(monkeypatch)
+    import app.knowledge.proposals as proposals
+
+    enqueued: list[tuple] = []
+    monkeypatch.setattr(
+        proposals,
+        "knowledge_version_for_upload",
+        lambda *args, **kwargs: type("V", (), {"id": "kbver_kp"})(),
+    )
+    monkeypatch.setattr(
+        proposals,
+        "enqueue_async_job",
+        lambda name, func, *args, **kwargs: enqueued.append((name, args)),
+    )
     with Session(_engine()) as db:
         session = _seed(db)
-        attachment = _attachment(data="覆盖正文".encode("utf-8"))
+        db.add(
+            KnowledgeDocument(
+                id="kdoc_replace",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_kp",
+                filename="制度.txt",
+                file_type="txt",
+                title="制度",
+                status="ready",
+                metadata_json={"raw_text_excerpt": "旧版正文"},
+            )
+        )
+        db.commit()
+        attachment = _attachment(data="新版正文".encode("utf-8"))
         proposal = create_knowledge_update_proposal(
             db,
             chat_session=session,
             attachment=attachment,
-            source_message_id="turn_replace",
-            requested_action="create",
+            source_message_id="turn_replace_ok",
+            requested_action="replace",
         )
+        target = proposal.candidates_json[0]
+        job = confirm_knowledge_update_proposal(
+            db,
+            proposal,
+            action="replace",
+            confirmed_by_user_id="user_owner",
+            target_document_id=target["document_id"],
+            expected_updated_at=target["expected_updated_at"],
+        )
+        assert job.operation == "replace"
+        assert job.target_document_id == "kdoc_replace"
+        assert proposal.status == "executing"
+        assert enqueued[0][0] == "knowledge_ingest"
+
+
+def test_confirm_replace_rejects_stale_document(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    with Session(_engine()) as db:
+        session = _seed(db)
+        db.add(
+            KnowledgeDocument(
+                id="kdoc_stale",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_kp",
+                filename="制度.txt",
+                file_type="txt",
+                title="制度",
+                status="ready",
+            )
+        )
+        db.commit()
+        attachment = _attachment(data="新正文".encode("utf-8"))
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_stale",
+            requested_action="replace",
+        )
+        target = proposal.candidates_json[0]
+        row = db.get(KnowledgeDocument, "kdoc_stale")
+        row.updated_at = utc_now()
+        db.add(row)
+        db.commit()
         with pytest.raises(KnowledgeProposalError) as exc_info:
             confirm_knowledge_update_proposal(
                 db,
                 proposal,
                 action="replace",
                 confirmed_by_user_id="user_owner",
-                target_document_id="kdoc_existing",
+                target_document_id=target["document_id"],
+                expected_updated_at=target["expected_updated_at"],
             )
-        assert exc_info.value.code == "REPLACE_NOT_IMPLEMENTED"
+        assert exc_info.value.code == "DOCUMENT_CONFLICT"
 
 
-def test_api_lists_pending_proposals(monkeypatch, tmp_path: Path) -> None:
+def test_run_replace_ingest_job_updates_target_without_new_document(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
-    _visible(monkeypatch)
-    from app.api.knowledge_proposals import list_knowledge_proposals
+    from app.knowledge.service import IngestPayload, KnowledgeService
 
     with Session(_engine()) as db:
-        session = _seed(db)
-        attachment = _attachment(data="卡片正文".encode("utf-8"))
-        proposal = create_knowledge_update_proposal(
-            db,
-            chat_session=session,
-            attachment=attachment,
-            source_message_id="turn_card",
-            requested_action="create",
+        _seed(db)
+        target = KnowledgeDocument(
+            id="kdoc_run_replace",
+            tenant_id="tenant_kp",
+            knowledge_base_id="kb_kp",
+            knowledge_base_version_id="kbver_kp",
+            filename="制度.txt",
+            file_type="txt",
+            title="制度",
+            status="ready",
         )
-        user = db.get(User, "user_owner")
-        rows = list_knowledge_proposals(
-            session.id,
-            "tenant_kp",
-            db,
-            user,
+        db.add(target)
+        db.commit()
+        content = "# 新制度\n报销需要审批。".encode("utf-8")
+        service = KnowledgeService(db)
+        job = service.create_ingest_job(
+            IngestPayload(
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_kp",
+                filename="制度.txt",
+                content_base64=__import__("base64").b64encode(content).decode("ascii"),
+                operation="replace",
+                target_document_id="kdoc_run_replace",
+                source_sha256=hashlib.sha256(content).hexdigest(),
+            )
         )
-        assert [row.id for row in rows] == [proposal.id]
-        assert rows[0].target_knowledge_base_name == "财务制度"
-
-
-def test_harness_tool_returns_proposal(monkeypatch, tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    import app.core.harness_capability_invoker as invoker_module
-    from app.core.harness_capability_invoker import HarnessCapabilityInvoker
-
-    proposal = SimpleNamespace(
-        id="kprop_tool",
-        status="pending",
-        proposed_action="create",
-        filename="制度.txt",
-        target_knowledge_base_id="kb_kp",
-        candidates_json=[],
-        expires_at=utc_now(),
-    )
-    monkeypatch.setattr(
-        invoker_module,
-        "create_knowledge_update_proposal",
-        lambda *args, **kwargs: proposal,
-    )
-    invoker = object.__new__(HarnessCapabilityInvoker)
-    invoker.db = SimpleNamespace(
-        get=lambda model, key: SimpleNamespace(id=key, name="财务制度")
-    )
-    invoker.session = SimpleNamespace(
-        id="session_kp",
-        tenant_id="tenant_kp",
-        agent_id="agent_kp",
-        user_id="user_owner",
-        channel="web",
-        channel_binding_id=None,
-    )
-    invoker.tenant_id = "tenant_kp"
-    invoker.task_frame_id = "task_kp"
-    invoker.attachments = [SimpleNamespace(id="att_tool")]
-    result = invoker._knowledge_ingest_proposal({"attachment_id": "att_tool"})
-    assert result["success"] is True
-    assert result["data"]["proposal_id"] == "kprop_tool"
-    assert result["data"]["target_knowledge_base_name"] == "财务制度"
+        service._run_ingest_job(job.id)  # noqa: SLF001
+        job = db.get(KnowledgeIngestJob, job.id)
+        target = db.get(KnowledgeDocument, "kdoc_run_replace")
+        assert job.status == "succeeded"
+        assert job.document_id == "kdoc_run_replace"
+        assert target is not None and "新制度" in (target.metadata_json or {}).get("raw_text", "")
+        assert len(db.exec(select(KnowledgeDocument)).all()) == 1

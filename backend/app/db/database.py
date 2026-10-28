@@ -2486,6 +2486,26 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
             )
         )
 
+    if "knowledge_ingest_jobs" in tables:
+        job_columns = {
+            column["name"] for column in inspector.get_columns("knowledge_ingest_jobs")
+        }
+        for column_name, column_type in (
+            ("operation", "VARCHAR NOT NULL DEFAULT 'create'"),
+            ("target_document_id", "VARCHAR"),
+            ("expected_updated_at", "VARCHAR"),
+            ("source_sha256", "VARCHAR"),
+            ("source_message_id", "VARCHAR"),
+            ("proposal_id", "VARCHAR"),
+        ):
+            if column_name not in job_columns:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE knowledge_ingest_jobs "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
+                )
+
     resolved_version_ids: dict[str, str] = {}
     if "knowledge_base_versions" in tables and "knowledge_bases" in tables:
         knowledge_bases = conn.execute(text("SELECT * FROM knowledge_bases")).mappings().all()

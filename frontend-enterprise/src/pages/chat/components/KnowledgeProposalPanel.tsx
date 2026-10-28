@@ -74,13 +74,22 @@ export default function KnowledgeProposalPanel({
 
   if (proposals.length === 0 && Object.keys(submitted).length === 0) return null;
 
-  async function confirm(proposal: KnowledgeProposalRead) {
-    setConfirming(proposal.id);
+  async function confirm(
+    proposal: KnowledgeProposalRead,
+    action: 'create' | 'replace',
+    candidate?: KnowledgeProposalRead['candidates'][number],
+  ) {
+    const confirmKey = candidate ? `${proposal.id}:${candidate.document_id}` : proposal.id;
+    setConfirming(confirmKey);
     try {
       const response = await api.post<{ job_id: string }>(
         `/api/chat/sessions/${encodeURIComponent(sessionId)}/knowledge-proposals/`
           + `${encodeURIComponent(proposal.id)}/confirm?tenant_id=${encodeURIComponent(tenantId)}`,
-        { action: 'create' },
+        {
+          action,
+          target_document_id: candidate?.document_id,
+          expected_updated_at: candidate?.expected_updated_at,
+        },
       );
       setProposals((current) => current.filter((item) => item.id !== proposal.id));
       setSubmitted((current) => ({
@@ -101,7 +110,7 @@ export default function KnowledgeProposalPanel({
           },
         },
       }));
-      notify.success('已提交知识库入库，处理进度会显示在这里');
+      notify.success(action === 'replace' ? '已提交覆盖，处理进度会显示在这里' : '已提交知识库入库，处理进度会显示在这里');
     } catch (error) {
       notify.error(error instanceof Error ? error.message : '知识库入库确认失败');
     } finally {
@@ -134,8 +143,16 @@ export default function KnowledgeProposalPanel({
               {proposal.candidates.map((candidate) => (
                 <div className="flex items-center justify-between gap-[12px] text-[12px]" key={candidate.document_id}>
                   <span className="truncate text-[#464c5e]">{candidate.title}</span>
-                  <span className="shrink-0 text-[11px] text-[#858b9c]">
+                  <span className="flex shrink-0 items-center gap-[8px] text-[11px] text-[#858b9c]">
                     {candidate.updated_at.slice(0, 10)}
+                    <button
+                      className="rounded-[7px] border border-[#dce4f2] bg-white px-[8px] py-[4px] text-[11px] text-[#464c5e] disabled:opacity-60"
+                      type="button"
+                      disabled={confirming === `${proposal.id}:${candidate.document_id}`}
+                      onClick={() => void confirm(proposal, 'replace', candidate)}
+                    >
+                      覆盖
+                    </button>
                   </span>
                 </div>
               ))}
@@ -146,9 +163,13 @@ export default function KnowledgeProposalPanel({
               className="rounded-[8px] bg-[#18181a] px-[12px] py-[7px] text-[12px] font-medium text-white disabled:opacity-60"
               type="button"
               disabled={confirming === proposal.id}
-              onClick={() => void confirm(proposal)}
+              onClick={() => void confirm(proposal, 'create')}
             >
-              {confirming === proposal.id ? '提交中…' : '确认新增'}
+              {confirming === proposal.id
+                ? '提交中…'
+                : proposal.candidates.length > 0
+                  ? '另存为新增'
+                  : '确认新增'}
             </button>
             <span className="text-[11px] text-[#a2a8b8]">
               操作 {proposal.id.slice(-8)} · 30 分钟内有效

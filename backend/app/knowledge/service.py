@@ -114,6 +114,12 @@ class IngestPayload:
     knowledge_base_version_id: str | None = None
     title: str | None = None
     metadata: dict[str, Any] | None = None
+    operation: str = "create"
+    target_document_id: str | None = None
+    expected_updated_at: str | None = None
+    source_sha256: str | None = None
+    source_message_id: str | None = None
+    proposal_id: str | None = None
 
 
 class KnowledgeDiscoveryValidationError(ValueError):
@@ -221,6 +227,12 @@ class KnowledgeService:
             knowledge_base_id=payload.knowledge_base_id,
             knowledge_base_version_id=payload.knowledge_base_version_id
             or _default_knowledge_base_version_id(payload.knowledge_base_id),
+            operation=payload.operation,
+            target_document_id=payload.target_document_id,
+            expected_updated_at=payload.expected_updated_at,
+            source_sha256=payload.source_sha256,
+            source_message_id=payload.source_message_id,
+            proposal_id=payload.proposal_id,
             filename=payload.filename,
             status="queued",
             stage="queued",
@@ -402,6 +414,52 @@ class KnowledgeService:
         self._finalize_cancelled_job(job, "入库任务已取消")
         return job
 
+    def _run_replace_ingest_job(
+        self,
+        job: KnowledgeIngestJob,
+        normalized_text: str,
+        *,
+        source_sha256: str,
+    ) -> None:
+        target_id = str(job.target_document_id or "").strip()
+        target = self.db.get(KnowledgeDocument, target_id) if target_id else None
+        if (
+            target is None
+            or target.tenant_id != job.tenant_id
+            or target.knowledge_base_id != job.knowledge_base_id
+            or target.knowledge_base_version_id != job.knowledge_base_version_id
+        ):
+            raise KnowledgeParseError("覆盖目标文档不存在或版本不匹配。")
+        if job.source_sha256 and job.source_sha256 != source_sha256:
+            raise KnowledgeParseError("覆盖文件内容已变化，请重新确认。")
+        job.document_id = target.id
+        self.db.add(job)
+        self.db.commit()
+        self._update_ingest_stage(
+            job,
+            "bucketing",
+            detail="正在重建覆盖文档的分桶、切片与引用来源",
+            document_id=target.id,
+        )
+        target = self.replace_document_content(
+            target,
+            normalized_text,
+            source_sha256=source_sha256,
+        )
+        self._update_ingest_stage(
+            job,
+            "done",
+            status="succeeded",
+            finished_at=utc_now(),
+            document_id=target.id,
+            detail=f"覆盖完成：{target.chunk_count} 个引用来源",
+            stats={
+                "bucket_count": target.bucket_count,
+                "chunk_count": target.chunk_count,
+            },
+        )
+        self._clear_embedded_content(job)
+
     def run_ingest_job(self, job_id: str) -> None:
         with Session(engine) as db:
             service = KnowledgeService(db)
@@ -433,6 +491,13 @@ class KnowledgeService:
             if not normalized_text:
                 raise KnowledgeParseError("文档没有可用文本内容。")
             self._raise_if_ingest_cancelled(job)
+            if job.operation == "replace":
+                self._run_replace_ingest_job(
+                    job,
+                    normalized_text,
+                    source_sha256=source_sha256,
+                )
+                return
 
             self._update_ingest_stage(
                 job,
