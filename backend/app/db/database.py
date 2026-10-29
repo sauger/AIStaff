@@ -569,6 +569,42 @@ def _migrate_sqlite_skill_schema() -> None:
                 conn.execute(
                     text("ALTER TABLE ui_configs ADD COLUMN honcho_timeout_ms INTEGER")
                 )
+            if "honcho_deriver_model" not in ui_columns:
+                conn.execute(
+                    text("ALTER TABLE ui_configs ADD COLUMN honcho_deriver_model VARCHAR")
+                )
+            if "honcho_deriver_base_url" not in ui_columns:
+                conn.execute(
+                    text("ALTER TABLE ui_configs ADD COLUMN honcho_deriver_base_url VARCHAR")
+                )
+            if "honcho_deriver_api_key_encrypted" not in ui_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ui_configs ADD COLUMN "
+                        "honcho_deriver_api_key_encrypted VARCHAR"
+                    )
+                )
+            if "honcho_embedding_model" not in ui_columns:
+                conn.execute(
+                    text("ALTER TABLE ui_configs ADD COLUMN honcho_embedding_model VARCHAR")
+                )
+            if "honcho_embedding_base_url" not in ui_columns:
+                conn.execute(
+                    text("ALTER TABLE ui_configs ADD COLUMN honcho_embedding_base_url VARCHAR")
+                )
+            if "honcho_embedding_api_key_encrypted" not in ui_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ui_configs ADD COLUMN "
+                        "honcho_embedding_api_key_encrypted VARCHAR"
+                    )
+                )
+            if "honcho_embedding_dimensions" not in ui_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE ui_configs ADD COLUMN honcho_embedding_dimensions INTEGER"
+                    )
+                )
 
         if "team_tasks" in tables:
             team_task_columns = {

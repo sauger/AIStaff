@@ -28,6 +28,13 @@ type UiConfigForm = {
   honcho_enabled: boolean;
   honcho_base_url: string;
   honcho_timeout_ms: string;
+  honcho_deriver_model: string;
+  honcho_deriver_base_url: string;
+  honcho_deriver_api_key: string;
+  honcho_embedding_model: string;
+  honcho_embedding_base_url: string;
+  honcho_embedding_api_key: string;
+  honcho_embedding_dimensions: string;
 };
 
 const DEFAULT_UI_CONFIG: UiConfigForm = {
@@ -51,6 +58,13 @@ const DEFAULT_UI_CONFIG: UiConfigForm = {
   honcho_enabled: false,
   honcho_base_url: '',
   honcho_timeout_ms: '200',
+  honcho_deriver_model: '',
+  honcho_deriver_base_url: '',
+  honcho_deriver_api_key: '',
+  honcho_embedding_model: '',
+  honcho_embedding_base_url: '',
+  honcho_embedding_api_key: '',
+  honcho_embedding_dimensions: '1536',
 };
 
 function formatDateOnly(value: string): string {
@@ -67,6 +81,11 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
   const [updatedAt, setUpdatedAt] = useState('');
   const [setupMessage, setSetupMessage] = useState('');
   const [effectiveStoragePath, setEffectiveStoragePath] = useState('');
+  const [deriverKeySet, setDeriverKeySet] = useState(false);
+  const [embeddingKeySet, setEmbeddingKeySet] = useState(false);
+  const [sidecarApplyAvailable, setSidecarApplyAvailable] = useState(false);
+  const [sidecarMessage, setSidecarMessage] = useState('');
+  const [applyingSidecar, setApplyingSidecar] = useState(false);
   const [apiKeyOpen, setApiKeyOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [sandboxStatus, setSandboxStatus] = useState<Pick<UIConfigRead, 'sandbox_status' | 'sandbox_status_message' | 'sandbox_status_remediation'>>({});
@@ -96,7 +115,18 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
           honcho_enabled: row.honcho_enabled === true,
           honcho_base_url: row.honcho_base_url || '',
           honcho_timeout_ms: String(row.honcho_timeout_ms ?? 200),
+          honcho_deriver_model: row.honcho_deriver_model || '',
+          honcho_deriver_base_url: row.honcho_deriver_base_url || '',
+          honcho_deriver_api_key: '',
+          honcho_embedding_model: row.honcho_embedding_model || '',
+          honcho_embedding_base_url: row.honcho_embedding_base_url || '',
+          honcho_embedding_api_key: '',
+          honcho_embedding_dimensions: String(row.honcho_embedding_dimensions ?? 1536),
         });
+        setDeriverKeySet(row.honcho_deriver_api_key_set === true);
+        setEmbeddingKeySet(row.honcho_embedding_api_key_set === true);
+        setSidecarApplyAvailable(row.honcho_sidecar_apply_available === true);
+        setSidecarMessage('');
         setUpdatedAt(row.updated_at);
         setEffectiveStoragePath(row.effective_harness_storage_path || '');
         setSetupMessage(row.sandbox_setup_instructions || '');
@@ -152,8 +182,20 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         honcho_enabled: form.honcho_enabled,
         honcho_base_url: form.honcho_base_url.trim(),
         honcho_timeout_ms: Number(form.honcho_timeout_ms),
+        honcho_deriver_model: form.honcho_deriver_model.trim(),
+        honcho_deriver_base_url: form.honcho_deriver_base_url.trim(),
+        honcho_deriver_api_key: form.honcho_deriver_api_key,
+        honcho_embedding_model: form.honcho_embedding_model.trim(),
+        honcho_embedding_base_url: form.honcho_embedding_base_url.trim(),
+        honcho_embedding_api_key: form.honcho_embedding_api_key,
+        honcho_embedding_dimensions: Number(form.honcho_embedding_dimensions),
       });
       setUpdatedAt(row.updated_at);
+      setDeriverKeySet(row.honcho_deriver_api_key_set === true);
+      setEmbeddingKeySet(row.honcho_embedding_api_key_set === true);
+      setSidecarApplyAvailable(row.honcho_sidecar_apply_available === true);
+      setSidecarMessage(row.honcho_sidecar_apply_message || '');
+      update({ honcho_deriver_api_key: '', honcho_embedding_api_key: '' });
       setEffectiveStoragePath(row.effective_harness_storage_path || '');
       if (row.restart_scheduled) {
         setRestarting(true);
@@ -163,6 +205,10 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         return;
       }
       notify.success('运行设置已保存');
+      if (row.honcho_sidecar_apply_message) {
+        if (row.honcho_sidecar_applied) notify.success(row.honcho_sidecar_apply_message);
+        else notify.warning(row.honcho_sidecar_apply_message);
+      }
     } catch (error) {
       notify.error(error instanceof Error ? error.message : '保存失败');
     } finally {
@@ -170,11 +216,29 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
     }
   }
 
+  async function applySidecar() {
+    setApplyingSidecar(true);
+    try {
+      const result = await api.post<{ applied: boolean; message: string }>(
+        '/api/enterprise/ui-config/honcho-sidecar',
+        { tenant_id: TENANT_ID },
+      );
+      setSidecarMessage(result.message);
+      notify.success(result.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '应用到 sidecar 失败';
+      setSidecarMessage(message);
+      notify.error(message);
+    } finally {
+      setApplyingSidecar(false);
+    }
+  }
+
   return (
     <>
       <div className="page-title">
         <div><h3>运行设置</h3><p className="text-[12px] text-muted-foreground">统一影响当前租户下所有数字员工的执行行为。</p></div>
-        <UIButton disabled={!ready || loading || restarting} onClick={() => void save()}>
+        <UIButton disabled={!ready || loading || restarting || applyingSidecar} onClick={() => void save()}>
           {restarting ? <RotateCcw className="size-[15px] animate-spin" /> : <SaveOutlined />}
           {restarting ? '等待应用重启' : '保存设置'}
         </UIButton>
@@ -305,8 +369,100 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
             />
           </LabeledField>
           <p className="text-[11px] leading-[16px] text-muted-foreground">
-            API 密钥（HONCHO_API_KEY）和工作区前缀（HONCHO_WORKSPACE_PREFIX）仍只从环境变量读取。
+            访问 Honcho 的 API 密钥（HONCHO_API_KEY）和工作区前缀（HONCHO_WORKSPACE_PREFIX）仍只从环境变量读取。下面的密钥是 Honcho 自己调用对话抽取和向量嵌入时使用的，不会改用本平台的模型密钥。
           </p>
+          <div className="rounded-[11px] border border-[#f3e2c2] bg-[#fffaf3] px-[13px] py-[11px] text-[11px] leading-[18px] text-[#6d5430]">
+            对话抽取模型负责从对话里抽取长期画像。向量嵌入负责把画像写成向量，不是分词。已有向量数据后不要随意更换嵌入模型或维度，否则需要重建向量库。保存后留在本平台；只有配置了 HONCHO_SIDECAR_ENV_FILE，才会写入 Honcho 的环境文件。写入后请重启 Honcho 的 api 与 deriver。写入对话抽取模型时，Honcho 的摘要、梦境和辩证问答会改用同一个对话模型和接口地址。
+          </div>
+          <div className="grid gap-[14px] md:grid-cols-2">
+            <LabeledField label="对话抽取模型 ID" hint="OpenAI 兼容的对话模型，例如 deepseek-chat。">
+              <Input
+                value={form.honcho_deriver_model}
+                maxLength={200}
+                disabled={!ready}
+                onChange={(event) => update({ honcho_deriver_model: event.target.value })}
+                placeholder="deepseek-chat"
+              />
+            </LabeledField>
+            <LabeledField label="对话抽取接口地址" hint="OpenAI 兼容接口地址，例如 https://api.deepseek.com。留空则沿用 Honcho 默认地址。">
+              <Input
+                value={form.honcho_deriver_base_url}
+                maxLength={500}
+                disabled={!ready}
+                onChange={(event) => update({ honcho_deriver_base_url: event.target.value })}
+                placeholder="https://api.deepseek.com"
+              />
+            </LabeledField>
+            <LabeledField label="对话抽取 API 密钥" hint="留空则不修改已保存的密钥。明文只在本次填写时使用，保存后不再回显。">
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={form.honcho_deriver_api_key}
+                maxLength={4000}
+                disabled={!ready}
+                onChange={(event) => update({ honcho_deriver_api_key: event.target.value })}
+                placeholder={deriverKeySet ? '已配置，留空则不修改' : '尚未配置'}
+              />
+            </LabeledField>
+            <LabeledField label="向量嵌入模型 ID" hint="例如阿里云百炼 text-embedding-v4。">
+              <Input
+                value={form.honcho_embedding_model}
+                maxLength={200}
+                disabled={!ready}
+                onChange={(event) => update({ honcho_embedding_model: event.target.value })}
+                placeholder="text-embedding-v4"
+              />
+            </LabeledField>
+            <LabeledField label="向量嵌入接口地址" hint="OpenAI 兼容接口地址，例如 https://dashscope.aliyuncs.com/compatible-mode/v1。">
+              <Input
+                value={form.honcho_embedding_base_url}
+                maxLength={500}
+                disabled={!ready}
+                onChange={(event) => update({ honcho_embedding_base_url: event.target.value })}
+                placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+              />
+            </LabeledField>
+            <LabeledField label="向量嵌入 API 密钥" hint="与对话抽取密钥分开保存。留空则不修改已保存的密钥。">
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={form.honcho_embedding_api_key}
+                maxLength={4000}
+                disabled={!ready}
+                onChange={(event) => update({ honcho_embedding_api_key: event.target.value })}
+                placeholder={embeddingKeySet ? '已配置，留空则不修改' : '尚未配置'}
+              />
+            </LabeledField>
+            <LabeledField label="向量维度" hint="默认 1536。已有向量数据后不要修改，修改后需要重建向量库。">
+              <Input
+                type="number"
+                min={1}
+                max={8192}
+                step={1}
+                disabled={!ready}
+                value={form.honcho_embedding_dimensions}
+                onChange={(event) => update({ honcho_embedding_dimensions: event.target.value })}
+              />
+            </LabeledField>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-[12px]">
+            <p className="text-[11px] leading-[16px] text-muted-foreground">
+              {sidecarApplyAvailable
+                ? '当前已配置 sidecar 环境文件。保存模型设置时会写入该文件，仍需重启 Honcho 的 api 与 deriver。'
+                : '当前未配置 HONCHO_SIDECAR_ENV_FILE。保存只留在本平台，「应用到 sidecar」会提示失败。'}
+            </p>
+            <UIButton
+              type="button"
+              variant="outline"
+              disabled={!ready || applyingSidecar || loading}
+              onClick={() => void applySidecar()}
+            >
+              应用到 sidecar
+            </UIButton>
+          </div>
+          {sidecarMessage && (
+            <p className="text-[12px] leading-[18px] text-[#52637d]">{sidecarMessage}</p>
+          )}
         </CardContent>
       </Card>
       <Card className="editor-card settings-card">
@@ -389,30 +545,57 @@ export function validateHonchoSettings(form: UiConfigForm): string | null {
   if (!Number.isInteger(timeout) || timeout < 50 || timeout > 10_000) {
     return 'Honcho 画像读取超时必须是 50–10000 之间的整数毫秒';
   }
-  const url = form.honcho_base_url.trim();
-  if (!url) return null;
-  if (url.length > 500 || url.includes('\\')) {
-    return 'Honcho 服务地址必须是 http 或 https URL';
+  const serviceUrlError = validateHttpUrl(form.honcho_base_url, 'Honcho 服务地址');
+  if (serviceUrlError) return serviceUrlError;
+  const deriverModelError = validateModelId(form.honcho_deriver_model);
+  if (deriverModelError) return deriverModelError;
+  const embeddingModelError = validateModelId(form.honcho_embedding_model);
+  if (embeddingModelError) return embeddingModelError;
+  const deriverUrlError = validateHttpUrl(form.honcho_deriver_base_url, '对话抽取接口地址');
+  if (deriverUrlError) return deriverUrlError;
+  const embeddingUrlError = validateHttpUrl(form.honcho_embedding_base_url, '向量嵌入接口地址');
+  if (embeddingUrlError) return embeddingUrlError;
+  const dimensions = Number(form.honcho_embedding_dimensions);
+  if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > 8192) {
+    return '向量维度必须是 1–8192 之间的整数';
   }
-  const lowered = url.toLowerCase();
+  return null;
+}
+
+function validateModelId(value: string): string | null {
+  const text = value.trim();
+  if (!text) return null;
+  if (!/^[A-Za-z0-9_.:/+-]{1,200}$/.test(text)) {
+    return '模型 ID 只能包含字母、数字和 . _ : / + -';
+  }
+  return null;
+}
+
+function validateHttpUrl(url: string, label: string): string | null {
+  const value = url.trim();
+  if (!value) return null;
+  if (value.length > 500 || value.includes('\\')) {
+    return `${label}必须是 http 或 https URL`;
+  }
+  const lowered = value.toLowerCase();
   const malformedScheme = lowered.startsWith('http:/') && !lowered.startsWith('http://')
     || lowered.startsWith('https:/') && !lowered.startsWith('https://');
   if (malformedScheme) {
-    return 'Honcho 服务地址必须是 http 或 https URL';
+    return `${label}必须是 http 或 https URL`;
   }
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(value);
     if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) {
-      return 'Honcho 服务地址必须是 http 或 https URL';
+      return `${label}必须是 http 或 https URL`;
     }
     if (parsed.username || parsed.password) {
-      return 'Honcho 服务地址不能包含账号或密码';
+      return `${label}不能包含账号或密码`;
     }
     if (parsed.search || parsed.hash) {
-      return 'Honcho 服务地址不能包含查询参数或片段';
+      return `${label}不能包含查询参数或片段`;
     }
   } catch {
-    return 'Honcho 服务地址必须是 http 或 https URL';
+    return `${label}必须是 http 或 https URL`;
   }
   return null;
 }

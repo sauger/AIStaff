@@ -88,11 +88,15 @@ class Settings(BaseSettings):
     # honcho_timeout_ms then override this process. HONCHO_API_KEY and
     # HONCHO_WORKSPACE_PREFIX stay env-only (no secret field on that page;
     # the prefix is the Honcho identity namespace).
+    # HONCHO_SIDECAR_ENV_FILE is an absolute path to the Honcho process .env.
+    # When set, saving deriver/embedding settings rewrites that file. The
+    # deriver and embedding API keys are Honcho's own keys, not this app's.
     honcho_enabled: bool = False
     honcho_base_url: str = ""
     honcho_api_key: str = ""
     honcho_timeout_ms: int = 200
     honcho_workspace_prefix: str = "tenant:"
+    honcho_sidecar_env_file: str = ""
 
     model_config = SettingsConfigDict(
         env_file=_os.environ.get("ULTRARAG_DOTENV", ".env"),

@@ -386,6 +386,16 @@ export type UIConfigRead = {
   honcho_enabled: boolean;
   honcho_base_url: string;
   honcho_timeout_ms: number;
+  honcho_deriver_model?: string;
+  honcho_deriver_base_url?: string;
+  honcho_deriver_api_key_set?: boolean;
+  honcho_embedding_model?: string;
+  honcho_embedding_base_url?: string;
+  honcho_embedding_api_key_set?: boolean;
+  honcho_embedding_dimensions?: number;
+  honcho_sidecar_apply_available?: boolean;
+  honcho_sidecar_applied?: boolean;
+  honcho_sidecar_apply_message?: string;
   updated_at: string;
 };
 

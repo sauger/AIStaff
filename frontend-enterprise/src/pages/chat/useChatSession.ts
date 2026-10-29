@@ -402,6 +402,16 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     honcho_enabled: false,
     honcho_base_url: '',
     honcho_timeout_ms: 200,
+    honcho_deriver_model: '',
+    honcho_deriver_base_url: '',
+    honcho_deriver_api_key_set: false,
+    honcho_embedding_model: '',
+    honcho_embedding_base_url: '',
+    honcho_embedding_api_key_set: false,
+    honcho_embedding_dimensions: 1536,
+    honcho_sidecar_apply_available: false,
+    honcho_sidecar_applied: false,
+    honcho_sidecar_apply_message: '',
     updated_at: '',
   });
   const chatMessagesRef = useRef<HTMLDivElement>(null);

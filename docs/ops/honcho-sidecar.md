@@ -73,13 +73,55 @@ DERIVER_MODEL_CONFIG__MODEL=gpt-5.4-mini
 
 `LLM_ANTHROPIC_API_KEY` and `LLM_GEMINI_API_KEY` exist for the other transports. Set one provider key. Do not commit it.
 
+## Runtime settings
+
+Admins can set the deriver and embedding models in **运行设置 → 长期记忆 / Honcho**, next to the master switch. These are Honcho's own model settings. They are not AIStaff's model key, and they are not `HONCHO_API_KEY` (the optional bearer token AIStaff uses when calling Honcho).
+
+| UI label | Saved column | Sidecar env key |
+| --- | --- | --- |
+| 对话抽取模型 ID | `honcho_deriver_model` | `DERIVER_MODEL_CONFIG__MODEL` |
+| 对话抽取接口地址 | `honcho_deriver_base_url` | `DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL` |
+| 对话抽取 API 密钥 | `honcho_deriver_api_key_encrypted` | `LLM_OPENAI_API_KEY` |
+| 向量嵌入模型 ID | `honcho_embedding_model` | `EMBEDDING_MODEL_CONFIG__MODEL` |
+| 向量嵌入接口地址 | `honcho_embedding_base_url` | `EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL` |
+| 向量嵌入 API 密钥 | `honcho_embedding_api_key_encrypted` | `EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY` |
+| 向量维度 | `honcho_embedding_dimensions` | `EMBEDDING_VECTOR_DIMENSIONS` (default 1536) |
+
+Transport is always `openai` when a section is applied, which covers OpenAI-compatible endpoints such as DeepSeek and 阿里云百炼. A typical China setup is `deepseek-chat` at `https://api.deepseek.com` for 对话抽取, and `text-embedding-v4` at `https://dashscope.aliyuncs.com/compatible-mode/v1` with vector dimensions 1536 for 向量嵌入. 向量嵌入 is the embedding model, not a tokenizer.
+
+API keys are encrypted with `APP_SECRET` before they are stored. Reads return `honcho_deriver_api_key_set` / `honcho_embedding_api_key_set` and never the plaintext. Submitting an empty key leaves the stored secret unchanged and does not overwrite that key in the sidecar file.
+
+Applying a deriver model also points dialectic (`minimal` through `max`), summary, and dream deduction/induction at the same chat model and base URL. Those features keep using `LLM_OPENAI_API_KEY`. Embedding keeps its own key when one is saved, so it does not have to share the chat key.
+
+The sidecar file is process-wide. The last successful apply wins for that Honcho, even if more than one tenant has saved different models.
+
+### Apply and restart
+
+Set this on the AIStaff process, not in Honcho:
+
+```env
+HONCHO_SIDECAR_ENV_FILE=/mnt/data/honcho/.env
+```
+
+The path must be absolute and the AIStaff user must be able to write it. AIStaff rewrites only the keys in the table above (plus the matching dialectic, summary, and dream keys) and leaves the rest of the file, including comments, in place. The file mode is set to `0600`.
+
+- When the path is set, saving 运行设置 writes the file if a deriver or embedding model is saved.
+- When the path is empty, the save still stays in `ui_configs`. **应用到 sidecar** returns a clear error naming `HONCHO_SIDECAR_ENV_FILE` and does not create a file.
+- Honcho does not reload `.env` live. From `/mnt/data/honcho`, restart the API and the deriver:
+
+```bash
+docker compose up -d --force-recreate api deriver
+```
+
+Do not change the embedding model or `EMBEDDING_VECTOR_DIMENSIONS` after vectors exist. The column width and the vectors already stored stop matching, and the vector store has to be rebuilt. If a provider rejects structured output, add `DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE=json_object` by hand; that line is preserved. If 百炼 rejects a large embedding batch, add `EMBEDDING_MODEL_CONFIG__MAX_BATCH_SIZE=10` the same way.
+
 ## Start
 
 1. Checkout `v3.4.1` under `/mnt/data/honcho` and apply the bind mounts above.
 2. Fill `.env` on that disk. The deriver reads `DERIVER_MODEL_CONFIG__MODEL`.
 3. Start order: Postgres and Redis, then the API, then the deriver. From `/mnt/data/honcho`: `docker compose up -d`. AIStaff starts after `GET /health` on the API succeeds.
-4. In AIStaff set `HONCHO_ENABLED=true`, `HONCHO_BASE_URL` (`http://127.0.0.1:8000` or the Compose service URL), and `HONCHO_API_KEY` only if that Honcho deployment requires a bearer token. `HONCHO_TIMEOUT_MS` defaults to 200 and applies only to the synchronous portrait read.
-5. Turn on `honcho_enabled` for one employee in the profile editor. The master switch and the employee switch must both be on. Group chats are skipped.
+4. In AIStaff set `HONCHO_ENABLED=true`, `HONCHO_BASE_URL` (`http://127.0.0.1:8000` or the Compose service URL), and `HONCHO_API_KEY` only if that Honcho deployment requires a bearer token. `HONCHO_TIMEOUT_MS` defaults to 200 and applies only to the synchronous portrait read. Set `HONCHO_SIDECAR_ENV_FILE` to this checkout's `.env` if admins should apply deriver and embedding settings from 运行设置.
+5. In 运行设置, save the 对话抽取 and 向量嵌入 fields, then restart Honcho `api` and `deriver` as above. Turn on the Honcho master switch and `honcho_enabled` for one employee in the profile editor. Both switches must be on. Group chats are skipped.
 
 ```env
 HONCHO_ENABLED=true

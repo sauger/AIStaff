@@ -774,6 +774,15 @@ class UIConfig(SQLModel, table=True):
     honcho_enabled: Optional[bool] = Field(default=None)
     honcho_base_url: Optional[str] = Field(default=None)
     honcho_timeout_ms: Optional[int] = Field(default=None)
+    # Honcho sidecar model settings. API keys are Fernet ciphertext, never plaintext.
+    # NULL model means that section has not been saved and must not rewrite the sidecar.
+    honcho_deriver_model: Optional[str] = Field(default=None)
+    honcho_deriver_base_url: Optional[str] = Field(default=None)
+    honcho_deriver_api_key_encrypted: Optional[str] = Field(default=None)
+    honcho_embedding_model: Optional[str] = Field(default=None)
+    honcho_embedding_base_url: Optional[str] = Field(default=None)
+    honcho_embedding_api_key_encrypted: Optional[str] = Field(default=None)
+    honcho_embedding_dimensions: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

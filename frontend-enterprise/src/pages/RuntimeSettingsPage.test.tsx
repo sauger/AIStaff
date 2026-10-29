@@ -25,6 +25,13 @@ const validForm = {
   honcho_enabled: false,
   honcho_base_url: '',
   honcho_timeout_ms: '200',
+  honcho_deriver_model: '',
+  honcho_deriver_base_url: '',
+  honcho_deriver_api_key: '',
+  honcho_embedding_model: '',
+  honcho_embedding_base_url: '',
+  honcho_embedding_api_key: '',
+  honcho_embedding_dimensions: '1536',
 };
 
 describe('runtime context settings validation', () => {
@@ -77,5 +84,26 @@ describe('honcho runtime settings validation', () => {
       ...validForm,
       honcho_base_url: 'http://user:pass@127.0.0.1:8000',
     })).toBe('Honcho 服务地址不能包含账号或密码');
+  });
+
+  it('rejects a bad model id, embedding URL, and vector dimension', () => {
+    expect(validateHonchoSettings({
+      ...validForm,
+      honcho_deriver_model: 'deep seek',
+    })).toBe('模型 ID 只能包含字母、数字和 . _ : / + -');
+    expect(validateHonchoSettings({
+      ...validForm,
+      honcho_embedding_base_url: 'file:///tmp/embed',
+    })).toBe('向量嵌入接口地址必须是 http 或 https URL');
+    expect(validateHonchoSettings({
+      ...validForm,
+      honcho_embedding_dimensions: '0',
+    })).toBe('向量维度必须是 1–8192 之间的整数');
+    expect(validateHonchoSettings({
+      ...validForm,
+      honcho_deriver_model: 'deepseek-chat',
+      honcho_embedding_model: 'text-embedding-v4',
+      honcho_embedding_dimensions: '1536',
+    })).toBeNull();
   });
 });
