@@ -1364,3 +1364,111 @@ def test_replace_cancel_restores_previous_head_and_keeps_document(
         assert branch.head_version == "1.0.0"
         assert db.get(KnowledgeDocument, "kdoc_keep") is not None
         assert db.get(KnowledgeUpdateProposal, proposal.id).status == "cancelled"
+
+
+def test_channel_negative_reply_then_replace_updates_document(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    _visible(monkeypatch)
+    from types import SimpleNamespace
+
+    import app.knowledge.proposals as proposals
+    from app.channels.service_intake import _try_handle_knowledge_proposal_confirmation
+    from app.db.models import AgentKnowledgeBranch
+    from app.knowledge.service import KnowledgeService
+
+    monkeypatch.setattr(proposals, "enqueue_async_job", lambda *args, **kwargs: None)
+    engine = _engine()
+    with Session(engine) as db:
+        session = _seed(db)
+        session.channel = "wecom"
+        binding = ChannelBinding(
+            id="chan_replace_flow",
+            tenant_id="tenant_kp",
+            agent_id="agent_kp",
+            channel="wecom",
+            status="active",
+            external_account_key="wecom:replace-flow",
+        )
+        db.add(binding)
+        db.add(
+            KnowledgeDocument(
+                id="kdoc_live",
+                tenant_id="tenant_kp",
+                knowledge_base_id="kb_kp",
+                knowledge_base_version_id="kbver_kp",
+                filename="制度.txt",
+                file_type="txt",
+                title="制度",
+                status="ready",
+                source_sha256="old-hash",
+                metadata_json={"raw_text": "旧的差旅标准：只能坐绿皮火车。"},
+            )
+        )
+        db.add(session)
+        db.commit()
+        attachment = _attachment(data="新的差旅标准：可以坐高铁二等座。".encode())
+        proposal = create_knowledge_update_proposal(
+            db,
+            chat_session=session,
+            attachment=attachment,
+            source_message_id="turn_replace_flow",
+            requested_action="create",
+        )
+        assert proposal.candidates_json
+        refused = SimpleNamespace(
+            text=f"不要新增 {proposal.confirmation_code}",
+            external_conv_id="wecom_conv",
+            from_user_id="external-user",
+            is_group=False,
+            event_id="event_refuse_replace",
+        )
+        assert _try_handle_knowledge_proposal_confirmation(
+            db,
+            binding,
+            refused,
+            user=SimpleNamespace(id="user_owner"),
+            chat_session=session,
+            target={"to_user_id": "external-user", "context_token": "ctx"},
+            scope="scope",
+        )
+        refused_row = db.get(KnowledgeUpdateProposal, proposal.id)
+        assert refused_row.status == "pending"
+        assert refused_row.job_id is None
+        replaced = SimpleNamespace(
+            text=f"覆盖 1 {proposal.confirmation_code}",
+            external_conv_id="wecom_conv",
+            from_user_id="external-user",
+            is_group=False,
+            event_id="event_do_replace",
+        )
+        assert _try_handle_knowledge_proposal_confirmation(
+            db,
+            binding,
+            replaced,
+            user=SimpleNamespace(id="user_owner"),
+            chat_session=session,
+            target={"to_user_id": "external-user", "context_token": "ctx"},
+            scope="scope",
+        )
+        executing = db.get(KnowledgeUpdateProposal, proposal.id)
+        assert executing.job_id
+        KnowledgeService(db)._run_ingest_job(executing.job_id)
+        finished = db.get(KnowledgeUpdateProposal, proposal.id)
+        assert finished.status == "succeeded"
+        branch = db.exec(select(AgentKnowledgeBranch)).one()
+        head = db.exec(
+            select(KnowledgeBaseVersion).where(
+                KnowledgeBaseVersion.version == branch.head_version
+            )
+        ).one()
+        current = db.exec(
+            select(KnowledgeDocument).where(
+                KnowledgeDocument.knowledge_base_version_id == head.id,
+                KnowledgeDocument.filename == "制度.txt",
+            )
+        ).one()
+        assert current.status == "ready"
+        assert "高铁二等座" in str((current.metadata_json or {}).get("raw_text") or "")
+        assert db.get(KnowledgeDocument, "kdoc_live").metadata_json["raw_text"].startswith("旧的差旅标准")

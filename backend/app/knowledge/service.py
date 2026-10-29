@@ -470,7 +470,18 @@ class KnowledgeService:
                     AgentKnowledgeBranch.knowledge_base_id == job.knowledge_base_id,
                 )
             ).first()
-            if branch is not None and branch.head_version != job.knowledge_base_version_id:
+            current_version = (
+                self.db.get(KnowledgeBaseVersion, job.knowledge_base_version_id)
+                if job.knowledge_base_version_id
+                else None
+            )
+            if (
+                branch is not None
+                and (
+                    current_version is None
+                    or branch.head_version != current_version.version
+                )
+            ):
                 raise KnowledgeParseError("知识库版本已更新，本次覆盖已取消。")
         target = self.db.get(KnowledgeDocument, target_id) if target_id else None
         if (
