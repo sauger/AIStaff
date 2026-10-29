@@ -16,7 +16,7 @@ def test_build_deriver_env_uses_openai_transport_and_the_same_chat_model() -> No
         deriver_model="deepseek-chat",
         deriver_base_url="https://api.deepseek.com",
         deriver_api_key="sk-deriver",
-        embedding_model="",
+        embedding_model=None,
         embedding_base_url="",
         embedding_api_key="",
         embedding_dimensions=None,
@@ -44,7 +44,7 @@ def test_build_deriver_env_uses_openai_transport_and_the_same_chat_model() -> No
 
 def test_build_embedding_env_keeps_a_separate_key_and_default_dimensions() -> None:
     updates = build_honcho_model_env(
-        deriver_model="",
+        deriver_model=None,
         deriver_base_url="",
         deriver_api_key="should-not-write-without-deriver-model",
         embedding_model="text-embedding-v4",
@@ -82,17 +82,87 @@ def test_blank_embedding_key_does_not_schedule_a_key_rewrite() -> None:
     assert updates["EMBEDDING_VECTOR_DIMENSIONS"] == "1024"
 
 
-def test_empty_models_cannot_build_an_apply_payload() -> None:
+def test_unset_models_cannot_build_an_apply_payload() -> None:
     with pytest.raises(HonchoSidecarApplyError, match="对话抽取模型或向量嵌入模型"):
         build_honcho_model_env(
-            deriver_model="  ",
+            deriver_model=None,
             deriver_base_url="",
             deriver_api_key="sk-ignored",
-            embedding_model="",
+            embedding_model=None,
             embedding_base_url="",
             embedding_api_key="sk-ignored",
             embedding_dimensions=1536,
         )
+
+
+def test_clearing_a_model_deletes_managed_keys_but_not_api_keys() -> None:
+    updates = build_honcho_model_env(
+        deriver_model="",
+        deriver_base_url="",
+        deriver_api_key="sk-deriver",
+        embedding_model="",
+        embedding_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        embedding_api_key="sk-embed",
+        embedding_dimensions=1536,
+    )
+
+    assert updates["DERIVER_MODEL_CONFIG__MODEL"] is None
+    assert updates["DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL"] is None
+    assert updates["DIALECTIC_LEVELS__low__MODEL_CONFIG__MODEL"] is None
+    assert updates["SUMMARY_MODEL_CONFIG__MODEL"] is None
+    assert updates["DREAM_DEDUCTION_MODEL_CONFIG__OVERRIDES__BASE_URL"] is None
+    assert updates["DREAM_INDUCTION_MODEL_CONFIG__MODEL"] is None
+    assert updates["EMBEDDING_MODEL_CONFIG__MODEL"] is None
+    assert updates["EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL"] is None
+    assert updates["EMBEDDING_VECTOR_DIMENSIONS"] is None
+    assert "LLM_OPENAI_API_KEY" not in updates
+    assert "EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY" not in updates
+
+
+def test_clearing_models_removes_those_lines_and_keeps_secrets(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text(
+        "\n".join(
+            [
+                "LLM_OPENAI_API_KEY=keep-chat",
+                "DERIVER_MODEL_CONFIG__MODEL=deepseek-chat",
+                "DERIVER_MODEL_CONFIG__TRANSPORT=openai",
+                "DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL=https://api.deepseek.com",
+                "DIALECTIC_LEVELS__minimal__MODEL_CONFIG__MODEL=deepseek-chat",
+                "SUMMARY_MODEL_CONFIG__MODEL=deepseek-chat",
+                "DREAM_INDUCTION_MODEL_CONFIG__MODEL=deepseek-chat",
+                "EMBEDDING_MODEL_CONFIG__MODEL=text-embedding-v4",
+                "EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL=https://example.test/v1",
+                "EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY=keep-embed",
+                "EMBEDDING_VECTOR_DIMENSIONS=1536",
+                "UNRELATED=1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    updates = build_honcho_model_env(
+        deriver_model="",
+        deriver_base_url="",
+        deriver_api_key="",
+        embedding_model="text-embedding-v4",
+        embedding_base_url="",
+        embedding_api_key="",
+        embedding_dimensions=1536,
+    )
+    apply_sidecar_env_file(str(path), updates)
+    text = path.read_text(encoding="utf-8")
+
+    assert "LLM_OPENAI_API_KEY=keep-chat" in text
+    assert "EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY=keep-embed" in text
+    assert "UNRELATED=1" in text
+    assert "DERIVER_MODEL_CONFIG__MODEL" not in text
+    assert "DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL" not in text
+    assert "DIALECTIC_LEVELS__minimal__MODEL_CONFIG__MODEL" not in text
+    assert "SUMMARY_MODEL_CONFIG__MODEL" not in text
+    assert "DREAM_INDUCTION_MODEL_CONFIG__MODEL" not in text
+    assert "EMBEDDING_MODEL_CONFIG__MODEL=text-embedding-v4" in text
+    assert "EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL" not in text
 
 
 def test_apply_updates_managed_keys_and_preserves_the_rest(tmp_path: Path) -> None:

@@ -45,54 +45,137 @@ class HonchoSidecarApplyError(Exception):
         super().__init__(message)
 
 
+def deriver_managed_keys() -> list[str]:
+    """Model, transport, and base URL keys. The chat API key is not included."""
+
+    keys = [
+        "DERIVER_MODEL_CONFIG__TRANSPORT",
+        "DERIVER_MODEL_CONFIG__MODEL",
+        "DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL",
+    ]
+    for level in _DIALECTIC_LEVELS:
+        prefix = f"DIALECTIC_LEVELS__{level}__MODEL_CONFIG"
+        keys.extend(
+            [
+                f"{prefix}__TRANSPORT",
+                f"{prefix}__MODEL",
+                f"{prefix}__OVERRIDES__BASE_URL",
+            ]
+        )
+    for name in _TEXT_FEATURES:
+        keys.extend(
+            [
+                f"{name}_MODEL_CONFIG__TRANSPORT",
+                f"{name}_MODEL_CONFIG__MODEL",
+                f"{name}_MODEL_CONFIG__OVERRIDES__BASE_URL",
+            ]
+        )
+    return keys
+
+
+def embedding_managed_keys() -> list[str]:
+    """Embedding model keys. The embedding API key is not included."""
+
+    return [
+        "EMBEDDING_MODEL_CONFIG__TRANSPORT",
+        "EMBEDDING_MODEL_CONFIG__MODEL",
+        "EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL",
+        "EMBEDDING_VECTOR_DIMENSIONS",
+    ]
+
+
 def build_honcho_model_env(
     *,
-    deriver_model: str,
+    deriver_model: str | None,
     deriver_base_url: str,
     deriver_api_key: str,
-    embedding_model: str,
+    embedding_model: str | None,
     embedding_base_url: str,
     embedding_api_key: str,
     embedding_dimensions: int | None,
 ) -> dict[str, str | None]:
-    """Return env assignments. ``None`` deletes that key from the sidecar file."""
+    """Return env assignments.
 
-    updates: dict[str, str | None] = {}
-    deriver = deriver_model.strip()
-    embedding = embedding_model.strip()
-    if not deriver and not embedding:
+    ``None`` for a model means that section was never saved and must not be
+    touched. ``""`` means the admin cleared it, so its managed keys are
+    deleted. A ``None`` value inside the result deletes that one key.
+    API keys are never deleted: a blank key leaves the existing secret.
+    """
+
+    deriver = None if deriver_model is None else deriver_model.strip()
+    embedding = None if embedding_model is None else embedding_model.strip()
+    if deriver is None and embedding is None:
         raise HonchoSidecarApplyError(SIDECAR_MODELS_MISSING_MESSAGE)
-    if deriver:
-        base_url = deriver_base_url.strip() or None
-        updates["DERIVER_MODEL_CONFIG__TRANSPORT"] = "openai"
-        updates["DERIVER_MODEL_CONFIG__MODEL"] = deriver
-        updates["DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL"] = base_url
-        if deriver_api_key.strip():
-            updates["LLM_OPENAI_API_KEY"] = deriver_api_key.strip()
-        for level in _DIALECTIC_LEVELS:
-            prefix = f"DIALECTIC_LEVELS__{level}__MODEL_CONFIG"
-            updates[f"{prefix}__TRANSPORT"] = "openai"
-            updates[f"{prefix}__MODEL"] = deriver
-            updates[f"{prefix}__OVERRIDES__BASE_URL"] = base_url
-        for name in _TEXT_FEATURES:
-            updates[f"{name}_MODEL_CONFIG__TRANSPORT"] = "openai"
-            updates[f"{name}_MODEL_CONFIG__MODEL"] = deriver
-            updates[f"{name}_MODEL_CONFIG__OVERRIDES__BASE_URL"] = base_url
-    if embedding:
-        dimensions = (
-            _DEFAULT_EMBEDDING_DIMENSIONS
-            if embedding_dimensions is None
-            else int(embedding_dimensions)
-        )
-        if dimensions < 1 or dimensions > 8192:
-            raise HonchoSidecarApplyError("向量维度必须是 1–8192 之间的整数")
-        updates["EMBEDDING_MODEL_CONFIG__TRANSPORT"] = "openai"
-        updates["EMBEDDING_MODEL_CONFIG__MODEL"] = embedding
-        updates["EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL"] = embedding_base_url.strip() or None
-        if embedding_api_key.strip():
-            updates["EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY"] = embedding_api_key.strip()
-        updates["EMBEDDING_VECTOR_DIMENSIONS"] = str(dimensions)
+    updates: dict[str, str | None] = {}
+    if deriver is not None:
+        if not deriver:
+            updates.update(dict.fromkeys(deriver_managed_keys()))
+        else:
+            base_url = deriver_base_url.strip() or None
+            updates["DERIVER_MODEL_CONFIG__TRANSPORT"] = "openai"
+            updates["DERIVER_MODEL_CONFIG__MODEL"] = deriver
+            updates["DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL"] = base_url
+            if deriver_api_key.strip():
+                updates["LLM_OPENAI_API_KEY"] = deriver_api_key.strip()
+            for level in _DIALECTIC_LEVELS:
+                prefix = f"DIALECTIC_LEVELS__{level}__MODEL_CONFIG"
+                updates[f"{prefix}__TRANSPORT"] = "openai"
+                updates[f"{prefix}__MODEL"] = deriver
+                updates[f"{prefix}__OVERRIDES__BASE_URL"] = base_url
+            for name in _TEXT_FEATURES:
+                updates[f"{name}_MODEL_CONFIG__TRANSPORT"] = "openai"
+                updates[f"{name}_MODEL_CONFIG__MODEL"] = deriver
+                updates[f"{name}_MODEL_CONFIG__OVERRIDES__BASE_URL"] = base_url
+    if embedding is not None:
+        if not embedding:
+            updates.update(dict.fromkeys(embedding_managed_keys()))
+        else:
+            dimensions = (
+                _DEFAULT_EMBEDDING_DIMENSIONS
+                if embedding_dimensions is None
+                else int(embedding_dimensions)
+            )
+            if dimensions < 1 or dimensions > 8192:
+                raise HonchoSidecarApplyError("向量维度必须是 1–8192 之间的整数")
+            updates["EMBEDDING_MODEL_CONFIG__TRANSPORT"] = "openai"
+            updates["EMBEDDING_MODEL_CONFIG__MODEL"] = embedding
+            updates["EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL"] = (
+                embedding_base_url.strip() or None
+            )
+            if embedding_api_key.strip():
+                updates["EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY"] = embedding_api_key.strip()
+            updates["EMBEDDING_VECTOR_DIMENSIONS"] = str(dimensions)
     return updates
+
+
+def read_sidecar_embedding_dimensions(path: str) -> int | None:
+    """Return the dimension currently written in the sidecar file, if any."""
+
+    if not str(path or "").strip():
+        return None
+    try:
+        target = resolve_sidecar_env_file(path)
+    except HonchoSidecarApplyError:
+        return None
+    if not target.is_file():
+        return None
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = _ASSIGNMENT.match(stripped)
+        if match is None or match.group(1) != "EMBEDDING_VECTOR_DIMENSIONS":
+            continue
+        raw = stripped.split("=", 1)[1].strip().strip('"').strip("'")
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
 
 
 def apply_sidecar_env_file(path: str, updates: dict[str, str | None]) -> bool:

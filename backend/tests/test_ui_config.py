@@ -754,3 +754,194 @@ def test_apply_endpoint_keeps_existing_sidecar_key_when_stored_key_is_empty(
     assert "DERIVER_MODEL_CONFIG__MODEL=deepseek-chat" in text
     assert "UNRELATED=1" in text
     assert "keep-me" not in applied.message
+
+
+def test_changing_saved_embedding_dimensions_requires_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("UNRELATED=1\n", encoding="utf-8")
+    monkeypatch.setattr(
+        ui_config_module,
+        "get_settings",
+        lambda: _honcho_env(honcho_sidecar_env_file=str(env_file)),
+    )
+    db, admin, _member = _admin_db()
+    with db:
+        update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_embedding_model="text-embedding-v4",
+                honcho_embedding_dimensions=1536,
+            ),
+            db,
+            admin,
+        )
+        with pytest.raises(HTTPException) as rejected:
+            update_enterprise_ui_config(
+                UIConfigUpdateRequest(
+                    tenant_id="tenant_demo",
+                    honcho_embedding_dimensions=1024,
+                ),
+                db,
+                admin,
+            )
+        db.rollback()
+        row = db.get(UIConfig, "tenant_demo")
+        assert row is not None
+        assert row.honcho_embedding_dimensions == 1536
+        saved = update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_embedding_dimensions=1024,
+                honcho_embedding_dimensions_confirmed=True,
+            ),
+            db,
+            admin,
+        )
+
+    detail = rejected.value.detail
+    assert rejected.value.status_code == 409
+    assert isinstance(detail, dict)
+    assert detail["code"] == "HONCHO_EMBEDDING_DIMENSIONS_CONFIRM"
+    assert "1024" in detail["message"]
+    assert "1536" in detail["message"]
+    assert "重建向量库" in detail["message"]
+    assert saved.honcho_embedding_dimensions == 1024
+    assert saved.honcho_embedding_dimensions_saved is True
+    assert "EMBEDDING_VECTOR_DIMENSIONS=1024" in env_file.read_text(encoding="utf-8")
+    assert "EMBEDDING_VECTOR_DIMENSIONS=1536" not in env_file.read_text(encoding="utf-8")
+
+
+def test_apply_rejects_a_different_sidecar_dimension_until_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "EMBEDDING_MODEL_CONFIG__MODEL=text-embedding-v4\nEMBEDDING_VECTOR_DIMENSIONS=1536\n",
+        encoding="utf-8",
+    )
+    path_box = {"path": ""}
+    monkeypatch.setattr(
+        ui_config_module,
+        "get_settings",
+        lambda: _honcho_env(honcho_sidecar_env_file=path_box["path"]),
+    )
+    db, admin, _member = _admin_db()
+    with db:
+        update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_embedding_model="text-embedding-v4",
+                honcho_embedding_dimensions=1024,
+            ),
+            db,
+            admin,
+        )
+        path_box["path"] = str(env_file)
+        with pytest.raises(HTTPException) as rejected:
+            apply_enterprise_honcho_sidecar(
+                HonchoSidecarApplyRequest(tenant_id="tenant_demo"),
+                db,
+                admin,
+            )
+        assert "EMBEDDING_VECTOR_DIMENSIONS=1536" in env_file.read_text(encoding="utf-8")
+        applied = apply_enterprise_honcho_sidecar(
+            HonchoSidecarApplyRequest(
+                tenant_id="tenant_demo",
+                honcho_embedding_dimensions_confirmed=True,
+            ),
+            db,
+            admin,
+        )
+
+    detail = rejected.value.detail
+    assert rejected.value.status_code == 409
+    assert isinstance(detail, dict)
+    assert detail["code"] == "HONCHO_EMBEDDING_DIMENSIONS_CONFIRM"
+    assert "重建向量库" in detail["message"]
+    assert applied.applied is True
+    text = env_file.read_text(encoding="utf-8")
+    assert "EMBEDDING_VECTOR_DIMENSIONS=1024" in text
+    assert "EMBEDDING_VECTOR_DIMENSIONS=1536" not in text
+
+
+def test_clearing_a_saved_model_deletes_sidecar_keys_and_keeps_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_OPENAI_API_KEY=keep-chat\nUNRELATED=1\n", encoding="utf-8")
+    monkeypatch.setattr(
+        ui_config_module,
+        "get_settings",
+        lambda: _honcho_env(honcho_sidecar_env_file=str(env_file)),
+    )
+    db, admin, _member = _admin_db()
+    with db:
+        update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_deriver_model="deepseek-chat",
+                honcho_deriver_base_url="https://api.deepseek.com",
+                honcho_deriver_api_key="sk-deriver",
+            ),
+            db,
+            admin,
+        )
+        cleared = update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_deriver_model="",
+                honcho_deriver_base_url="",
+                honcho_deriver_api_key="",
+            ),
+            db,
+            admin,
+        )
+        row = db.get(UIConfig, "tenant_demo")
+
+    text = env_file.read_text(encoding="utf-8")
+    assert cleared.honcho_deriver_model == ""
+    assert row is not None
+    assert decrypt_secret(row.honcho_deriver_api_key_encrypted or "") == "sk-deriver"
+    assert "LLM_OPENAI_API_KEY=sk-deriver" in text
+    assert "UNRELATED=1" in text
+    assert "DERIVER_MODEL_CONFIG__MODEL" not in text
+    assert "DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL" not in text
+    assert "DIALECTIC_LEVELS__low__MODEL_CONFIG__MODEL" not in text
+    assert "SUMMARY_MODEL_CONFIG__MODEL" not in text
+    assert "DREAM_DEDUCTION_MODEL_CONFIG__MODEL" not in text
+
+
+def test_blank_model_does_not_erase_a_hand_written_sidecar_before_it_is_saved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DERIVER_MODEL_CONFIG__MODEL=hand-set\nLLM_OPENAI_API_KEY=keep-chat\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        ui_config_module,
+        "get_settings",
+        lambda: _honcho_env(honcho_sidecar_env_file=str(env_file)),
+    )
+    db, admin, _member = _admin_db()
+    with db:
+        update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_deriver_model="",
+                honcho_embedding_model="",
+            ),
+            db,
+            admin,
+        )
+
+    text = env_file.read_text(encoding="utf-8")
+    assert "DERIVER_MODEL_CONFIG__MODEL=hand-set" in text
+    assert "LLM_OPENAI_API_KEY=keep-chat" in text

@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { validateContextSettings, validateHonchoSettings } from './RuntimeSettingsPage';
+import { embeddingDimensionConfirmText, validateContextSettings, validateHonchoSettings } from './RuntimeSettingsPage';
 
 const validForm = {
   show_thinking_trace: true,
@@ -105,5 +105,11 @@ describe('honcho runtime settings validation', () => {
       honcho_embedding_model: 'text-embedding-v4',
       honcho_embedding_dimensions: '1536',
     })).toBeNull();
+  });
+
+  it('states that changing dimensions requires a vector rebuild', () => {
+    expect(embeddingDimensionConfirmText(1536, 1024)).toBe(
+      '向量维度将从 1536 改为 1024。已有向量数据需要重建向量库。',
+    );
   });
 });

@@ -1,9 +1,10 @@
 import { SaveOutlined } from '../icons';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Button as UIButton, Card, CardContent, CardHeader, CardTitle, Input, Switch, Textarea, notify } from '@/components/ui';
-import { api, TENANT_ID } from '../api/client';
+import { api, ApiError, TENANT_ID } from '../api/client';
 import type { EnterpriseAuthUser } from '../auth';
 import AccountApiKeyDialog from '../components/AccountApiKeyDialog';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import type { UIConfigRead } from '../types';
 import { BrainCircuit, KeyRound, Library, RotateCcw, ShieldCheck } from 'lucide-react';
 
@@ -86,6 +87,9 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
   const [sidecarApplyAvailable, setSidecarApplyAvailable] = useState(false);
   const [sidecarMessage, setSidecarMessage] = useState('');
   const [applyingSidecar, setApplyingSidecar] = useState(false);
+  const [savedEmbeddingDimensions, setSavedEmbeddingDimensions] = useState<number | null>(null);
+  const [sidecarEmbeddingDimensions, setSidecarEmbeddingDimensions] = useState<number | null>(null);
+  const [dimensionConfirm, setDimensionConfirm] = useState<null | 'save' | 'apply'>(null);
   const [apiKeyOpen, setApiKeyOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [sandboxStatus, setSandboxStatus] = useState<Pick<UIConfigRead, 'sandbox_status' | 'sandbox_status_message' | 'sandbox_status_remediation'>>({});
@@ -126,6 +130,7 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         setDeriverKeySet(row.honcho_deriver_api_key_set === true);
         setEmbeddingKeySet(row.honcho_embedding_api_key_set === true);
         setSidecarApplyAvailable(row.honcho_sidecar_apply_available === true);
+        rememberHonchoDimensions(row);
         setSidecarMessage('');
         setUpdatedAt(row.updated_at);
         setEffectiveStoragePath(row.effective_harness_storage_path || '');
@@ -141,7 +146,7 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
       });
   }, []);
 
-  async function save() {
+  async function save(options?: { dimensionConfirmed?: boolean }) {
     const reflectionMaxRounds = Number(form.reflection_max_rounds);
     const agentLoopMaxActions = Number(form.agent_loop_max_actions);
     if (Number.isNaN(reflectionMaxRounds) || Number.isNaN(agentLoopMaxActions)) {
@@ -156,6 +161,16 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
     const honchoError = validateHonchoSettings(form);
     if (honchoError) {
       notify.error(honchoError);
+      return;
+    }
+    const dimensionConfirmed = options?.dimensionConfirmed === true;
+    const nextDimensions = Number(form.honcho_embedding_dimensions);
+    if (
+      !dimensionConfirmed
+      && savedEmbeddingDimensions != null
+      && nextDimensions !== savedEmbeddingDimensions
+    ) {
+      setDimensionConfirm('save');
       return;
     }
     setLoading(true);
@@ -189,11 +204,13 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         honcho_embedding_base_url: form.honcho_embedding_base_url.trim(),
         honcho_embedding_api_key: form.honcho_embedding_api_key,
         honcho_embedding_dimensions: Number(form.honcho_embedding_dimensions),
+        honcho_embedding_dimensions_confirmed: dimensionConfirmed,
       });
       setUpdatedAt(row.updated_at);
       setDeriverKeySet(row.honcho_deriver_api_key_set === true);
       setEmbeddingKeySet(row.honcho_embedding_api_key_set === true);
       setSidecarApplyAvailable(row.honcho_sidecar_apply_available === true);
+      rememberHonchoDimensions(row);
       setSidecarMessage(row.honcho_sidecar_apply_message || '');
       update({ honcho_deriver_api_key: '', honcho_embedding_api_key: '' });
       setEffectiveStoragePath(row.effective_harness_storage_path || '');
@@ -210,28 +227,62 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         else notify.warning(row.honcho_sidecar_apply_message);
       }
     } catch (error) {
+      if (isDimensionConfirmError(error)) {
+        setDimensionConfirm('save');
+        return;
+      }
       notify.error(error instanceof Error ? error.message : '保存失败');
     } finally {
       setLoading(false);
     }
   }
 
-  async function applySidecar() {
+  async function applySidecar(dimensionConfirmed = false) {
+    if (
+      !dimensionConfirmed
+      && savedEmbeddingDimensions != null
+      && sidecarEmbeddingDimensions != null
+      && savedEmbeddingDimensions !== sidecarEmbeddingDimensions
+    ) {
+      setDimensionConfirm('apply');
+      return;
+    }
     setApplyingSidecar(true);
     try {
       const result = await api.post<{ applied: boolean; message: string }>(
         '/api/enterprise/ui-config/honcho-sidecar',
-        { tenant_id: TENANT_ID },
+        {
+          tenant_id: TENANT_ID,
+          honcho_embedding_dimensions_confirmed: dimensionConfirmed,
+        },
+      );
+      setSidecarEmbeddingDimensions(
+        form.honcho_embedding_model.trim() ? savedEmbeddingDimensions : null,
       );
       setSidecarMessage(result.message);
       notify.success(result.message);
     } catch (error) {
+      if (isDimensionConfirmError(error)) {
+        setDimensionConfirm('apply');
+        return;
+      }
       const message = error instanceof Error ? error.message : '应用到 sidecar 失败';
       setSidecarMessage(message);
       notify.error(message);
     } finally {
       setApplyingSidecar(false);
     }
+  }
+
+  function rememberHonchoDimensions(row: UIConfigRead) {
+    setSavedEmbeddingDimensions(
+      row.honcho_embedding_dimensions_saved ? Number(row.honcho_embedding_dimensions) : null,
+    );
+    setSidecarEmbeddingDimensions(
+      typeof row.honcho_sidecar_embedding_dimensions === 'number'
+        ? row.honcho_sidecar_embedding_dimensions
+        : null,
+    );
   }
 
   return (
@@ -494,8 +545,49 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         </CardContent>
       </Card>
       <AccountApiKeyDialog account={currentUser} open={apiKeyOpen} onClose={() => setApiKeyOpen(false)} />
+      <ConfirmDialog
+        open={dimensionConfirm != null}
+        onOpenChange={(open) => {
+          if (!open) setDimensionConfirm(null);
+        }}
+        title="修改向量维度？"
+        description={dimensionConfirmText()}
+        confirmText="确认修改"
+        cancelText="取消"
+        onConfirm={() => {
+          const action = dimensionConfirm;
+          setDimensionConfirm(null);
+          if (action === 'save') void save({ dimensionConfirmed: true });
+          if (action === 'apply') void applySidecar(true);
+        }}
+      />
     </>
   );
+
+  function dimensionConfirmText(): string {
+    if (
+      dimensionConfirm === 'apply'
+      && sidecarEmbeddingDimensions != null
+      && savedEmbeddingDimensions != null
+    ) {
+      return embeddingDimensionConfirmText(sidecarEmbeddingDimensions, savedEmbeddingDimensions);
+    }
+    if (savedEmbeddingDimensions != null) {
+      return embeddingDimensionConfirmText(
+        savedEmbeddingDimensions,
+        Number(form.honcho_embedding_dimensions),
+      );
+    }
+    return '已有向量数据需要重建向量库。';
+  }
+}
+
+export function embeddingDimensionConfirmText(current: number, next: number): string {
+  return `向量维度将从 ${current} 改为 ${next}。已有向量数据需要重建向量库。`;
+}
+
+function isDimensionConfirmError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'HONCHO_EMBEDDING_DIMENSIONS_CONFIRM';
 }
 
 export function validateContextSettings(form: UiConfigForm): string | null {

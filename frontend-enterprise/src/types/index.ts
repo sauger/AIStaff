@@ -393,6 +393,8 @@ export type UIConfigRead = {
   honcho_embedding_base_url?: string;
   honcho_embedding_api_key_set?: boolean;
   honcho_embedding_dimensions?: number;
+  honcho_embedding_dimensions_saved?: boolean;
+  honcho_sidecar_embedding_dimensions?: number | null;
   honcho_sidecar_apply_available?: boolean;
   honcho_sidecar_applied?: boolean;
   honcho_sidecar_apply_message?: string;

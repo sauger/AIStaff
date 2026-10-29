@@ -26,6 +26,7 @@ from app.honcho.sidecar_env import (
     HonchoSidecarApplyError,
     apply_sidecar_env_file,
     build_honcho_model_env,
+    read_sidecar_embedding_dimensions,
 )
 from app.security.auth import get_current_user, require_current_tenant
 from app.security.encryption import decrypt_secret, encrypt_secret
@@ -78,6 +79,8 @@ class UIConfigRead(BaseModel):
     honcho_embedding_base_url: str = ""
     honcho_embedding_api_key_set: bool = False
     honcho_embedding_dimensions: int = 1536
+    honcho_embedding_dimensions_saved: bool = False
+    honcho_sidecar_embedding_dimensions: int | None = None
     honcho_sidecar_apply_available: bool = False
     honcho_sidecar_applied: bool = False
     honcho_sidecar_apply_message: str = ""
@@ -88,6 +91,7 @@ class UIConfigRead(BaseModel):
 
 class HonchoSidecarApplyRequest(BaseModel):
     tenant_id: str
+    honcho_embedding_dimensions_confirmed: bool = False
 
 
 class HonchoSidecarApplyRead(BaseModel):
@@ -132,7 +136,9 @@ class UIConfigUpdateRequest(BaseModel):
     honcho_base_url: str | None = Field(default=None, max_length=500)
     honcho_timeout_ms: int | None = Field(default=None, ge=50, le=10_000)
     # None leaves the saved value unchanged. An empty API key also leaves the
-    # stored secret unchanged. Model ids and URLs, including "", are saved.
+    # stored secret unchanged. An empty model or base URL clears a previously
+    # saved value; it does not record a clear when nothing was saved yet.
+    # Changing a saved embedding dimension requires honcho_embedding_dimensions_confirmed.
     honcho_deriver_model: str | None = Field(default=None, max_length=200)
     honcho_deriver_base_url: str | None = Field(default=None, max_length=500)
     honcho_deriver_api_key: str | None = Field(default=None, max_length=4000)
@@ -140,6 +146,7 @@ class UIConfigUpdateRequest(BaseModel):
     honcho_embedding_base_url: str | None = Field(default=None, max_length=500)
     honcho_embedding_api_key: str | None = Field(default=None, max_length=4000)
     honcho_embedding_dimensions: int | None = Field(default=None, ge=1, le=8192)
+    honcho_embedding_dimensions_confirmed: bool = False
 
     @model_validator(mode="after")
     def validate_context_budgets(self) -> UIConfigUpdateRequest:
@@ -246,6 +253,10 @@ def ui_config_read(
             if row.honcho_embedding_dimensions is None
             else int(row.honcho_embedding_dimensions)
         ),
+        honcho_embedding_dimensions_saved=row.honcho_embedding_dimensions is not None,
+        honcho_sidecar_embedding_dimensions=read_sidecar_embedding_dimensions(
+            get_settings().honcho_sidecar_env_file
+        ),
         honcho_sidecar_apply_available=bool(get_settings().honcho_sidecar_env_file.strip()),
         honcho_sidecar_applied=honcho_sidecar_applied,
         honcho_sidecar_apply_message=honcho_sidecar_apply_message,
@@ -279,6 +290,11 @@ def update_enterprise_ui_config(
 ) -> UIConfigRead:
     ensure_tenant_admin(request.tenant_id, current_user)
     row = get_or_create_ui_config(db, request.tenant_id)
+    _ensure_saved_dimension_confirmed(
+        row.honcho_embedding_dimensions,
+        request.honcho_embedding_dimensions,
+        request.honcho_embedding_dimensions_confirmed,
+    )
     sandbox_changed = bool(row.sandbox_enabled) != request.sandbox_enabled
     storage_path = _validate_storage_path(request.harness_storage_path)
     row.show_thinking_trace = request.show_thinking_trace
@@ -331,6 +347,11 @@ def apply_enterprise_honcho_sidecar(
     path = get_settings().honcho_sidecar_env_file.strip()
     if not path:
         raise HTTPException(status_code=409, detail=SIDECAR_PATH_UNSET_MESSAGE)
+    _ensure_applied_dimension_confirmed(
+        row,
+        path,
+        request.honcho_embedding_dimensions_confirmed,
+    )
     try:
         _changed, message = _write_honcho_sidecar(row, path)
     except HonchoSidecarApplyError as exc:
@@ -402,39 +423,111 @@ def _incoming_honcho_secret(value: str | None) -> str | None:
     return text
 
 
+_DIMENSION_CONFIRM_CODE = "HONCHO_EMBEDDING_DIMENSIONS_CONFIRM"
+
+
+def dimension_change_message(current: int, new_value: int) -> str:
+    return (
+        f"向量维度将从 {current} 改为 {new_value}。"
+        "已有向量数据需要重建向量库。"
+    )
+
+
+def _reject_dimension_change(current: int, new_value: int) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": _DIMENSION_CONFIRM_CODE,
+            "message": dimension_change_message(current, new_value),
+        },
+    )
+
+
+def _ensure_saved_dimension_confirmed(
+    stored: int | None,
+    new_value: int | None,
+    confirmed: bool,
+) -> None:
+    if stored is None or new_value is None or int(stored) == int(new_value) or confirmed:
+        return
+    _reject_dimension_change(int(stored), int(new_value))
+
+
+def _dimensions_written_for(row: UIConfig) -> int | None:
+    if not str(row.honcho_embedding_model or "").strip():
+        return None
+    if row.honcho_embedding_dimensions is None:
+        return 1536
+    return int(row.honcho_embedding_dimensions)
+
+
+def _ensure_applied_dimension_confirmed(row: UIConfig, path: str, confirmed: bool) -> None:
+    new_value = _dimensions_written_for(row)
+    if new_value is None:
+        return
+    current = read_sidecar_embedding_dimensions(path)
+    if current is None or current == new_value or confirmed:
+        return
+    _reject_dimension_change(current, new_value)
+
+
+def _store_optional_text(current: str | None, incoming: str) -> tuple[str | None, bool]:
+    if incoming == "" and not (current or "").strip():
+        return current, False
+    normalized_current = None if current is None else current.strip()
+    if normalized_current == incoming:
+        return current, False
+    return incoming, True
+
+
 def _assign_honcho_model_settings(row: UIConfig, request: UIConfigUpdateRequest) -> bool:
     touched = False
     if request.honcho_deriver_model is not None:
-        row.honcho_deriver_model = _validate_honcho_model_id(request.honcho_deriver_model)
-        touched = True
-    if request.honcho_deriver_base_url is not None:
-        row.honcho_deriver_base_url = _validate_honcho_base_url(
-            request.honcho_deriver_base_url,
-            label="对话抽取接口地址",
+        stored, changed = _store_optional_text(
+            row.honcho_deriver_model,
+            _validate_honcho_model_id(request.honcho_deriver_model),
         )
-        touched = True
+        row.honcho_deriver_model = stored
+        touched = touched or changed
+    if request.honcho_deriver_base_url is not None:
+        stored, changed = _store_optional_text(
+            row.honcho_deriver_base_url,
+            _validate_honcho_base_url(
+                request.honcho_deriver_base_url,
+                label="对话抽取接口地址",
+            ),
+        )
+        row.honcho_deriver_base_url = stored
+        touched = touched or changed
     deriver_secret = _incoming_honcho_secret(request.honcho_deriver_api_key)
     if deriver_secret is not None:
         row.honcho_deriver_api_key_encrypted = encrypt_secret(deriver_secret)
         touched = True
-    elif request.honcho_deriver_api_key is not None:
-        touched = True
     if request.honcho_embedding_model is not None:
-        row.honcho_embedding_model = _validate_honcho_model_id(request.honcho_embedding_model)
-        touched = True
-    if request.honcho_embedding_base_url is not None:
-        row.honcho_embedding_base_url = _validate_honcho_base_url(
-            request.honcho_embedding_base_url,
-            label="向量嵌入接口地址",
+        stored, changed = _store_optional_text(
+            row.honcho_embedding_model,
+            _validate_honcho_model_id(request.honcho_embedding_model),
         )
-        touched = True
+        row.honcho_embedding_model = stored
+        touched = touched or changed
+    if request.honcho_embedding_base_url is not None:
+        stored, changed = _store_optional_text(
+            row.honcho_embedding_base_url,
+            _validate_honcho_base_url(
+                request.honcho_embedding_base_url,
+                label="向量嵌入接口地址",
+            ),
+        )
+        row.honcho_embedding_base_url = stored
+        touched = touched or changed
     embedding_secret = _incoming_honcho_secret(request.honcho_embedding_api_key)
     if embedding_secret is not None:
         row.honcho_embedding_api_key_encrypted = encrypt_secret(embedding_secret)
         touched = True
-    elif request.honcho_embedding_api_key is not None:
-        touched = True
-    if request.honcho_embedding_dimensions is not None:
+    if (
+        request.honcho_embedding_dimensions is not None
+        and row.honcho_embedding_dimensions != request.honcho_embedding_dimensions
+    ):
         row.honcho_embedding_dimensions = request.honcho_embedding_dimensions
         touched = True
     return touched
@@ -453,10 +546,16 @@ def _decrypt_honcho_secret(value: str | None) -> str:
 
 def _write_honcho_sidecar(row: UIConfig, path: str) -> tuple[bool, str]:
     updates = build_honcho_model_env(
-        deriver_model=str(row.honcho_deriver_model or ""),
+        deriver_model=(
+            None if row.honcho_deriver_model is None else str(row.honcho_deriver_model).strip()
+        ),
         deriver_base_url=str(row.honcho_deriver_base_url or ""),
         deriver_api_key=_decrypt_honcho_secret(row.honcho_deriver_api_key_encrypted),
-        embedding_model=str(row.honcho_embedding_model or ""),
+        embedding_model=(
+            None
+            if row.honcho_embedding_model is None
+            else str(row.honcho_embedding_model).strip()
+        ),
         embedding_base_url=str(row.honcho_embedding_base_url or ""),
         embedding_api_key=_decrypt_honcho_secret(row.honcho_embedding_api_key_encrypted),
         embedding_dimensions=row.honcho_embedding_dimensions,
@@ -464,7 +563,8 @@ def _write_honcho_sidecar(row: UIConfig, path: str) -> tuple[bool, str]:
     changed = apply_sidecar_env_file(path, updates)
     if not changed:
         return False, (
-            "Honcho 环境文件已与当前设置一致。请确认 api 与 deriver 已按这份配置重启过。"
+            "Honcho 环境文件已与当前设置一致。"
+            "请确认 api 与 deriver 已按这份配置重启过。"
         )
     return True, SIDECAR_RESTART_MESSAGE
 
@@ -472,9 +572,7 @@ def _write_honcho_sidecar(row: UIConfig, path: str) -> tuple[bool, str]:
 def _sync_honcho_sidecar(row: UIConfig, *, touched: bool) -> tuple[bool, str]:
     if not touched:
         return False, ""
-    if not str(row.honcho_deriver_model or "").strip() and not str(
-        row.honcho_embedding_model or ""
-    ).strip():
+    if row.honcho_deriver_model is None and row.honcho_embedding_model is None:
         return False, ""
     path = get_settings().honcho_sidecar_env_file.strip()
     if not path:

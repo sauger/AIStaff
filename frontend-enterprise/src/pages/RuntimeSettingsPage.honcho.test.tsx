@@ -198,8 +198,49 @@ describe('runtime settings Honcho master switch', () => {
     await user.click(apply);
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
     expect(apiPost.mock.calls[0][0]).toBe('/api/enterprise/ui-config/honcho-sidecar');
-    expect(apiPost.mock.calls[0][1]).toEqual({ tenant_id: 'tenant_demo' });
+    expect(apiPost.mock.calls[0][1]).toEqual({
+      tenant_id: 'tenant_demo',
+      honcho_embedding_dimensions_confirmed: false,
+    });
     expect(await screen.findByText(/无法把模型设置写入 Honcho/)).toBeTruthy();
+  });
+
+  it('asks before saving a different embedding dimension', async () => {
+    apiGet.mockResolvedValue({
+      ...config,
+      honcho_embedding_dimensions: 1536,
+      honcho_embedding_dimensions_saved: true,
+    });
+    apiPut.mockImplementation(async (_url: string, body: Record<string, unknown>) => ({
+      ...config,
+      ...body,
+      honcho_embedding_dimensions_saved: true,
+      honcho_sidecar_applied: false,
+      honcho_sidecar_apply_message: '',
+    }));
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <RuntimeSettingsPage currentUser={admin} />
+      </I18nProvider>,
+    );
+
+    const dimensions = await screen.findByRole('spinbutton', { name: /向量维度/ });
+    await user.clear(dimensions);
+    await user.type(dimensions, '1024');
+    await user.click(screen.getByRole('button', { name: '保存设置' }));
+
+    expect(await screen.findByText('修改向量维度？')).toBeTruthy();
+    expect(screen.getByText(/向量维度将从 1536 改为 1024/)).toBeTruthy();
+    expect(screen.getByText(/已有向量数据需要重建向量库/)).toBeTruthy();
+    expect(apiPut).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: '确认修改' }));
+    await waitFor(() => expect(apiPut).toHaveBeenCalledTimes(1));
+    const body = apiPut.mock.calls[0][1] as Record<string, unknown>;
+    expect(body.honcho_embedding_dimensions).toBe(1024);
+    expect(body.honcho_embedding_dimensions_confirmed).toBe(true);
   });
 
   it('keeps save disabled when runtime settings fail to load', async () => {

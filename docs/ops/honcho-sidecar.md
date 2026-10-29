@@ -89,7 +89,11 @@ Admins can set the deriver and embedding models in **运行设置 → 长期记�
 
 Transport is always `openai` when a section is applied, which covers OpenAI-compatible endpoints such as DeepSeek and 阿里云百炼. A typical China setup is `deepseek-chat` at `https://api.deepseek.com` for 对话抽取, and `text-embedding-v4` at `https://dashscope.aliyuncs.com/compatible-mode/v1` with vector dimensions 1536 for 向量嵌入. 向量嵌入 is the embedding model, not a tokenizer.
 
-API keys are encrypted with `APP_SECRET` before they are stored. Reads return `honcho_deriver_api_key_set` / `honcho_embedding_api_key_set` and never the plaintext. Submitting an empty key leaves the stored secret unchanged and does not overwrite that key in the sidecar file.
+API keys are encrypted with `APP_SECRET` before they are stored. Reads return `honcho_deriver_api_key_set` / `honcho_embedding_api_key_set` and never the plaintext. Submitting an empty key leaves the stored secret unchanged and does not delete that key from the sidecar file.
+
+Changing a vector dimension that is already saved requires a second confirmation. The runtime-settings page opens a destructive confirm dialog, then sends `honcho_embedding_dimensions_confirmed=true`. The same flag is required when **应用到 sidecar** would replace a different `EMBEDDING_VECTOR_DIMENSIONS` already in the env file. Without the flag the API returns 409 `HONCHO_EMBEDDING_DIMENSIONS_CONFIRM` and does not write. The message states that existing vector data must be rebuilt. The first time a dimension is saved, no confirmation is required.
+
+Clearing a saved deriver or embedding model id removes that section's model, transport, and base URL keys from `HONCHO_SIDECAR_ENV_FILE`. Clearing the deriver also removes the dialectic, summary, and dream keys that were written with it. Clearing only a base URL removes that URL key (and the derived base URL keys) and leaves the model in place. An empty field that was never saved does not delete a hand-written sidecar value. API keys stay until a new key is submitted.
 
 Applying a deriver model also points dialectic (`minimal` through `max`), summary, and dream deduction/induction at the same chat model and base URL. Those features keep using `LLM_OPENAI_API_KEY`. Embedding keeps its own key when one is saved, so it does not have to share the chat key.
 
@@ -105,7 +109,7 @@ HONCHO_SIDECAR_ENV_FILE=/mnt/data/honcho/.env
 
 The path must be absolute and the AIStaff user must be able to write it. AIStaff rewrites only the keys in the table above (plus the matching dialectic, summary, and dream keys) and leaves the rest of the file, including comments, in place. The file mode is set to `0600`.
 
-- When the path is set, saving 运行设置 writes the file if a deriver or embedding model is saved.
+- When the path is set, saving 运行设置 writes the file if a deriver or embedding model is saved or cleared.
 - When the path is empty, the save still stays in `ui_configs`. **应用到 sidecar** returns a clear error naming `HONCHO_SIDECAR_ENV_FILE` and does not create a file.
 - Honcho does not reload `.env` live. From `/mnt/data/honcho`, restart the API and the deriver:
 
