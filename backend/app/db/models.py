@@ -770,6 +770,10 @@ class UIConfig(SQLModel, table=True):
     sandbox_network_mode: str = Field(default="all")
     sandbox_allowed_domains: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     harness_storage_path: Optional[str] = None
+    # NULL = no 运行设置 override yet; Honcho falls back to HONCHO_* env.
+    honcho_enabled: Optional[bool] = Field(default=None)
+    honcho_base_url: Optional[str] = Field(default=None)
+    honcho_timeout_ms: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

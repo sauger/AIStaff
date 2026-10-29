@@ -6,15 +6,18 @@ import sys
 import threading
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlmodel import Session
 
 from app import paths
+from app.config import get_settings
 from app.db import get_session
 from app.db.models import UIConfig, User, utc_now
 from app.harness.sandbox import diagnostics, windows_install_command
+from app.honcho.runtime import apply_honcho_ui_config, display_honcho_base_url
 from app.security.auth import get_current_user, require_current_tenant
 from app.security.permissions import ensure_tenant_admin
 from app.security.tenant import ensure_tenant
@@ -55,6 +58,9 @@ class UIConfigRead(BaseModel):
     sandbox_status_code: str | None = None
     sandbox_status_message: str | None = None
     sandbox_status_remediation: str | None = None
+    honcho_enabled: bool = False
+    honcho_base_url: str = ""
+    honcho_timeout_ms: int = 200
     updated_at: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -91,6 +97,11 @@ class UIConfigUpdateRequest(BaseModel):
     harness_storage_path: str = Field(default="", max_length=1024)
     sandbox_network_mode: Literal["all", "allowlist", "deny"] = "all"
     sandbox_allowed_domains: list[str] = Field(default_factory=list, max_length=200)
+    # None leaves the saved override unchanged. A value, including false or "",
+    # becomes the tenant override and wins over HONCHO_* env.
+    honcho_enabled: bool | None = None
+    honcho_base_url: str | None = Field(default=None, max_length=500)
+    honcho_timeout_ms: int | None = Field(default=None, ge=50, le=10_000)
 
     @model_validator(mode="after")
     def validate_context_budgets(self) -> UIConfigUpdateRequest:
@@ -109,6 +120,7 @@ class UIConfigUpdateRequest(BaseModel):
 
 
 def ui_config_read(row: UIConfig, *, restart_scheduled: bool = False) -> UIConfigRead:
+    effective_honcho = apply_honcho_ui_config(get_settings(), row)
     report = diagnostics() if row.sandbox_enabled else None
     windows_setup_required = (
         row.sandbox_enabled
@@ -176,6 +188,9 @@ def ui_config_read(row: UIConfig, *, restart_scheduled: bool = False) -> UIConfi
             report.message if report is not None else "沙盒已由管理员关闭。"
         ),
         sandbox_status_remediation=report.remediation if report is not None else None,
+        honcho_enabled=effective_honcho.honcho_enabled,
+        honcho_base_url=display_honcho_base_url(effective_honcho.honcho_base_url),
+        honcho_timeout_ms=effective_honcho.honcho_timeout_ms,
         updated_at=row.updated_at.isoformat(),
     )
 
@@ -225,6 +240,12 @@ def update_enterprise_ui_config(
     row.harness_storage_path = storage_path
     row.sandbox_network_mode = request.sandbox_network_mode
     row.sandbox_allowed_domains = request.sandbox_allowed_domains
+    if request.honcho_enabled is not None:
+        row.honcho_enabled = request.honcho_enabled
+    if request.honcho_base_url is not None:
+        row.honcho_base_url = _validate_honcho_base_url(request.honcho_base_url)
+    if request.honcho_timeout_ms is not None:
+        row.honcho_timeout_ms = request.honcho_timeout_ms
     row.updated_at = utc_now()
     db.add(row)
     db.commit()
@@ -243,6 +264,37 @@ def get_chat_ui_config(
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
     return ui_config_read(get_or_create_ui_config(db, tenant_id))
+
+
+_HONCHO_URL_ERROR = "Honcho 服务地址必须是 http 或 https URL"
+
+
+def _validate_honcho_base_url(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    lowered = normalized.lower()
+    malformed_scheme = lowered.startswith(("http:/", "https:/")) and not lowered.startswith(
+        ("http://", "https://")
+    )
+    if "\\" in normalized or malformed_scheme:
+        raise HTTPException(status_code=422, detail=_HONCHO_URL_ERROR)
+    try:
+        parsed = urlparse(normalized)
+        port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=_HONCHO_URL_ERROR) from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=422, detail=_HONCHO_URL_ERROR)
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=422, detail="Honcho 服务地址不能包含账号或密码")
+    if parsed.query or parsed.fragment:
+        raise HTTPException(status_code=422, detail="Honcho 服务地址不能包含查询参数或片段")
+    host = parsed.hostname
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    return f"{parsed.scheme}://{netloc}{parsed.path.rstrip('/')}"
 
 
 def _validate_storage_path(value: str) -> str | None:

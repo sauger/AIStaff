@@ -399,6 +399,9 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     effective_harness_storage_path: '',
     sandbox_network_mode: 'all',
     sandbox_allowed_domains: [],
+    honcho_enabled: false,
+    honcho_base_url: '',
+    honcho_timeout_ms: 200,
     updated_at: '',
   });
   const chatMessagesRef = useRef<HTMLDivElement>(null);

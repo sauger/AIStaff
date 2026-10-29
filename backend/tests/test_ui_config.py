@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
-
-from app.api import ui_config as ui_config_module
-from app.api.ui_config import UIConfigUpdateRequest, ui_config_read
-from app.api.ui_config import update_enterprise_ui_config
-from app.core.agent_loop import AgentLoop
-from app.db.models import Tenant, UIConfig, User
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
+
+from app.api import ui_config as ui_config_module
+from app.api.ui_config import (
+    UIConfigUpdateRequest,
+    get_or_create_ui_config,
+    ui_config_read,
+    update_enterprise_ui_config,
+)
+from app.config import Settings
+from app.core.agent_loop import AgentLoop
+from app.db.models import Tenant, UIConfig, User
 from app.harness.sandbox import SandboxDiagnostics
 
 
@@ -238,3 +244,231 @@ def test_context_runtime_settings_persist_without_restart(
     assert result.context_medium_summary_prefix == "近期记忆："
     assert result.restart_scheduled is False
     assert scheduled == []
+
+
+def _honcho_env(**overrides: object) -> Settings:
+    payload: dict[str, object] = {
+        "honcho_enabled": False,
+        "honcho_base_url": "http://honcho.env",
+        "honcho_api_key": "env-secret",
+        "honcho_timeout_ms": 200,
+        "honcho_workspace_prefix": "tenant:",
+    }
+    payload.update(overrides)
+    return Settings(**payload)
+
+
+def test_honcho_runtime_settings_fall_back_to_env_until_saved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(ui_config_module, "get_settings", lambda: _honcho_env(honcho_enabled=True))
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        admin = User(
+            id="user_admin",
+            tenant_id="tenant_demo",
+            username="admin",
+            password_hash="unused",
+            role="admin",
+        )
+        initial = ui_config_read(get_or_create_ui_config(db, "tenant_demo"))
+        saved = update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_enabled=False,
+                honcho_base_url="http://honcho.ui/v3/",
+                honcho_timeout_ms=800,
+            ),
+            db,
+            admin,
+        )
+        monkeypatch.setattr(
+            ui_config_module,
+            "get_settings",
+            lambda: _honcho_env(honcho_enabled=True, honcho_base_url="http://honcho.other"),
+        )
+        reread = ui_config_read(db.get(UIConfig, "tenant_demo"))
+
+    assert initial.honcho_enabled is True
+    assert initial.honcho_base_url == "http://honcho.env"
+    assert initial.honcho_timeout_ms == 200
+    assert "honcho_api_key" not in initial.model_dump()
+    assert saved.honcho_enabled is False
+    assert saved.honcho_base_url == "http://honcho.ui/v3"
+    assert saved.honcho_timeout_ms == 800
+    assert saved.restart_scheduled is False
+    assert reread.honcho_enabled is False
+    assert reread.honcho_base_url == "http://honcho.ui/v3"
+    assert reread.honcho_timeout_ms == 800
+
+
+def test_honcho_runtime_update_leaves_override_when_fields_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(ui_config_module, "get_settings", lambda: _honcho_env())
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        admin = User(
+            id="user_admin",
+            tenant_id="tenant_demo",
+            username="admin",
+            password_hash="unused",
+            role="admin",
+        )
+        update_enterprise_ui_config(
+            UIConfigUpdateRequest(
+                tenant_id="tenant_demo",
+                honcho_enabled=True,
+                honcho_base_url="http://honcho.ui",
+                honcho_timeout_ms=500,
+            ),
+            db,
+            admin,
+        )
+        updated = update_enterprise_ui_config(
+            UIConfigUpdateRequest(tenant_id="tenant_demo", agent_loop_max_actions=40),
+            db,
+            admin,
+        )
+
+    assert updated.agent_loop_max_actions == 40
+    assert updated.honcho_enabled is True
+    assert updated.honcho_base_url == "http://honcho.ui"
+    assert updated.honcho_timeout_ms == 500
+
+
+def test_honcho_runtime_settings_reject_bad_url_and_non_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(ui_config_module, "get_settings", lambda: _honcho_env())
+    with pytest.raises(ValidationError):
+        UIConfigUpdateRequest(tenant_id="tenant_demo", honcho_timeout_ms=10)
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        admin = User(
+            id="user_admin",
+            tenant_id="tenant_demo",
+            username="admin",
+            password_hash="unused",
+            role="admin",
+        )
+        member = User(
+            id="user_member",
+            tenant_id="tenant_demo",
+            username="member",
+            password_hash="unused",
+            role="member",
+        )
+        with pytest.raises(HTTPException) as url_error:
+            update_enterprise_ui_config(
+                UIConfigUpdateRequest(
+                    tenant_id="tenant_demo",
+                    honcho_enabled=True,
+                    honcho_base_url="file:///tmp/honcho",
+                ),
+                db,
+                admin,
+            )
+        with pytest.raises(HTTPException) as auth_error:
+            update_enterprise_ui_config(
+                UIConfigUpdateRequest(tenant_id="tenant_demo", honcho_enabled=True),
+                db,
+                member,
+            )
+
+    assert url_error.value.status_code == 422
+    assert auth_error.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://user:secret@honcho.ui",
+        "http://honcho.ui/api?x=1",
+        "http://＠evil.com",
+        "http:/127.0.0.1:8000",
+        "http://honcho.ui:99999",
+    ],
+)
+def test_honcho_base_url_rejects_credentials_query_and_malformed_hosts(
+    base_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(ui_config_module, "get_settings", lambda: _honcho_env())
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        admin = User(
+            id="user_admin",
+            tenant_id="tenant_demo",
+            username="admin",
+            password_hash="unused",
+            role="admin",
+        )
+        with pytest.raises(HTTPException) as error:
+            update_enterprise_ui_config(
+                UIConfigUpdateRequest(
+                    tenant_id="tenant_demo",
+                    honcho_enabled=True,
+                    honcho_base_url=base_url,
+                    honcho_timeout_ms=200,
+                ),
+                db,
+                admin,
+            )
+
+    assert error.value.status_code == 422
+
+
+def test_honcho_read_strips_env_userinfo_and_clamps_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(
+        ui_config_module,
+        "get_settings",
+        lambda: _honcho_env(
+            honcho_base_url="http://user:secret@honcho.env:8000/v1",
+            honcho_timeout_ms=20,
+        ),
+    )
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        read = ui_config_read(get_or_create_ui_config(db, "tenant_demo"))
+
+    assert read.honcho_base_url == "http://honcho.env:8000/v1"
+    assert "secret" not in read.honcho_base_url
+    assert read.honcho_timeout_ms == 50

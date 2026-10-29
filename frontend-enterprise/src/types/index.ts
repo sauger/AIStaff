@@ -383,6 +383,9 @@ export type UIConfigRead = {
   sandbox_status_code?: string | null;
   sandbox_status_message?: string | null;
   sandbox_status_remediation?: string | null;
+  honcho_enabled: boolean;
+  honcho_base_url: string;
+  honcho_timeout_ms: number;
   updated_at: string;
 };
 

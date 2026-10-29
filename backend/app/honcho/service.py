@@ -7,9 +7,10 @@ from collections.abc import Callable
 from typing import Any
 
 from app.config import Settings, get_settings
-from app.db.models import AgentProfile
+from app.db.models import AgentProfile, UIConfig
 from app.honcho.client import HonchoClient
 from app.honcho.ids import HonchoIdError, build_honcho_identity
+from app.honcho.runtime import apply_honcho_ui_config
 from app.session.session_schema import ChatTurnRequest
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,8 @@ def schedule_honcho_message(
     settings: Settings | None = None,
     enqueue: Callable[[dict[str, Any]], Any] | None = None,
 ) -> None:
-    settings = settings or get_settings()
     try:
+        settings = _effective_settings(db, request.tenant_id, settings or get_settings())
         if request.message_visibility != "visible":
             return
         user_id = str(request.user_id or "").strip()
@@ -88,8 +89,8 @@ def inject_honcho_representation(
     client: HonchoClient | None = None,
 ) -> list[dict[str, object]]:
     memories = list(memory_context or [])
-    settings = settings or get_settings()
     try:
+        settings = _effective_settings(db, request.tenant_id, settings or get_settings())
         user_id = str(request.user_id or "").strip()
         agent_id = str(getattr(session, "agent_id", "") or "").strip()
         session_id = str(getattr(session, "id", "") or "").strip()
@@ -98,8 +99,9 @@ def inject_honcho_representation(
         metadata = _agent_metadata(db, request.tenant_id, agent_id)
         if not _turn_enabled(settings, metadata, channel_is_group=request.channel_is_group):
             return memories
-        if client is None and not settings.honcho_base_url.strip():
-            logger.warning("honcho representation skipped because HONCHO_BASE_URL is empty")
+        if not settings.honcho_base_url.strip():
+            if client is None:
+                logger.warning("honcho representation skipped because HONCHO_BASE_URL is empty")
             return memories
         identity = build_honcho_identity(
             tenant_id=request.tenant_id,
@@ -204,6 +206,16 @@ def representation_memory(text: str) -> dict[str, object]:
         "content": content,
         "metadata": {"source": "honcho", "label": REPRESENTATION_LABEL},
     }
+
+
+def _effective_settings(db: Any, tenant_id: str, settings: Settings) -> Settings:
+    try:
+        row = db.get(UIConfig, tenant_id) if tenant_id else None
+        return apply_honcho_ui_config(settings, row if isinstance(row, UIConfig) else None)
+    except Exception:
+        # A bad saved value must not fail the turn or fall open into a call.
+        logger.warning("honcho runtime settings lookup failed", exc_info=True)
+        return settings.model_copy(update={"honcho_enabled": False})
 
 
 def _turn_enabled(
