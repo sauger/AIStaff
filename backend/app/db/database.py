@@ -560,6 +560,15 @@ def _migrate_sqlite_skill_schema() -> None:
                 conn.execute(
                     text("ALTER TABLE ui_configs ADD COLUMN harness_storage_path VARCHAR")
                 )
+            # Nullable: NULL keeps the HONCHO_* env bootstrap until an admin saves.
+            if "honcho_enabled" not in ui_columns:
+                conn.execute(text("ALTER TABLE ui_configs ADD COLUMN honcho_enabled BOOLEAN"))
+            if "honcho_base_url" not in ui_columns:
+                conn.execute(text("ALTER TABLE ui_configs ADD COLUMN honcho_base_url VARCHAR"))
+            if "honcho_timeout_ms" not in ui_columns:
+                conn.execute(
+                    text("ALTER TABLE ui_configs ADD COLUMN honcho_timeout_ms INTEGER")
+                )
 
         if "team_tasks" in tables:
             team_task_columns = {

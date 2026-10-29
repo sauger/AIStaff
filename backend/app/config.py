@@ -83,7 +83,11 @@ class Settings(BaseSettings):
     # 回滚为逐行展示的旧样式；binding 的 config_json.compact_trace=false 可对单个
     # 绑定回滚。
     channel_feishu_trace_compact_sop: bool = True
-    # Honcho sidecar. The master switch defaults off so a deploy makes no calls.
+    # Honcho sidecar bootstrap. These env values apply until an admin saves
+    # 运行设置 for the tenant. ui_configs.honcho_enabled, honcho_base_url, and
+    # honcho_timeout_ms then override this process. HONCHO_API_KEY and
+    # HONCHO_WORKSPACE_PREFIX stay env-only (no secret field on that page;
+    # the prefix is the Honcho identity namespace).
     honcho_enabled: bool = False
     honcho_base_url: str = ""
     honcho_api_key: str = ""

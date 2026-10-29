@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import Settings
-from app.db.models import AgentProfile, ChatSession, Tenant
+from app.db.models import AgentProfile, ChatSession, Tenant, UIConfig
 from app.honcho.client import HonchoRequestError, HonchoTimeout
 from app.honcho.service import (
     inject_honcho_representation,
@@ -465,6 +465,279 @@ def test_different_users_are_not_merged_by_shared_external_id() -> None:
 
     peers = [call[2] for call in client.calls if call[0] == "peer" and str(call[2]).startswith("user_")]
     assert peers == ["user_user_wecom", "user_user_feishu"]
+
+
+def _save_honcho_runtime(
+    db: Session,
+    *,
+    enabled: bool | None,
+    base_url: str | None = None,
+    timeout_ms: int | None = None,
+) -> None:
+    db.add(
+        UIConfig(
+            tenant_id="tenant_demo",
+            honcho_enabled=enabled,
+            honcho_base_url=base_url,
+            honcho_timeout_ms=timeout_ms,
+        )
+    )
+    db.commit()
+
+
+def test_saved_runtime_master_switch_off_blocks_honcho_despite_env() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    _save_honcho_runtime(db, enabled=False, base_url="http://honcho.ui", timeout_ms=400)
+    client = FakeHoncho()
+    queued: list[dict] = []
+
+    schedule_honcho_message(
+        db,
+        _request(),
+        session,
+        role="user",
+        content="你好",
+        settings=_settings(honcho_enabled=True),
+        enqueue=queued.append,
+    )
+    memories = inject_honcho_representation(
+        db,
+        _request(),
+        session,
+        [{"kind": "fact", "content": "本地事实"}],
+        settings=_settings(honcho_enabled=True),
+        client=client,
+    )
+
+    assert queued == []
+    assert client.calls == []
+    assert memories == [{"kind": "fact", "content": "本地事实"}]
+    db.close()
+
+
+def test_saved_runtime_settings_override_disabled_env() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    _save_honcho_runtime(db, enabled=True, base_url="http://honcho.ui", timeout_ms=400)
+    client = FakeHoncho()
+    queued: list[dict] = []
+    env = _settings(honcho_enabled=False, honcho_base_url="", honcho_timeout_ms=200)
+
+    schedule_honcho_message(
+        db,
+        _request(),
+        session,
+        role="user",
+        content="你好",
+        settings=env,
+        enqueue=queued.append,
+    )
+    memories = inject_honcho_representation(
+        db,
+        _request(),
+        session,
+        [],
+        settings=env,
+        client=client,
+    )
+
+    assert queued and queued[0]["content"] == "你好"
+    assert client.calls[-1] == ("representation", "tenant_tenant_demo", "user_user_abc", 0.4)
+    assert memories
+    db.close()
+
+
+def test_blank_saved_base_url_overrides_env_and_skips_calls() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    _save_honcho_runtime(db, enabled=True, base_url="", timeout_ms=200)
+    client = FakeHoncho()
+    queued: list[dict] = []
+
+    schedule_honcho_message(
+        db,
+        _request(),
+        session,
+        role="user",
+        content="你好",
+        settings=_settings(),
+        enqueue=queued.append,
+    )
+    inject_honcho_representation(
+        db,
+        _request(),
+        session,
+        [],
+        settings=_settings(),
+        client=client,
+    )
+
+    assert queued == []
+    assert client.calls == []
+    db.close()
+
+
+def test_unsaved_runtime_row_keeps_env_workspace_prefix() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    _save_honcho_runtime(db, enabled=None)
+    client = FakeHoncho()
+
+    inject_honcho_representation(
+        db,
+        _request(),
+        session,
+        [],
+        settings=_settings(honcho_workspace_prefix="org:"),
+        client=client,
+    )
+
+    assert client.calls[-1][1] == "org_tenant_demo"
+    db.close()
+
+
+def test_saved_override_keeps_env_api_key_and_workspace_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    _save_honcho_runtime(db, enabled=True, base_url="http://honcho.ui", timeout_ms=400)
+    seen: dict[str, str] = {}
+    client = FakeHoncho()
+
+    def fake_client(active: Settings) -> FakeHoncho:
+        seen["api_key"] = active.honcho_api_key
+        seen["base_url"] = active.honcho_base_url
+        return client
+
+    monkeypatch.setattr("app.honcho.service.build_honcho_client", fake_client)
+    memories = inject_honcho_representation(
+        db,
+        _request(),
+        session,
+        [],
+        settings=_settings(
+            honcho_enabled=False,
+            honcho_base_url="http://honcho.env",
+            honcho_api_key="env-secret",
+            honcho_workspace_prefix="org:",
+        ),
+    )
+
+    assert seen == {"api_key": "env-secret", "base_url": "http://honcho.ui"}
+    assert client.calls[-1][1] == "org_tenant_demo"
+    assert memories
+    db.close()
+
+
+def test_corrupt_honcho_timeout_does_not_fail_the_turn() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    row = UIConfig(
+        tenant_id="tenant_demo",
+        honcho_enabled=True,
+        honcho_base_url="http://honcho.ui",
+        honcho_timeout_ms=200,
+    )
+    object.__setattr__(row, "honcho_timeout_ms", "nope")
+
+    class _Lookup:
+        def get(self, model: object, key: object) -> object:
+            if model is UIConfig:
+                return row
+            return db.get(model, key)
+
+    queued: list[dict] = []
+    schedule_honcho_message(
+        _Lookup(),
+        _request(),
+        session,
+        role="user",
+        content="你好",
+        settings=_settings(),
+        enqueue=queued.append,
+    )
+    memories = inject_honcho_representation(
+        _Lookup(),
+        _request(),
+        session,
+        [{"kind": "fact", "content": "本地事实"}],
+        settings=_settings(),
+        client=FakeHoncho(),
+    )
+
+    assert queued == []
+    assert memories == [{"kind": "fact", "content": "本地事实"}]
+    db.close()
+
+
+def test_dual_write_job_honors_saved_master_switch() -> None:
+    from app.honcho.jobs import run_honcho_dual_write_job
+
+    db = _db()
+    db.add(Tenant(id="tenant_demo", name="Demo"))
+    db.commit()
+    _save_honcho_runtime(db, enabled=False, base_url="http://honcho.ui", timeout_ms=200)
+    client = FakeHoncho()
+
+    run_honcho_dual_write_job(
+        {
+            "tenant_id": "tenant_demo",
+            "user_id": "user_abc",
+            "agent_id": "agent_xyz",
+            "session_id": "session_1",
+            "role": "user",
+            "content": "你好",
+            "channel": "web",
+            "channel_is_group": False,
+        },
+        settings=_settings(honcho_enabled=True),
+        client=client,
+        db=db,
+    )
+
+    assert client.calls == []
+    db.close()
+
+
+def test_dual_write_job_without_explicit_settings_reads_saved_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.honcho import jobs as jobs_module
+
+    db = _db()
+    db.add(Tenant(id="tenant_demo", name="Demo"))
+    db.commit()
+    _save_honcho_runtime(db, enabled=False, base_url="http://honcho.ui", timeout_ms=200)
+    client = FakeHoncho()
+
+    class _BoundSession:
+        def __enter__(self) -> Session:
+            return db
+
+        def __exit__(self, *_args: object) -> bool:
+            return False
+
+    monkeypatch.setattr(jobs_module, "get_settings", lambda: _settings(honcho_enabled=True))
+    monkeypatch.setattr("sqlmodel.Session", lambda _engine: _BoundSession())
+
+    jobs_module.run_honcho_dual_write_job(
+        {
+            "tenant_id": "tenant_demo",
+            "user_id": "user_abc",
+            "agent_id": "agent_xyz",
+            "session_id": "session_1",
+            "role": "user",
+            "content": "你好",
+            "channel": "web",
+            "channel_is_group": False,
+        },
+        client=client,
+    )
+
+    assert client.calls == []
+    db.close()
 
 
 def test_internal_messages_are_not_scheduled() -> None:

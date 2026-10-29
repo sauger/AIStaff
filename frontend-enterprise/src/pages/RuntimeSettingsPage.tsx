@@ -5,7 +5,7 @@ import { api, TENANT_ID } from '../api/client';
 import type { EnterpriseAuthUser } from '../auth';
 import AccountApiKeyDialog from '../components/AccountApiKeyDialog';
 import type { UIConfigRead } from '../types';
-import { BrainCircuit, KeyRound, RotateCcw, ShieldCheck } from 'lucide-react';
+import { BrainCircuit, KeyRound, Library, RotateCcw, ShieldCheck } from 'lucide-react';
 
 type UiConfigForm = {
   show_thinking_trace: boolean;
@@ -25,6 +25,9 @@ type UiConfigForm = {
   harness_storage_path: string;
   sandbox_network_mode: 'all' | 'allowlist' | 'deny';
   sandbox_allowed_domains: string;
+  honcho_enabled: boolean;
+  honcho_base_url: string;
+  honcho_timeout_ms: string;
 };
 
 const DEFAULT_UI_CONFIG: UiConfigForm = {
@@ -45,6 +48,9 @@ const DEFAULT_UI_CONFIG: UiConfigForm = {
   harness_storage_path: '',
   sandbox_network_mode: 'all',
   sandbox_allowed_domains: '',
+  honcho_enabled: false,
+  honcho_base_url: '',
+  honcho_timeout_ms: '200',
 };
 
 function formatDateOnly(value: string): string {
@@ -55,6 +61,8 @@ function formatDateOnly(value: string): string {
 
 export default function RuntimeSettingsPage({ currentUser }: { currentUser: EnterpriseAuthUser }) {
   const [form, setForm] = useState<UiConfigForm>(DEFAULT_UI_CONFIG);
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState('');
   const [setupMessage, setSetupMessage] = useState('');
@@ -85,13 +93,22 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
           harness_storage_path: row.harness_storage_path || '',
           sandbox_network_mode: row.sandbox_network_mode || 'all',
           sandbox_allowed_domains: (row.sandbox_allowed_domains || []).join('\n'),
+          honcho_enabled: row.honcho_enabled === true,
+          honcho_base_url: row.honcho_base_url || '',
+          honcho_timeout_ms: String(row.honcho_timeout_ms ?? 200),
         });
         setUpdatedAt(row.updated_at);
         setEffectiveStoragePath(row.effective_harness_storage_path || '');
         setSetupMessage(row.sandbox_setup_instructions || '');
         setSandboxStatus({ sandbox_status: row.sandbox_status, sandbox_status_message: row.sandbox_status_message, sandbox_status_remediation: row.sandbox_status_remediation });
+        setLoadError('');
+        setReady(true);
       })
-      .catch((error) => notify.error(error.message));
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : '运行设置加载失败';
+        setLoadError(message);
+        notify.error(message);
+      });
   }, []);
 
   async function save() {
@@ -104,6 +121,11 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
     const contextError = validateContextSettings(form);
     if (contextError) {
       notify.error(contextError);
+      return;
+    }
+    const honchoError = validateHonchoSettings(form);
+    if (honchoError) {
+      notify.error(honchoError);
       return;
     }
     setLoading(true);
@@ -127,6 +149,9 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         harness_storage_path: form.harness_storage_path.trim(),
         sandbox_network_mode: form.sandbox_network_mode,
         sandbox_allowed_domains: form.sandbox_allowed_domains.split(/[\n,]/).map((item) => item.trim()).filter(Boolean),
+        honcho_enabled: form.honcho_enabled,
+        honcho_base_url: form.honcho_base_url.trim(),
+        honcho_timeout_ms: Number(form.honcho_timeout_ms),
       });
       setUpdatedAt(row.updated_at);
       setEffectiveStoragePath(row.effective_harness_storage_path || '');
@@ -149,7 +174,7 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
     <>
       <div className="page-title">
         <div><h3>运行设置</h3><p className="text-[12px] text-muted-foreground">统一影响当前租户下所有数字员工的执行行为。</p></div>
-        <UIButton disabled={loading || restarting} onClick={() => void save()}>
+        <UIButton disabled={!ready || loading || restarting} onClick={() => void save()}>
           {restarting ? <RotateCcw className="size-[15px] animate-spin" /> : <SaveOutlined />}
           {restarting ? '等待应用重启' : '保存设置'}
         </UIButton>
@@ -240,6 +265,51 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
         </CardContent>
       </Card>
       <Card className="editor-card settings-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-[8px]">
+            <Library className="size-[16px]" />
+            长期记忆 / Honcho
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-[16px]" aria-busy={!ready}>
+          <div className="rounded-[11px] border border-[#dce8fb] bg-[#f7faff] px-[13px] py-[11px] text-[11px] leading-[18px] text-[#52637d]">
+            总开关关闭后，本租户不会访问 Honcho，即使员工档案里打开了「长期用户画像」。员工也需要打开「长期用户画像」才会读写长期画像。保存后立即生效，无需改环境变量或重启服务。尚未保存过时，初始值来自 HONCHO_ENABLED、HONCHO_BASE_URL 和 HONCHO_TIMEOUT_MS。
+          </div>
+          {loadError && (
+            <p className="text-[12px] text-[#d20b0b]">运行设置加载失败，暂不能修改 Honcho 总开关。</p>
+          )}
+          <SwitchRow
+            label="长期记忆 / Honcho 总开关"
+            checked={form.honcho_enabled}
+            disabled={!ready}
+            onChange={(next) => update({ honcho_enabled: next })}
+          />
+          <LabeledField label="Honcho 服务地址" hint="自建 Honcho 的根地址，例如 http://127.0.0.1:8000。留空则不会发起请求。">
+            <Input
+              value={form.honcho_base_url}
+              maxLength={500}
+              disabled={!ready}
+              onChange={(event) => update({ honcho_base_url: event.target.value })}
+              placeholder="http://127.0.0.1:8000"
+            />
+          </LabeledField>
+          <LabeledField label="画像读取超时" hint="同步读取长期画像的超时，单位毫秒，范围 50–10000。">
+            <Input
+              type="number"
+              min={50}
+              max={10000}
+              step={50}
+              disabled={!ready}
+              value={form.honcho_timeout_ms}
+              onChange={(event) => update({ honcho_timeout_ms: event.target.value })}
+            />
+          </LabeledField>
+          <p className="text-[11px] leading-[16px] text-muted-foreground">
+            API 密钥（HONCHO_API_KEY）和工作区前缀（HONCHO_WORKSPACE_PREFIX）仍只从环境变量读取。
+          </p>
+        </CardContent>
+      </Card>
+      <Card className="editor-card settings-card">
         <CardHeader><CardTitle className="flex items-center gap-[8px]"><ShieldCheck className="size-[16px]" />执行隔离与文件存储</CardTitle></CardHeader>
         <CardContent className="flex flex-col gap-[16px]">
           <SwitchRow label="启用 SRT 沙盒" checked={form.sandbox_enabled} onChange={(next) => update({ sandbox_enabled: next })} hint="仅管理员可修改。打开或关闭后保存将自动重启 RapidStaff。默认关闭。" />
@@ -314,6 +384,39 @@ export function validateContextSettings(form: UiConfigForm): string | null {
   return null;
 }
 
+export function validateHonchoSettings(form: UiConfigForm): string | null {
+  const timeout = Number(form.honcho_timeout_ms);
+  if (!Number.isInteger(timeout) || timeout < 50 || timeout > 10_000) {
+    return 'Honcho 画像读取超时必须是 50–10000 之间的整数毫秒';
+  }
+  const url = form.honcho_base_url.trim();
+  if (!url) return null;
+  if (url.length > 500 || url.includes('\\')) {
+    return 'Honcho 服务地址必须是 http 或 https URL';
+  }
+  const lowered = url.toLowerCase();
+  const malformedScheme = lowered.startsWith('http:/') && !lowered.startsWith('http://')
+    || lowered.startsWith('https:/') && !lowered.startsWith('https://');
+  if (malformedScheme) {
+    return 'Honcho 服务地址必须是 http 或 https URL';
+  }
+  try {
+    const parsed = new URL(url);
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) {
+      return 'Honcho 服务地址必须是 http 或 https URL';
+    }
+    if (parsed.username || parsed.password) {
+      return 'Honcho 服务地址不能包含账号或密码';
+    }
+    if (parsed.search || parsed.hash) {
+      return 'Honcho 服务地址不能包含查询参数或片段';
+    }
+  } catch {
+    return 'Honcho 服务地址必须是 http 或 https URL';
+  }
+  return null;
+}
+
 function toggleContextRole(
   roles: UiConfigForm['context_allowed_roles'],
   role: UiConfigForm['context_allowed_roles'][number],
@@ -327,8 +430,8 @@ function LabeledField({ label, hint, children }: { label: string; hint?: string;
   return <label className="flex flex-col gap-[6px]"><span className="text-[12px] font-medium text-[#464c5e]">{label}</span>{hint && <span className="text-[11px] leading-[16px] text-muted-foreground">{hint}</span>}{children}</label>;
 }
 
-function SwitchRow({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (next: boolean) => void }) {
-  return <label className="flex items-center justify-between gap-[16px]"><span><span className="block text-[12px] font-medium text-[#464c5e]">{label}</span>{hint && <span className="mt-[3px] block text-[11px] leading-[16px] text-muted-foreground">{hint}</span>}</span><Switch checked={checked} onCheckedChange={onChange} /></label>;
+function SwitchRow({ label, hint, checked, disabled, onChange }: { label: string; hint?: string; checked: boolean; disabled?: boolean; onChange: (next: boolean) => void }) {
+  return <label className={`flex items-center justify-between gap-[16px] ${disabled ? 'opacity-60' : ''}`}><span><span className="block text-[12px] font-medium text-[#464c5e]">{label}</span>{hint && <span className="mt-[3px] block text-[11px] leading-[16px] text-muted-foreground">{hint}</span>}</span><Switch checked={checked} disabled={disabled} onCheckedChange={onChange} /></label>;
 }
 
 async function waitForApplicationRestart(): Promise<void> {
