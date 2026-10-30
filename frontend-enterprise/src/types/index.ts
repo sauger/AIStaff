@@ -203,6 +203,7 @@ export type AgentProfileRead = {
   persona_prompt?: string;
   is_overall: boolean;
   status: 'active' | 'archived' | string;
+  primary_owner_user_id?: string | null;
   harness_max_actions?: number;
   metadata: Record<string, unknown>;
   resources: AgentResourceBindingRead[];
@@ -1533,25 +1534,44 @@ export type OrgDepartmentListResponse = {
   departments: OrgDepartmentRead[];
 };
 
-export type OrgContactOption = {
+export type EnterprisePersonRead = {
   id: string;
+  tenant_id: string;
   name: string;
-  agent_id: string;
-  agent_name: string;
-  title?: string | null;
+  employee_no?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  status: 'active' | 'left' | string;
+  primary_user_id?: string | null;
+  primary_user_name?: string | null;
+  primary_username?: string | null;
+  source: string;
+  external_id?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
-export type OrgContactListResponse = {
-  contacts: OrgContactOption[];
+export type EnterprisePersonListResponse = {
+  people: EnterprisePersonRead[];
+};
+
+export type EnterprisePersonWriteRequest = {
+  tenant_id: string;
+  name: string;
+  employee_no?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  status?: 'active' | 'left';
+  primary_user_id?: string | null;
 };
 
 export type OrgPersonRead = {
   affiliation_id: string;
-  contact_id: string;
-  contact_name: string;
-  agent_id: string;
-  agent_name: string;
-  title?: string | null;
+  person_id: string;
+  person_name: string;
+  department_id: string;
+  position_title?: string | null;
+  primary_user_id?: string | null;
   valid_from: string;
   valid_to?: string | null;
 };
@@ -1559,12 +1579,21 @@ export type OrgPersonRead = {
 export type OrgHeadRead = {
   head_id: string;
   department_id: string;
-  contact_id: string;
-  contact_name: string;
-  agent_id: string;
-  agent_name: string;
+  person_id: string;
+  person_name: string;
   valid_from: string;
   valid_to?: string | null;
+};
+
+export type OrgAgentMemberRead = {
+  agent_id: string;
+  name: string;
+  status: string;
+  primary_owner_user_id?: string | null;
+  primary_owner_name?: string | null;
+  department_id: string;
+  is_primary: boolean;
+  assignment_role: string;
 };
 
 export type OrgDepartmentPeopleResponse = {
@@ -1574,6 +1603,54 @@ export type OrgDepartmentPeopleResponse = {
   affiliations: OrgPersonRead[];
   heads: OrgHeadRead[];
   current_head?: OrgHeadRead | null;
+  agents: OrgAgentMemberRead[];
+};
+
+export type OrgAgentDepartmentRead = {
+  department_id: string;
+  department_name: string;
+  is_primary: boolean;
+  assignment_role: string;
+};
+
+export type OrgAgentRead = {
+  agent_id: string;
+  name: string;
+  description?: string | null;
+  status: string;
+  primary_owner_user_id?: string | null;
+  primary_owner_name?: string | null;
+  departments: OrgAgentDepartmentRead[];
+};
+
+export type OrgAgentListResponse = {
+  agents: OrgAgentRead[];
+};
+
+export type OrgTreePersonRead = {
+  affiliation_id: string;
+  person_id: string;
+  name: string;
+  department_id: string;
+  position_title?: string | null;
+  valid_from: string;
+  valid_to?: string | null;
+};
+
+export type OrgTreeAgentRead = {
+  agent_id: string;
+  name: string;
+  department_id: string;
+  status: string;
+  is_primary: boolean;
+  assignment_role: string;
+  primary_owner_name?: string | null;
+};
+
+export type OrgTreeResponse = {
+  departments: OrgDepartmentRead[];
+  people: OrgTreePersonRead[];
+  agents: OrgTreeAgentRead[];
 };
 
 export type LoginResult = {
@@ -1590,3 +1667,14 @@ export type LoginResult = {
   message: string;
 };
 
+
+export type UserRead = {
+  id: string;
+  tenant_id: string;
+  username: string;
+  display_name?: string | null;
+  role: 'admin' | 'member';
+  source: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+};

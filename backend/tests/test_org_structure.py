@@ -4,19 +4,15 @@ from datetime import date
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import inspect, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.contacts.api import post_contact, remove_contact
-from app.contacts.schema import ContactWriteRequest
-from app.db.database import ensure_org_department_sibling_unique
 from app.db.models import (
+    AgentDepartmentAssignment,
     AgentProfile,
     Contact,
+    EnterprisePerson,
     OrgAffiliation,
-    OrgDepartment,
     OrgDepartmentHead,
     Tenant,
     User,
@@ -24,20 +20,32 @@ from app.db.models import (
 from app.org.api import (
     get_department_people,
     get_departments,
-    get_org_contacts,
+    get_org_agents,
     get_org_settings,
+    get_org_tree,
+    get_people,
     patch_affiliation,
     patch_department,
     patch_head,
     patch_org_settings,
+    patch_person,
     post_affiliation,
+    post_affiliation_move,
     post_department,
     post_head,
+    post_person,
+    put_agent_departments,
+    remove_affiliation,
     remove_department,
+    remove_head,
+    remove_person,
 )
 from app.org.schema import (
+    AffiliationMoveRequest,
     AffiliationWriteRequest,
+    AgentDepartmentsUpdateRequest,
     DepartmentWriteRequest,
+    EnterprisePersonWriteRequest,
     HeadWriteRequest,
     OrgSettingsUpdateRequest,
     TenureUpdateRequest,
@@ -109,302 +117,332 @@ def _dept(name: str, parent_id: str | None = None, sort_order: int = 0) -> Depar
     )
 
 
-def _contact(db: Session, owner: User, agent_id: str, name: str) -> str:
-    created = post_contact(
-        ContactWriteRequest(tenant_id="tenant_demo", name=name),
-        agent_id=agent_id,
+def _person(admin: User, name: str = "张三", **overrides) -> EnterprisePersonWriteRequest:
+    values = {
+        "tenant_id": "tenant_demo",
+        "name": name,
+        "employee_no": None,
+        "phone": None,
+        "email": None,
+        "status": "active",
+        "primary_user_id": None,
+    }
+    values.update(overrides)
+    return EnterprisePersonWriteRequest(**values)
+
+
+def test_create_list_update_and_delete_enterprise_person(org_db) -> None:
+    db, (owner, admin, _agent_a, _agent_b) = org_db
+    created = post_person(_person(admin, "张三", primary_user_id=owner.id), db=db, current_user=admin)
+    assert created.name == "张三"
+    assert created.primary_user_id == owner.id
+    assert created.primary_username == "owner"
+
+    listing = get_people(tenant_id="tenant_demo", db=db, current_user=admin)
+    assert [item.id for item in listing.people] == [created.id]
+
+    updated = patch_person(
+        created.id,
+        _person(admin, "张三丰", employee_no="E001", phone="13800000000"),
         db=db,
-        current_user=owner,
+        current_user=admin,
     )
-    return created.id
+    assert updated.name == "张三丰"
+    assert updated.employee_no == "E001"
+
+    remove_person(created.id, tenant_id="tenant_demo", db=db, current_user=admin)
+    assert db.get(EnterprisePerson, created.id) is None
 
 
-def _stored_department(db: Session, department_id: str) -> OrgDepartment:
-    row = db.get(OrgDepartment, department_id)
-    assert row is not None
-    db.refresh(row)
-    return row
+def test_person_account_link_is_unique_and_internal_only(org_db) -> None:
+    db, (owner, admin, _agent_a, _agent_b) = org_db
+    post_person(_person(admin, "张三", primary_user_id=owner.id), db=db, current_user=admin)
+    with pytest.raises(HTTPException) as error:
+        post_person(_person(admin, "李四", primary_user_id=owner.id), db=db, current_user=admin)
+    assert error.value.status_code == 409
 
-
-def test_org_tables_use_adjacency_and_materialized_path(org_db) -> None:
-    db, _seeded = org_db
-    columns = {column["name"]: column for column in inspect(db.get_bind()).get_columns("org_departments")}
-    assert columns["parent_id"]["nullable"] is False
-    unique_names = {
-        item["name"]
-        for item in inspect(db.get_bind()).get_unique_constraints("org_departments")
-    }
-    unique_names.update(
-        item["name"]
-        for item in inspect(db.get_bind()).get_indexes("org_departments")
-        if item.get("unique")
+    channel_user = User(
+        id="user_channel",
+        tenant_id="tenant_demo",
+        username="wechat_user",
+        source="wechat",
+        password_hash="x",
     )
-    assert "uq_org_department_sibling_name" in unique_names
-    assert "path" in columns
-    assert "closure" not in inspect(db.get_bind()).get_table_names()
-    affiliation = {
-        column["name"] for column in inspect(db.get_bind()).get_columns("org_affiliations")
+    db.add(channel_user)
+    db.commit()
+    with pytest.raises(HTTPException) as error:
+        post_person(_person(admin, "王五", primary_user_id=channel_user.id), db=db, current_user=admin)
+    assert error.value.status_code == 400
+
+
+def _all_org_endpoints():
+    """(名称, 调用闭包) 列表：普通 member 对企业管理全部端点都必须 403。"""
+    person_request = EnterprisePersonWriteRequest(tenant_id="tenant_demo", name="张三")
+    department_request = DepartmentWriteRequest(tenant_id="tenant_demo", name="研发")
+    tenure_request = TenureUpdateRequest(tenant_id="tenant_demo")
+    read = {
+        "settings:get": lambda db, user: get_org_settings(
+            tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "departments:get": lambda db, user: get_departments(
+            tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "tree:get": lambda db, user: get_org_tree(
+            tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "people:get": lambda db, user: get_people(
+            tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "agents:get": lambda db, user: get_org_agents(
+            tenant_id="tenant_demo", db=db, current_user=user
+        ),
     }
-    assert {"department_id", "contact_id", "valid_from", "valid_to"} <= affiliation
-    head = {column["name"] for column in inspect(db.get_bind()).get_columns("org_department_heads")}
-    assert {"department_id", "contact_id", "valid_from", "valid_to"} <= head
+    write = {
+        "settings:patch": lambda db, user: patch_org_settings(
+            OrgSettingsUpdateRequest(tenant_id="tenant_demo", enterprise_name="越权"),
+            db=db,
+            current_user=user,
+        ),
+        "departments:post": lambda db, user: post_department(
+            department_request, db=db, current_user=user
+        ),
+        "departments:patch": lambda db, user: patch_department(
+            "dept_x", department_request, db=db, current_user=user
+        ),
+        "departments:delete": lambda db, user: remove_department(
+            "dept_x", tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "department-people:get": lambda db, user: get_department_people(
+            "dept_x", tenant_id="tenant_demo", as_of=None, db=db, current_user=user
+        ),
+        "people:post": lambda db, user: post_person(person_request, db=db, current_user=user),
+        "people:patch": lambda db, user: patch_person(
+            "person_x", person_request, db=db, current_user=user
+        ),
+        "people:delete": lambda db, user: remove_person(
+            "person_x", tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "affiliations:post": lambda db, user: post_affiliation(
+            AffiliationWriteRequest(
+                tenant_id="tenant_demo", department_id="dept_x", person_id="person_x"
+            ),
+            db=db,
+            current_user=user,
+        ),
+        "affiliations:patch": lambda db, user: patch_affiliation(
+            "aff_x", tenure_request, db=db, current_user=user
+        ),
+        "affiliations:move": lambda db, user: post_affiliation_move(
+            "aff_x",
+            AffiliationMoveRequest(tenant_id="tenant_demo", department_id="dept_x"),
+            db=db,
+            current_user=user,
+        ),
+        "affiliations:delete": lambda db, user: remove_affiliation(
+            "aff_x", tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "heads:post": lambda db, user: post_head(
+            HeadWriteRequest(tenant_id="tenant_demo", department_id="dept_x", person_id="person_x"),
+            db=db,
+            current_user=user,
+        ),
+        "heads:patch": lambda db, user: patch_head(
+            "head_x", tenure_request, db=db, current_user=user
+        ),
+        "heads:delete": lambda db, user: remove_head(
+            "head_x", tenant_id="tenant_demo", db=db, current_user=user
+        ),
+        "agents:put-departments": lambda db, user: put_agent_departments(
+            "agent_x",
+            AgentDepartmentsUpdateRequest(tenant_id="tenant_demo", department_ids=["dept_x"]),
+            db=db,
+            current_user=user,
+        ),
+    }
+    return [*read.items(), *write.items()]
+
+
+@pytest.mark.parametrize(
+    "name,call",
+    _all_org_endpoints(),
+    ids=[item[0] for item in _all_org_endpoints()],
+)
+def test_member_cannot_manage_any_org_endpoint(org_db, name, call) -> None:
+    db, (owner, _admin, _agent_a, _agent_b) = org_db
+    with pytest.raises(HTTPException) as error:
+        call(db, owner)
+    assert error.value.status_code == 403
 
 
 def test_create_move_and_reject_cycle_maintains_paths(org_db) -> None:
     db, (_owner, admin, _agent_a, _agent_b) = org_db
-    root = post_department(_dept("公司"), db=db, current_user=admin)
-    child = post_department(_dept("研发", root.id), db=db, current_user=admin)
-    grand = post_department(_dept("平台", child.id), db=db, current_user=admin)
-    market = post_department(_dept("市场"), db=db, current_user=admin)
-
-    assert root.path == f"/{root.id}"
-    assert child.path == f"/{root.id}/{child.id}"
-    assert _stored_department(db, grand.id).path == f"/{root.id}/{child.id}/{grand.id}"
-
-    renamed = patch_department(
-        child.id, _dept("研发中心", root.id, 3), db=db, current_user=admin
-    )
-    assert renamed.name == "研发中心"
-    assert renamed.path == child.path
-    assert renamed.sort_order == 3
-
+    root = post_department(_dept("研发"), db=db, current_user=admin)
+    child = post_department(_dept("平台组", root.id), db=db, current_user=admin)
+    assert child.path == f"{root.path}/{child.id}"
     moved = patch_department(
-        child.id, _dept("研发中心", market.id, 3), db=db, current_user=admin
+        child.id,
+        DepartmentWriteRequest(tenant_id="tenant_demo", name="平台组", parent_id=None),
+        db=db,
+        current_user=admin,
     )
-    assert moved.path == f"/{market.id}/{child.id}"
-    assert _stored_department(db, grand.id).path == f"/{market.id}/{child.id}/{grand.id}"
+    assert moved.path == f"/{child.id}"
 
-    rooted = patch_department(child.id, _dept("研发中心"), db=db, current_user=admin)
-    assert rooted.parent_id is None
-    assert rooted.path == f"/{child.id}"
-    assert _stored_department(db, grand.id).path == f"/{child.id}/{grand.id}"
-
+    parent = post_department(_dept("市场"), db=db, current_user=admin)
+    nested = post_department(_dept("华东", parent.id), db=db, current_user=admin)
     with pytest.raises(HTTPException) as error:
-        patch_department(child.id, _dept("研发中心", grand.id), db=db, current_user=admin)
+        patch_department(
+            parent.id,
+            DepartmentWriteRequest(tenant_id="tenant_demo", name="市场", parent_id=nested.id),
+            db=db,
+            current_user=admin,
+        )
     assert error.value.status_code == 400
-    assert error.value.detail["code"] == "ORG_DEPARTMENT_CYCLE"
-    assert _stored_department(db, child.id).parent_id == ""
 
 
-def test_duplicate_sibling_name_and_child_delete_rules(org_db) -> None:
-    db, (owner, admin, agent_a, _agent_b) = org_db
-    root = post_department(_dept("公司"), db=db, current_user=admin)
-    child = post_department(_dept("研发", root.id), db=db, current_user=admin)
-    with pytest.raises(HTTPException) as duplicate:
-        post_department(_dept("研发", root.id), db=db, current_user=admin)
-    assert duplicate.value.status_code == 409
-    assert duplicate.value.detail["code"] == "ORG_DEPARTMENT_NAME_DUPLICATE"
-    post_department(_dept("研发"), db=db, current_user=admin)
-    with pytest.raises(HTTPException) as root_duplicate:
-        post_department(_dept("公司"), db=db, current_user=admin)
-    assert root_duplicate.value.status_code == 409
-    assert root_duplicate.value.detail["code"] == "ORG_DEPARTMENT_NAME_DUPLICATE"
+def test_duplicate_sibling_name_and_non_empty_delete_rules(org_db) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
+    root = post_department(_dept("研发"), db=db, current_user=admin)
+    with pytest.raises(HTTPException) as error:
+        post_department(_dept("研发"), db=db, current_user=admin)
+    assert error.value.status_code == 409
 
-    contact_id = _contact(db, owner, agent_a.id, "张三")
-    affiliation = post_affiliation(
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    post_affiliation(
         AffiliationWriteRequest(
             tenant_id="tenant_demo",
-            department_id=child.id,
-            contact_id=contact_id,
+            department_id=root.id,
+            person_id=person.id,
+            position_title="工程师",
             valid_from="2026-01-01",
         ),
         db=db,
         current_user=admin,
     )
-    with pytest.raises(HTTPException) as blocked:
-        remove_department(root.id, db=db, current_user=admin, tenant_id="tenant_demo")
-    assert blocked.value.status_code == 409
-    assert blocked.value.detail["code"] == "ORG_DEPARTMENT_HAS_CHILDREN"
+    with pytest.raises(HTTPException) as error:
+        remove_department(root.id, tenant_id="tenant_demo", db=db, current_user=admin)
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "ORG_DEPARTMENT_HAS_PEOPLE"
 
-    removed = remove_department(child.id, db=db, current_user=admin, tenant_id="tenant_demo")
-    assert removed["status"] == "deleted"
-    assert db.get(OrgAffiliation, affiliation.affiliation_id) is None
-    assert db.get(OrgDepartment, child.id) is None
-    assert db.get(OrgDepartment, root.id) is not None
+    patch_affiliation(
+        db.exec(select(OrgAffiliation)).first().id,
+        TenureUpdateRequest(tenant_id="tenant_demo", valid_to="2026-01-02"),
+        db=db,
+        current_user=admin,
+    )
+    # Historical affiliation still blocks delete, with a distinct error code.
+    with pytest.raises(HTTPException) as error:
+        remove_department(root.id, tenant_id="tenant_demo", db=db, current_user=admin)
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "ORG_DEPARTMENT_HAS_HISTORY"
 
 
-def test_query_people_by_department_respects_tenure_and_contact_agent(org_db) -> None:
-    db, (owner, admin, agent_a, agent_b) = org_db
+def test_query_people_by_department_respects_tenure_and_position(org_db) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
     department = post_department(_dept("研发"), db=db, current_user=admin)
-    other = post_department(_dept("市场"), db=db, current_user=admin)
-    zhang = _contact(db, owner, agent_a.id, "张三")
-    li = _contact(db, owner, agent_b.id, "李四")
+    zhang = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    li = post_person(_person(admin, "李四"), db=db, current_user=admin)
     post_affiliation(
         AffiliationWriteRequest(
             tenant_id="tenant_demo",
             department_id=department.id,
-            contact_id=zhang,
+            person_id=zhang.id,
+            position_title="工程师",
             valid_from="2026-01-01",
             valid_to="2026-06-01",
         ),
         db=db,
         current_user=admin,
     )
-    open_ended = post_affiliation(
-        AffiliationWriteRequest(
-            tenant_id="tenant_demo",
-            department_id=department.id,
-            contact_id=li,
-            valid_from="2026-03-01",
-        ),
-        db=db,
-        current_user=admin,
-    )
     post_affiliation(
         AffiliationWriteRequest(
             tenant_id="tenant_demo",
-            department_id=other.id,
-            contact_id=zhang,
-            valid_from="2026-01-01",
-        ),
-        db=db,
-        current_user=admin,
-    )
-
-    march = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-03-01"
-    )
-    assert march.as_of == "2026-03-01"
-    assert [item.contact_name for item in march.people] == ["张三", "李四"]
-    assert march.people[1].agent_name == "员工B"
-    assert len(march.affiliations) == 2
-
-    on_end = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-06-01"
-    )
-    assert [item.contact_name for item in on_end.people] == ["张三", "李四"]
-
-    july = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-07-01"
-    )
-    assert [item.contact_name for item in july.people] == ["李四"]
-
-    before = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2025-12-31"
-    )
-    assert before.people == []
-
-    closed = patch_affiliation(
-        open_ended.affiliation_id,
-        TenureUpdateRequest(
-            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=li.id,
+            position_title="产品经理",
             valid_from="2026-03-01",
-            valid_to="2026-04-01",
         ),
         db=db,
         current_user=admin,
     )
-    assert closed.valid_to == "2026-04-01"
-    after_close = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-05-01"
+    march = get_department_people(
+        department.id,
+        tenant_id="tenant_demo",
+        as_of="2026-03-01",
+        db=db,
+        current_user=admin,
     )
-    assert [item.contact_name for item in after_close.people] == ["张三"]
-
-    options = get_org_contacts(tenant_id="tenant_demo", db=db, current_user=admin)
-    assert {item.agent_id for item in options.contacts} == {agent_a.id, agent_b.id}
+    assert [item.person_name for item in march.people] == ["张三", "李四"]
+    assert march.people[0].position_title == "工程师"
+    july = get_department_people(
+        department.id,
+        tenant_id="tenant_demo",
+        as_of="2026-07-01",
+        db=db,
+        current_user=admin,
+    )
+    assert [item.person_name for item in july.people] == ["李四"]
 
 
 def test_department_head_tenure_picks_latest_valid_from(org_db) -> None:
-    db, (owner, admin, agent_a, agent_b) = org_db
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
     department = post_department(_dept("研发"), db=db, current_user=admin)
-    zhang = _contact(db, owner, agent_a.id, "张三")
-    li = _contact(db, owner, agent_b.id, "李四")
-    first = post_head(
-        HeadWriteRequest(
-            tenant_id="tenant_demo",
-            department_id=department.id,
-            contact_id=zhang,
-            valid_from="2026-01-01",
-            valid_to="2026-12-31",
-        ),
-        db=db,
-        current_user=admin,
-    )
+    zhang = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    li = post_person(_person(admin, "李四"), db=db, current_user=admin)
     post_head(
         HeadWriteRequest(
             tenant_id="tenant_demo",
             department_id=department.id,
-            contact_id=li,
-            valid_from="2026-06-01",
+            person_id=zhang.id,
+            valid_from="2026-01-01",
         ),
         db=db,
         current_user=admin,
     )
-    spring = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-03-01"
-    )
-    assert spring.current_head is not None
-    assert spring.current_head.contact_name == "张三"
-    summer = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-07-01"
-    )
-    assert summer.current_head is not None
-    assert summer.current_head.contact_name == "李四"
-    assert len(summer.heads) == 2
-
-    updated = patch_head(
-        first.head_id,
-        TenureUpdateRequest(tenant_id="tenant_demo", clear_valid_to=True, valid_from="2026-01-01"),
+    latest = post_head(
+        HeadWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=li.id,
+            valid_from="2026-03-01",
+        ),
         db=db,
         current_user=admin,
     )
-    assert updated.valid_to is None
+    result = get_department_people(
+        department.id, tenant_id="tenant_demo", as_of="2026-04-01", db=db, current_user=admin
+    )
+    assert result.current_head is not None
+    assert result.current_head.head_id == latest.head_id
+    assert result.current_head.person_name == "李四"
 
 
 def test_enterprise_name_reuses_tenant_and_member_is_forbidden(org_db) -> None:
     db, (owner, admin, _agent_a, _agent_b) = org_db
-    current = get_org_settings(tenant_id="tenant_demo", db=db, current_user=admin)
-    assert current.enterprise_name == "Demo Enterprise"
     updated = patch_org_settings(
-        OrgSettingsUpdateRequest(tenant_id="tenant_demo", enterprise_name="  星河科技  "),
+        OrgSettingsUpdateRequest(tenant_id="tenant_demo", enterprise_name="星河科技"),
         db=db,
         current_user=admin,
     )
     assert updated.enterprise_name == "星河科技"
-    tenant = db.get(Tenant, "tenant_demo")
-    assert tenant is not None
-    db.refresh(tenant)
-    assert tenant.name == "星河科技"
-
+    assert db.get(Tenant, "tenant_demo").name == "星河科技"
     with pytest.raises(HTTPException) as error:
-        get_departments(tenant_id="tenant_demo", db=db, current_user=owner)
-    assert error.value.status_code == 403
-    with pytest.raises(HTTPException) as missing:
-        post_affiliation(
-            AffiliationWriteRequest(
-                tenant_id="tenant_demo",
-                department_id="dept_missing",
-                contact_id="contact_missing",
-            ),
+        patch_org_settings(
+            OrgSettingsUpdateRequest(tenant_id="tenant_demo", enterprise_name="越权"),
             db=db,
             current_user=owner,
         )
-    assert missing.value.status_code == 403
+    assert error.value.status_code == 403
 
 
-def test_unknown_contact_rejected_and_contact_delete_purges_org_links(org_db) -> None:
-    db, (owner, admin, agent_a, _agent_b) = org_db
+def test_delete_person_purges_affiliations_and_heads(org_db) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
     department = post_department(_dept("研发"), db=db, current_user=admin)
-    with pytest.raises(HTTPException) as missing:
-        post_affiliation(
-            AffiliationWriteRequest(
-                tenant_id="tenant_demo",
-                department_id=department.id,
-                contact_id="contact_missing",
-                valid_from="2026-01-01",
-            ),
-            db=db,
-            current_user=admin,
-        )
-    assert missing.value.status_code == 404
-    assert missing.value.detail["code"] == "ORG_CONTACT_NOT_FOUND"
-
-    contact_id = _contact(db, owner, agent_a.id, "张三")
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
     post_affiliation(
         AffiliationWriteRequest(
             tenant_id="tenant_demo",
             department_id=department.id,
-            contact_id=contact_id,
+            person_id=person.id,
             valid_from="2026-01-01",
         ),
         db=db,
@@ -414,142 +452,447 @@ def test_unknown_contact_rejected_and_contact_delete_purges_org_links(org_db) ->
         HeadWriteRequest(
             tenant_id="tenant_demo",
             department_id=department.id,
-            contact_id=contact_id,
+            person_id=person.id,
             valid_from="2026-01-01",
         ),
         db=db,
         current_user=admin,
     )
-    remove_contact(
-        contact_id,
-        db=db,
-        current_user=owner,
-        tenant_id="tenant_demo",
-        agent_id=agent_a.id,
-    )
+    remove_person(person.id, tenant_id="tenant_demo", db=db, current_user=admin)
     assert db.exec(select(OrgAffiliation)).all() == []
     assert db.exec(select(OrgDepartmentHead)).all() == []
 
 
-def test_inverted_tenure_is_rejected(org_db) -> None:
-    db, (owner, admin, agent_a, _agent_b) = org_db
-    department = post_department(_dept("研发"), db=db, current_user=admin)
-    contact_id = _contact(db, owner, agent_a.id, "张三")
+def test_agent_multi_department_assignment_and_tree(org_db) -> None:
+    db, (_owner, admin, agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    service = post_department(_dept("客服"), db=db, current_user=admin)
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=person.id,
+            position_title="销售经理",
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    assigned = put_agent_departments(
+        agent_a.id,
+        AgentDepartmentsUpdateRequest(
+            tenant_id="tenant_demo",
+            department_ids=[sales.id, service.id],
+            primary_department_id=sales.id,
+        ),
+        db=db,
+        current_user=admin,
+    )
+    assert {item.department_id for item in assigned.departments} == {sales.id, service.id}
+    assert [item.department_id for item in assigned.departments if item.is_primary] == [sales.id]
+    tree = get_org_tree(tenant_id="tenant_demo", db=db, current_user=admin)
+    assert {item.id for item in tree.departments} == {sales.id, service.id}
+    assert any(item.name == "张三" for item in tree.people)
+    assert {(item.agent_id, item.department_id) for item in tree.agents} == {
+        (agent_a.id, sales.id),
+        (agent_a.id, service.id),
+    }
+    assert any(item.is_primary and item.agent_id == agent_a.id for item in tree.agents)
+
     with pytest.raises(HTTPException) as error:
-        post_affiliation(
-            AffiliationWriteRequest(
+        put_agent_departments(
+            agent_a.id,
+            AgentDepartmentsUpdateRequest(
                 tenant_id="tenant_demo",
-                department_id=department.id,
-                contact_id=contact_id,
-                valid_from="2026-06-01",
-                valid_to="2026-01-01",
+                department_ids=[sales.id],
+                primary_department_id=None,
             ),
             db=db,
             current_user=admin,
         )
     assert error.value.status_code == 400
-    assert error.value.detail["code"] == "ORG_DATE_RANGE"
 
 
-def test_duplicate_root_name_is_rejected_by_the_unique_constraint(org_db, monkeypatch) -> None:
-    db, (_owner, admin, _agent_a, _agent_b) = org_db
-    post_department(_dept("公司"), db=db, current_user=admin)
-    monkeypatch.setattr("app.org.service._ensure_sibling_name", lambda *args, **kwargs: None)
+def test_agent_assignment_clears_when_empty_and_rejects_overall(org_db) -> None:
+    db, (_owner, admin, agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    put_agent_departments(
+        agent_a.id,
+        AgentDepartmentsUpdateRequest(
+            tenant_id="tenant_demo", department_ids=[sales.id], primary_department_id=sales.id
+        ),
+        db=db,
+        current_user=admin,
+    )
+    cleared = put_agent_departments(
+        agent_a.id,
+        AgentDepartmentsUpdateRequest(
+            tenant_id="tenant_demo", department_ids=[], primary_department_id=None
+        ),
+        db=db,
+        current_user=admin,
+    )
+    assert cleared.departments == []
+    assert db.exec(select(AgentDepartmentAssignment)).all() == []
+
+    overall = AgentProfile(
+        id="agent_overall", tenant_id="tenant_demo", name="整体", is_overall=True
+    )
+    db.add(overall)
+    db.commit()
     with pytest.raises(HTTPException) as error:
-        post_department(_dept("公司"), db=db, current_user=admin)
+        put_agent_departments(
+            overall.id,
+            AgentDepartmentsUpdateRequest(
+                tenant_id="tenant_demo", department_ids=[sales.id], primary_department_id=sales.id
+            ),
+            db=db,
+            current_user=admin,
+        )
+    assert error.value.status_code == 400
+
+
+def test_department_people_returns_agents(org_db) -> None:
+    db, (_owner, admin, agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    put_agent_departments(
+        agent_a.id,
+        AgentDepartmentsUpdateRequest(
+            tenant_id="tenant_demo", department_ids=[sales.id], primary_department_id=sales.id
+        ),
+        db=db,
+        current_user=admin,
+    )
+    result = get_department_people(
+        sales.id, tenant_id="tenant_demo", as_of="2026-01-01", db=db, current_user=admin
+    )
+    assert [item.agent_id for item in result.agents] == [agent_a.id]
+    assert result.agents[0].is_primary is True
+
+
+def test_move_affiliation_keeps_history_in_source_department(org_db) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    service = post_department(_dept("客服"), db=db, current_user=admin)
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    created = post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=person.id,
+            position_title="销售经理",
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    moved = post_affiliation_move(
+        created.affiliation_id,
+        AffiliationMoveRequest(
+            tenant_id="tenant_demo",
+            department_id=service.id,
+            position_title="客服主管",
+            valid_from="2026-04-01",
+            valid_to="2026-04-30",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    assert moved.department_id == service.id
+    assert moved.position_title == "客服主管"
+    assert moved.valid_from == "2026-04-01"
+
+    rows = db.exec(select(OrgAffiliation).order_by(OrgAffiliation.valid_from)).all()
+    assert len(rows) == 2
+    historical = rows[0]
+    assert historical.department_id == sales.id
+    assert historical.valid_from == date(2026, 1, 1)
+    assert historical.valid_to == date(2026, 3, 31)
+
+    # 同日移动等价于原任职未发生：删除原记录，不留零天历史。
+    same_day = post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=person.id,
+            valid_from="2026-05-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    post_affiliation_move(
+        same_day.affiliation_id,
+        AffiliationMoveRequest(
+            tenant_id="tenant_demo",
+            department_id=service.id,
+            valid_from="2026-05-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    rows = db.exec(select(OrgAffiliation).order_by(OrgAffiliation.valid_from)).all()
+    assert len(rows) == 3
+    assert [row.department_id for row in rows if row.department_id == sales.id] == [sales.id]
+    assert rows[-1].valid_from == date(2026, 5, 1)
+
+
+def test_move_affiliation_rejects_same_department_and_missing_target(org_db) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    created = post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=person.id,
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    with pytest.raises(HTTPException) as error:
+        post_affiliation_move(
+            created.affiliation_id,
+            AffiliationMoveRequest(tenant_id="tenant_demo", department_id=sales.id),
+            db=db,
+            current_user=admin,
+        )
+    assert error.value.status_code == 400
+    with pytest.raises(HTTPException) as error:
+        post_affiliation_move(
+            created.affiliation_id,
+            AffiliationMoveRequest(tenant_id="tenant_demo", department_id=""),
+            db=db,
+            current_user=admin,
+        )
+    assert error.value.status_code == 400
+
+
+def test_left_person_tenure_can_be_closed(org_db) -> None:
+    """离职收尾：补 valid_to 必须放行；换成另一个在职人员仍需校验。"""
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    zhang = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    li = post_person(_person(admin, "李四"), db=db, current_user=admin)
+    zhang_affiliation = post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=zhang.id,
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    li_affiliation = post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=li.id,
+            valid_from="2026-02-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    patch_person(
+        zhang.id, _person(admin, "张三", status="left"), db=db, current_user=admin
+    )
+    closed = patch_affiliation(
+        zhang_affiliation.affiliation_id,
+        TenureUpdateRequest(tenant_id="tenant_demo", valid_to="2026-06-30"),
+        db=db,
+        current_user=admin,
+    )
+    assert closed.valid_to == "2026-06-30"
+
+    with pytest.raises(HTTPException) as error:
+        patch_affiliation(
+            li_affiliation.affiliation_id,
+            TenureUpdateRequest(tenant_id="tenant_demo", person_id=zhang.id),
+            db=db,
+            current_user=admin,
+        )
+    assert error.value.status_code == 400
+    assert error.value.detail["code"] == "ORG_PERSON_LEFT"
+
+
+def test_overlapping_affiliation_in_same_department_rejected(org_db) -> None:
+    db, (_owner, admin, _agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    created = post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=person.id,
+            valid_from="2026-01-01",
+            valid_to="2026-06-30",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    with pytest.raises(HTTPException) as error:
+        post_affiliation(
+            AffiliationWriteRequest(
+                tenant_id="tenant_demo",
+                department_id=sales.id,
+                person_id=person.id,
+                valid_from="2026-06-01",
+            ),
+            db=db,
+            current_user=admin,
+        )
     assert error.value.status_code == 409
-    assert error.value.detail["code"] == "ORG_DEPARTMENT_NAME_DUPLICATE"
-    stored = db.exec(select(OrgDepartment).where(OrgDepartment.name == "公司")).all()
-    assert len(stored) == 1
-    assert stored[0].parent_id == ""
+    assert error.value.detail["code"] == "ORG_AFFILIATION_OVERLAP"
+
+    # 不重叠的多段历史(调岗后回任)允许。
+    again = post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=sales.id,
+            person_id=person.id,
+            valid_from="2026-07-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    assert again.affiliation_id != created.affiliation_id
 
 
-def test_department_people_does_not_read_another_tenants_contact(org_db) -> None:
+def test_cross_tenant_access_is_rejected(org_db) -> None:
     db, (_owner, admin, _agent_a, _agent_b) = org_db
     db.add(Tenant(id="tenant_other", name="Other"))
-    db.add(
-        AgentProfile(
-            id="agent_other",
-            tenant_id="tenant_other",
-            name="别家员工",
-            is_overall=False,
-            metadata_json={},
-        )
+    other_admin = User(
+        id="user_other_admin",
+        tenant_id="tenant_other",
+        username="other_admin",
+        display_name="Other Admin",
+        role="admin",
+        password_hash="x",
     )
-    db.add(
-        Contact(
-            id="contact_other",
-            tenant_id="tenant_other",
-            agent_id="agent_other",
-            name="机密",
+    db.add(other_admin)
+    db.commit()
+
+    # 他租户管理员访问本租户组织数据：403。
+    with pytest.raises(HTTPException) as error:
+        get_people(tenant_id="tenant_demo", db=db, current_user=other_admin)
+    assert error.value.status_code == 403
+
+    # 本租户管理员引用他租户资源：404，不落库。
+    other_dept = post_department(
+        DepartmentWriteRequest(tenant_id="tenant_other", name="他方部门"),
+        db=db,
+        current_user=other_admin,
+    )
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    with pytest.raises(HTTPException) as error:
+        post_affiliation(
+            AffiliationWriteRequest(
+                tenant_id="tenant_demo",
+                department_id=other_dept.id,
+                person_id=person.id,
+            ),
+            db=db,
+            current_user=admin,
         )
+    assert error.value.status_code == 404
+    assert db.exec(select(OrgAffiliation)).all() == []
+
+
+def test_delete_agent_purges_department_assignments(org_db) -> None:
+    from app.api.agents import delete_agent
+
+    db, (_owner, admin, agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    put_agent_departments(
+        agent_a.id,
+        AgentDepartmentsUpdateRequest(
+            tenant_id="tenant_demo", department_ids=[sales.id], primary_department_id=sales.id
+        ),
+        db=db,
+        current_user=admin,
+    )
+    assert db.exec(select(AgentDepartmentAssignment)).all()
+
+    delete_agent(agent_a.id, tenant_id="tenant_demo", db=db, current_user=admin)
+
+    assert db.exec(select(AgentDepartmentAssignment)).all() == []
+    assert db.get(AgentProfile, agent_a.id) is None
+
+
+def test_delete_user_unlinks_person_and_agent_owner(org_db, monkeypatch) -> None:
+    from app.api.auth import delete_user as auth_delete_user
+    from app.db import database
+
+    db, (owner, admin, _agent_a, _agent_b) = org_db
+    disabled_agent = AgentProfile(
+        id="agent_c",
+        tenant_id="tenant_demo",
+        name="员工C",
+        is_overall=False,
+        status="disabled",
+        primary_owner_user_id=owner.id,
+        metadata_json={
+            "owner_user_id": owner.id,
+            "owner_username": "owner",
+            "owner_display_name": "Owner",
+        },
+    )
+    db.add(disabled_agent)
+    person = post_person(
+        _person(admin, "张三", primary_user_id=owner.id), db=db, current_user=admin
     )
     db.commit()
-    department = post_department(_dept("研发"), db=db, current_user=admin)
-    db.add(
-        OrgAffiliation(
+
+    auth_delete_user(owner.id, tenant_id="tenant_demo", db=db, current_user=admin)
+
+    assert db.get(User, owner.id) is None
+    refreshed_person = db.get(EnterprisePerson, person.id)
+    assert refreshed_person is not None
+    assert refreshed_person.primary_user_id is None
+    refreshed_agent = db.get(AgentProfile, "agent_c")
+    assert refreshed_agent is not None
+    assert refreshed_agent.primary_owner_user_id is None
+    assert "owner_user_id" not in (refreshed_agent.metadata_json or {})
+
+    # 模拟重启跑迁移回填：已删除用户不得被写回负责人字段。
+    db.commit()
+    monkeypatch.setattr(database, "engine", db.get_bind())
+    monkeypatch.setattr(database, "database_url", "sqlite://")
+    database._migrate_agent_primary_owner()
+    db.expire_all()
+    assert db.get(AgentProfile, "agent_c").primary_owner_user_id is None
+
+
+def test_contact_directory_stays_independent_of_org(org_db) -> None:
+    from app.contacts.schema import ContactWriteRequest
+    from app.contacts.service import create_contact, delete_contact
+
+    db, (_owner, admin, agent_a, _agent_b) = org_db
+    sales = post_department(_dept("销售"), db=db, current_user=admin)
+    person = post_person(_person(admin, "张三"), db=db, current_user=admin)
+    post_affiliation(
+        AffiliationWriteRequest(
             tenant_id="tenant_demo",
-            department_id=department.id,
-            contact_id="contact_other",
-            valid_from=date(2026, 1, 1),
-        )
+            department_id=sales.id,
+            person_id=person.id,
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
     )
-    db.commit()
-    listed = get_department_people(
-        department.id, db=db, current_user=admin, tenant_id="tenant_demo", as_of="2026-03-01"
+    contact = create_contact(
+        db,
+        "tenant_demo",
+        agent_a.id,
+        ContactWriteRequest(tenant_id="tenant_demo", name="张三", phone="138"),
     )
-    assert listed.people == []
-    assert listed.affiliations == []
 
-
-def test_sqlite_migration_backfills_null_roots_and_rejects_a_duplicate_name() -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    with engine.begin() as connection:
-        connection.exec_driver_sql(
-            """
-            CREATE TABLE org_departments (
-                id VARCHAR PRIMARY KEY,
-                tenant_id VARCHAR NOT NULL,
-                name VARCHAR NOT NULL,
-                parent_id VARCHAR,
-                path VARCHAR NOT NULL,
-                sort_order INTEGER NOT NULL,
-                created_at DATETIME,
-                updated_at DATETIME
-            )
-            """
-        )
-        connection.execute(
-            text(
-                "INSERT INTO org_departments "
-                "(id, tenant_id, name, parent_id, path, sort_order) "
-                "VALUES ('d1', 't', '公司', NULL, '/d1', 0), ('d2', 't', '市场', NULL, '/d2', 0)"
-            )
-        )
-    with engine.begin() as connection:
-        ensure_org_department_sibling_unique(connection)
-        parents = connection.execute(
-            text("SELECT parent_id FROM org_departments ORDER BY id")
-        ).scalars().all()
-    assert parents == ["", ""]
-    with engine.begin() as connection, pytest.raises(IntegrityError):
-        connection.execute(
-            text(
-                "INSERT INTO org_departments "
-                "(id, tenant_id, name, parent_id, path, sort_order) "
-                "VALUES ('d3', 't', '公司', '', '/d3', 0)"
-            )
-        )
-
-
-def test_sibling_unique_migration_is_safe_on_the_current_schema(org_db) -> None:
-    db, _seeded = org_db
-    post_department(_dept("公司"), db=db, current_user=_seeded[1])
-    ensure_org_department_sibling_unique(db.connection())
-    db.commit()
-    stored = db.exec(select(OrgDepartment)).one()
-    assert stored.parent_id == ""
+    # 删除私有通讯录联系人：组织任职与企业人员不受影响。
+    delete_contact(db, "tenant_demo", agent_a.id, contact.id)
+    assert db.get(Contact, contact.id) is None
+    assert db.get(EnterprisePerson, person.id) is not None
+    assert len(db.exec(select(OrgAffiliation)).all()) == 1
+    tree = get_org_tree(tenant_id="tenant_demo", db=db, current_user=admin)
+    assert [item.name for item in tree.people] == ["张三"]

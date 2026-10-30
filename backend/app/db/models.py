@@ -798,6 +798,10 @@ class AgentProfile(SQLModel, table=True):
     persona_prompt: Optional[str] = None
     is_overall: bool = Field(default=False, index=True)
     status: str = Field(default="active", index=True)
+    # 数字员工主负责人(第一等字段)。多负责人/操作员后续用 AgentOwner 表。
+    primary_owner_user_id: Optional[str] = Field(
+        default=None, foreign_key="users.id", ondelete="SET NULL", index=True
+    )
     harness_max_actions: int = Field(default=32)
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
@@ -1075,6 +1079,46 @@ class Contact(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class EnterprisePerson(SQLModel, table=True):
+    """租户级真人主档。一个真人一条记录；登录账号可选，最多一个主账号。
+
+    通讯录 Contact 仍挂在数字员工下，不参与企业组织；组织任职/负责人引用本表。
+    """
+
+    __tablename__ = "enterprise_people"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "primary_user_id", name="uq_enterprise_person_primary_user"
+        ),
+        # 同一外部来源同一 id 只允许一条，是导入/同步幂等的库级保障；
+        # SQLite 唯一索引 NULL 互不相等，manual 行（external_id 为 NULL）不受限。
+        UniqueConstraint(
+            "tenant_id", "source", "external_id", name="uq_enterprise_person_external_id"
+        ),
+        Index("ix_enterprise_person_tenant_name", "tenant_id", "name"),
+        Index("ix_enterprise_person_tenant_status", "tenant_id", "status"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("person"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    name: str
+    employee_no: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    # active / left
+    status: str = Field(default="active", index=True)
+    # 可选登录账号；一个人最多一个主账号。后续多角色用独立授权表，不再加账号。
+    primary_user_id: Optional[str] = Field(
+        default=None, foreign_key="users.id", ondelete="SET NULL", index=True
+    )
+    # 导入/同步预留：manual / csv / wecom / feishu / dingtalk
+    source: str = Field(default="manual", index=True)
+    external_id: Optional[str] = Field(default=None, index=True)
+    last_synced_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 # 根部门的 parent_id。空字符串才能让 UNIQUE(tenant_id, parent_id, name) 对根生效；
 # SQLite 里 NULL 不等于 NULL，可空 parent_id 挡不住两个同名根。接口仍把根显示为 null。
 ORG_ROOT_PARENT_ID = ""
@@ -1102,23 +1146,29 @@ class OrgDepartment(SQLModel, table=True):
     parent_id: str = Field(default=ORG_ROOT_PARENT_ID, nullable=False, index=True)
     path: str = Field(index=True)
     sort_order: int = Field(default=0)
+    # 导入/同步预留：manual / csv / wecom / feishu / dingtalk
+    source: str = Field(default="manual", index=True)
+    external_id: Optional[str] = Field(default=None, index=True)
+    last_synced_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
 
 class OrgAffiliation(SQLModel, table=True):
-    """人与部门的任职。人键是 Contact.id，不是 User.id。"""
+    """企业人员与部门的任职。人键是 EnterprisePerson.id，岗位跟随任职区间。"""
 
     __tablename__ = "org_affiliations"
     __table_args__ = (
         Index("ix_org_affiliation_department", "tenant_id", "department_id"),
-        Index("ix_org_affiliation_contact", "tenant_id", "contact_id"),
+        Index("ix_org_affiliation_person", "tenant_id", "person_id"),
     )
 
     id: str = Field(default_factory=lambda: new_id("orgaff"), primary_key=True)
     tenant_id: str = Field(index=True)
     department_id: str = Field(foreign_key="org_departments.id", index=True)
-    contact_id: str = Field(foreign_key="contacts.id", index=True)
+    person_id: str = Field(foreign_key="enterprise_people.id", index=True)
+    # 岗位按任职保存；同一个人在不同部门/时间段可以不同。
+    position_title: Optional[str] = None
     valid_from: date
     valid_to: Optional[date] = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -1131,15 +1181,36 @@ class OrgDepartmentHead(SQLModel, table=True):
     __tablename__ = "org_department_heads"
     __table_args__ = (
         Index("ix_org_department_head_department", "tenant_id", "department_id"),
-        Index("ix_org_department_head_contact", "tenant_id", "contact_id"),
+        Index("ix_org_department_head_person", "tenant_id", "person_id"),
     )
 
     id: str = Field(default_factory=lambda: new_id("orghead"), primary_key=True)
     tenant_id: str = Field(index=True)
     department_id: str = Field(foreign_key="org_departments.id", index=True)
-    contact_id: str = Field(foreign_key="contacts.id", index=True)
+    person_id: str = Field(foreign_key="enterprise_people.id", index=True)
     valid_from: date
     valid_to: Optional[date] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class AgentDepartmentAssignment(SQLModel, table=True):
+    """数字员工与部门的业务归属；多部门共享，恰好一个主责部门。"""
+
+    __tablename__ = "agent_department_assignments"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "department_id", name="uq_agent_department_assignment"),
+        Index("ix_agent_department_tenant_agent", "tenant_id", "agent_id"),
+        Index("ix_agent_department_tenant_department", "tenant_id", "department_id"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("agentdept"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(foreign_key="agent_profiles.id", index=True)
+    department_id: str = Field(foreign_key="org_departments.id", index=True)
+    is_primary: bool = Field(default=False, index=True)
+    # owner_department(主责部门) / service_department(共享服务部门)
+    assignment_role: str = Field(default="service_department", index=True)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

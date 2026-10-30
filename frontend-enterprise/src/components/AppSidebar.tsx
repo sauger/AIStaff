@@ -95,7 +95,7 @@ const CAPABILITY_NAV: NavItem[] = [
 ];
 
 const SYSTEM_NAV: NavItem[] = [
-  { route: EnterpriseRoute.Organization, label: '组织架构', Icon: IconOrg },
+  { route: EnterpriseRoute.Company, label: '企业管理', Icon: IconOrg },
   { route: EnterpriseRoute.Accounts, label: '账号管理', Icon: IconAccounts },
   { route: EnterpriseRoute.Models, label: '模型配置', Icon: IconModels },
   { route: EnterpriseRoute.RuntimeSettings, label: '运行设置', Icon: IconSettings },
@@ -154,6 +154,11 @@ export type AppSidebarProps = AppSidebarManagementProps | AppSidebarChatProps;
 const SIDEBAR_SHELL_CLASS =
   'overflow-hidden border-r border-sidebar-border bg-sidebar backdrop-blur-[9.5px] **:data-[slot=sidebar-inner]:bg-sidebar';
 
+function isNavItemActive(item: NavItem, selected: string): boolean {
+  return selected === item.route
+    || (item.route === EnterpriseRoute.Company && selected.startsWith(`${item.route}/`));
+}
+
 function PrimaryNavButton({
   item,
   selected,
@@ -170,7 +175,7 @@ function PrimaryNavButton({
       <SidebarMenuButton
         data-guide-target={`route-${item.route}`}
         tooltip={item.label}
-        isActive={selected === item.route}
+        isActive={isNavItemActive(item, selected)}
         onClick={() => onNavigate(item.route)}
         className={cn(
           'h-[40px] gap-[10px] rounded-[14px] px-[20px] py-[10px] text-[14px] text-sidebar-foreground',
@@ -204,7 +209,7 @@ function CardNavButton({
       <SidebarMenuButton
         data-guide-target={`route-${item.route}`}
         tooltip={item.label}
-        isActive={selected === item.route}
+        isActive={isNavItemActive(item, selected)}
         onClick={() => onNavigate(item.route)}
         className={cn(
           'h-[36px] gap-[8px] rounded-[12px] px-[12px] py-[4px] text-[12px] text-sidebar-foreground',
@@ -407,7 +412,7 @@ function CollapsedNavButton({
   iconSize: number;
   attention?: boolean;
 }) {
-  const active = selected === item.route;
+  const active = isNavItemActive(item, selected);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
