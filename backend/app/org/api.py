@@ -9,33 +9,47 @@ from app.db import get_session
 from app.db.models import User
 from app.org.errors import OrgError
 from app.org.schema import (
+    AffiliationMoveRequest,
     AffiliationWriteRequest,
+    AgentDepartmentsUpdateRequest,
     DepartmentListResponse,
     DepartmentPeopleResponse,
     DepartmentRead,
     DepartmentWriteRequest,
+    EnterprisePersonListResponse,
+    EnterprisePersonRead,
+    EnterprisePersonWriteRequest,
     HeadWriteRequest,
-    OrgContactListResponse,
+    OrgAgentListResponse,
+    OrgAgentRead,
     OrgHeadRead,
     OrgPersonRead,
     OrgSettingsRead,
     OrgSettingsUpdateRequest,
+    OrgTreeResponse,
     TenureUpdateRequest,
 )
 from app.org.service import (
+    assign_agent_departments,
     create_affiliation,
     create_department,
     create_head,
+    create_person,
     delete_affiliation,
     delete_department,
     delete_head,
+    delete_person,
     department_people,
     list_departments,
-    list_org_contacts,
+    list_org_agents,
+    list_people,
+    move_affiliation,
+    org_tree,
     read_settings,
     update_affiliation,
     update_department,
     update_head,
+    update_person,
     update_settings,
 )
 from app.security.auth import get_current_user
@@ -148,6 +162,20 @@ def remove_department(
         raise
 
 
+@router.get("/tree", response_model=OrgTreeResponse)
+def get_org_tree(
+    db: SessionDep,
+    current_user: CurrentUser,
+    tenant_id: str = Query(...),
+) -> OrgTreeResponse:
+    _guard(db, tenant_id, current_user)
+    try:
+        return org_tree(db, tenant_id)
+    except OrgError as error:
+        _raise(error)
+        raise
+
+
 @router.get("/departments/{department_id}/people", response_model=DepartmentPeopleResponse)
 def get_department_people(
     department_id: str,
@@ -164,15 +192,60 @@ def get_department_people(
         raise
 
 
-@router.get("/contacts", response_model=OrgContactListResponse)
-def get_org_contacts(
+@router.get("/people", response_model=EnterprisePersonListResponse)
+def get_people(
     db: SessionDep,
     current_user: CurrentUser,
     tenant_id: str = Query(...),
-) -> OrgContactListResponse:
+) -> EnterprisePersonListResponse:
     _guard(db, tenant_id, current_user)
     try:
-        return list_org_contacts(db, tenant_id)
+        return list_people(db, tenant_id)
+    except OrgError as error:
+        _raise(error)
+        raise
+
+
+@router.post("/people", response_model=EnterprisePersonRead)
+def post_person(
+    request: EnterprisePersonWriteRequest,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> EnterprisePersonRead:
+    _guard(db, request.tenant_id, current_user)
+    try:
+        return create_person(db, request.tenant_id, request)
+    except OrgError as error:
+        _raise(error)
+        raise
+
+
+@router.patch("/people/{person_id}", response_model=EnterprisePersonRead)
+def patch_person(
+    person_id: str,
+    request: EnterprisePersonWriteRequest,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> EnterprisePersonRead:
+    _guard(db, request.tenant_id, current_user)
+    try:
+        return update_person(db, request.tenant_id, person_id, request)
+    except OrgError as error:
+        _raise(error)
+        raise
+
+
+@router.delete("/people/{person_id}")
+def remove_person(
+    person_id: str,
+    db: SessionDep,
+    current_user: CurrentUser,
+    tenant_id: str = Query(...),
+) -> dict[str, str]:
+    _guard(db, tenant_id, current_user)
+    try:
+        delete_person(db, tenant_id, person_id)
+        return {"status": "deleted"}
     except OrgError as error:
         _raise(error)
         raise
@@ -202,6 +275,21 @@ def patch_affiliation(
     _guard(db, request.tenant_id, current_user)
     try:
         return update_affiliation(db, request.tenant_id, affiliation_id, request)
+    except OrgError as error:
+        _raise(error)
+        raise
+
+
+@router.post("/affiliations/{affiliation_id}/move", response_model=OrgPersonRead)
+def post_affiliation_move(
+    affiliation_id: str,
+    request: AffiliationMoveRequest,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> OrgPersonRead:
+    _guard(db, request.tenant_id, current_user)
+    try:
+        return move_affiliation(db, request.tenant_id, affiliation_id, request)
     except OrgError as error:
         _raise(error)
         raise
@@ -263,6 +351,35 @@ def remove_head(
     try:
         delete_head(db, tenant_id, head_id)
         return {"status": "deleted"}
+    except OrgError as error:
+        _raise(error)
+        raise
+
+
+@router.get("/agents", response_model=OrgAgentListResponse)
+def get_org_agents(
+    db: SessionDep,
+    current_user: CurrentUser,
+    tenant_id: str = Query(...),
+) -> OrgAgentListResponse:
+    _guard(db, tenant_id, current_user)
+    try:
+        return list_org_agents(db, tenant_id)
+    except OrgError as error:
+        _raise(error)
+        raise
+
+
+@router.put("/agents/{agent_id}/departments", response_model=OrgAgentRead)
+def put_agent_departments(
+    agent_id: str,
+    request: AgentDepartmentsUpdateRequest,
+    db: SessionDep,
+    current_user: CurrentUser,
+) -> OrgAgentRead:
+    _guard(db, request.tenant_id, current_user)
+    try:
+        return assign_agent_departments(db, request.tenant_id, agent_id, request)
     except OrgError as error:
         _raise(error)
         raise

@@ -54,6 +54,7 @@ class AgentProfileRead(BaseModel):
     persona_prompt: Optional[str] = None
     is_overall: bool
     status: str
+    primary_owner_user_id: Optional[str] = None
     harness_max_actions: int = 32
     metadata: dict[str, Any] = Field(default_factory=dict)
     resources: list[AgentResourceBindingRead] = Field(default_factory=list)

@@ -160,6 +160,7 @@ def create_agent(
         persona_prompt=request.persona_prompt,
         is_overall=request.is_overall,
         status="active",
+        primary_owner_user_id=user.id,
         harness_max_actions=request.harness_max_actions,
         metadata_json=_metadata_with_creator(request.metadata or {}, user),
     )
@@ -494,6 +495,16 @@ def delete_agent(
     workspace_keys = [(session.tenant_id, session.id) for session in sessions]
     for session in sessions:
         purge_chat_session_records(db, session)
+    # 组织部门归属同步清理,避免部门树下悬挂已删除数字员工。
+    from app.db.models import AgentDepartmentAssignment
+
+    for assignment in db.exec(
+        select(AgentDepartmentAssignment).where(
+            AgentDepartmentAssignment.tenant_id == tenant_id,
+            AgentDepartmentAssignment.agent_id == row.id,
+        )
+    ).all():
+        db.delete(assignment)
     # 团队成员关系同步清理,避免花名册/TL 会话悬挂在已删除员工上。
     memberships = db.exec(select(TeamMember).where(TeamMember.agent_id == row.id)).all()
     for membership in memberships:
@@ -1059,6 +1070,7 @@ def agent_read(
         persona_prompt=row.persona_prompt,
         is_overall=row.is_overall,
         status=row.status,
+        primary_owner_user_id=row.primary_owner_user_id,
         harness_max_actions=max(1, min(int(row.harness_max_actions or 32), 100)),
         metadata=metadata,
         resources=[binding_read(binding) for binding in bindings],

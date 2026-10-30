@@ -50,6 +50,9 @@ _CHANNEL_SCOPE_REBUILD_MIGRATION_ID = "20260719_channel_scope_rebuild"
 _CHANNEL_BINDINGS_MULTI_MIGRATION_ID = "20260721_channel_bindings_multi"
 _CHANNEL_ACCOUNT_KEY_MIGRATION_ID = "20260723_channel_account_key_v1"
 _FEISHU_CHANNEL_SCHEMA_MIGRATION_ID = "20260724_feishu_channel_schema_v1"
+# 只跑一次:回填后管理员可显式清空 primary_owner_user_id(如删除账号),
+# 无守卫的每次启动回填会把已删除用户的 id 重新写回,造成悬空负责人。
+_AGENT_PRIMARY_OWNER_MIGRATION_ID = "20261030_agent_primary_owner_backfill"
 _CAPABILITY_SCOPE_TABLES = (
     "general_skills",
     "tools",
@@ -66,6 +69,9 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_skill_schema()
     _migrate_org_department_sibling_names()
+    _migrate_org_department_sync_fields()
+    _migrate_org_people_schema()
+    _migrate_agent_primary_owner()
     _purge_orphaned_chat_sessions()
 
 
@@ -84,6 +90,304 @@ def ensure_org_department_sibling_unique(connection) -> None:
             "ON org_departments (tenant_id, parent_id, name)"
         )
     )
+
+
+def _migrate_org_department_sync_fields() -> None:
+    """Add import/sync reservation fields to existing org departments."""
+    if not database_url.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        tables = set(inspect(connection).get_table_names())
+        if "org_departments" not in tables:
+            return
+        columns = {
+            column["name"] for column in inspect(connection).get_columns("org_departments")
+        }
+        if "source" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE org_departments ADD COLUMN source VARCHAR "
+                    "NOT NULL DEFAULT 'manual'"
+                )
+            )
+        if "external_id" not in columns:
+            connection.execute(
+                text("ALTER TABLE org_departments ADD COLUMN external_id VARCHAR")
+            )
+        if "last_synced_at" not in columns:
+            connection.execute(
+                text("ALTER TABLE org_departments ADD COLUMN last_synced_at DATETIME")
+            )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_org_departments_external_id "
+                "ON org_departments (tenant_id, external_id)"
+            )
+        )
+
+
+def _migrate_org_people_schema() -> None:
+    """Rebuild org affiliations/heads from contact_id to enterprise_people.id.
+
+    The pre-company org v1 stored a Contact.id. This migration creates one
+    EnterprisePerson per referenced contact (reusing the person when two
+    contacts already share a primary login) and rewrites both org tables.
+    It is safe to run once on a fresh or empty database.
+    """
+    if not database_url.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        tables = set(inspect(connection).get_table_names())
+        if "org_affiliations" not in tables or "org_department_heads" not in tables:
+            return
+        affiliation_columns = {
+            column["name"] for column in inspect(connection).get_columns("org_affiliations")
+        }
+        if "person_id" in affiliation_columns:
+            return
+
+        contact_ids: set[str] = set()
+        for table in ("org_affiliations", "org_department_heads"):
+            contact_ids.update(
+                str(row[0])
+                for row in connection.execute(
+                    text(f"SELECT DISTINCT contact_id FROM {table} WHERE contact_id IS NOT NULL")
+                ).fetchall()
+                if row[0]
+            )
+
+        person_by_contact: dict[str, str] = {}
+        person_by_user: dict[str, str] = {}
+        for contact_id in sorted(contact_ids):
+            contact = connection.execute(
+                text(
+                    "SELECT id, tenant_id, name, phone, email, primary_user_id, "
+                    "created_at, updated_at FROM contacts WHERE id = :id"
+                ),
+                {"id": contact_id},
+            ).mappings().first()
+            if contact is None:
+                continue
+            user_id = str(contact.get("primary_user_id") or "").strip()
+            if user_id and user_id in person_by_user:
+                person_by_contact[contact_id] = person_by_user[user_id]
+                continue
+            person_id = new_id("person")
+            connection.execute(
+                text(
+                    "INSERT INTO enterprise_people "
+                    "(id, tenant_id, name, employee_no, phone, email, status, primary_user_id, "
+                    "source, external_id, last_synced_at, created_at, updated_at) "
+                    "VALUES (:id, :tenant_id, :name, NULL, :phone, :email, 'active', "
+                    ":primary_user_id, 'migration', :external_id, NULL, :created_at, :updated_at)"
+                ),
+                {
+                    "id": person_id,
+                    "tenant_id": contact["tenant_id"],
+                    "name": contact["name"],
+                    "phone": contact["phone"],
+                    "email": contact["email"],
+                    "primary_user_id": user_id or None,
+                    "external_id": contact_id,
+                    "created_at": contact["created_at"],
+                    "updated_at": contact["updated_at"],
+                },
+            )
+            person_by_contact[contact_id] = person_id
+            if user_id:
+                person_by_user[user_id] = person_id
+
+        connection.execute(text("DROP TABLE IF EXISTS org_affiliations_new"))
+        connection.execute(text("DROP TABLE IF EXISTS org_department_heads_new"))
+        # 外键与索引和 models.OrgAffiliation 的 create_all 定义保持一致,
+        # 避免老库迁移后与新装库结构漂移(SQLite 默认不强制外键)。
+        connection.execute(
+            text(
+                "CREATE TABLE org_affiliations_new ("
+                "id VARCHAR PRIMARY KEY, tenant_id VARCHAR, department_id VARCHAR, "
+                "person_id VARCHAR, position_title VARCHAR, valid_from DATE, valid_to DATE, "
+                "created_at DATETIME, updated_at DATETIME, "
+                "FOREIGN KEY(department_id) REFERENCES org_departments (id), "
+                "FOREIGN KEY(person_id) REFERENCES enterprise_people (id))"
+            )
+        )
+        for row in connection.execute(text("SELECT * FROM org_affiliations")).mappings().all():
+            person_id = person_by_contact.get(str(row["contact_id"] or ""))
+            if not person_id:
+                continue
+            connection.execute(
+                text(
+                    "INSERT INTO org_affiliations_new "
+                    "(id, tenant_id, department_id, person_id, position_title, valid_from, "
+                    "valid_to, created_at, updated_at) VALUES "
+                    "(:id, :tenant_id, :department_id, :person_id, NULL, :valid_from, :valid_to, "
+                    ":created_at, :updated_at)"
+                ),
+                {
+                    "id": row["id"],
+                    "tenant_id": row["tenant_id"],
+                    "department_id": row["department_id"],
+                    "person_id": person_id,
+                    "valid_from": row["valid_from"],
+                    "valid_to": row["valid_to"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                },
+            )
+        connection.execute(text("DROP TABLE org_affiliations"))
+        connection.execute(text("ALTER TABLE org_affiliations_new RENAME TO org_affiliations"))
+        for index_sql in (
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_affiliations_tenant_id "
+                "ON org_affiliations (tenant_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_affiliations_department_id "
+                "ON org_affiliations (department_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_affiliations_person_id "
+                "ON org_affiliations (person_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_affiliation_department "
+                "ON org_affiliations (tenant_id, department_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_affiliation_person "
+                "ON org_affiliations (tenant_id, person_id)"
+            ),
+        ):
+            connection.execute(text(index_sql))
+
+        connection.execute(
+            text(
+                "CREATE TABLE org_department_heads_new ("
+                "id VARCHAR PRIMARY KEY, tenant_id VARCHAR, department_id VARCHAR, "
+                "person_id VARCHAR, valid_from DATE, valid_to DATE, "
+                "created_at DATETIME, updated_at DATETIME, "
+                "FOREIGN KEY(department_id) REFERENCES org_departments (id), "
+                "FOREIGN KEY(person_id) REFERENCES enterprise_people (id))"
+            )
+        )
+        for row in connection.execute(text("SELECT * FROM org_department_heads")).mappings().all():
+            person_id = person_by_contact.get(str(row["contact_id"] or ""))
+            if not person_id:
+                continue
+            connection.execute(
+                text(
+                    "INSERT INTO org_department_heads_new "
+                    "(id, tenant_id, department_id, person_id, valid_from, valid_to, "
+                    "created_at, updated_at) VALUES "
+                    "(:id, :tenant_id, :department_id, :person_id, :valid_from, :valid_to, "
+                    ":created_at, :updated_at)"
+                ),
+                {
+                    "id": row["id"],
+                    "tenant_id": row["tenant_id"],
+                    "department_id": row["department_id"],
+                    "person_id": person_id,
+                    "valid_from": row["valid_from"],
+                    "valid_to": row["valid_to"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                },
+            )
+        connection.execute(text("DROP TABLE org_department_heads"))
+        connection.execute(
+            text("ALTER TABLE org_department_heads_new RENAME TO org_department_heads")
+        )
+        for index_sql in (
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_department_heads_tenant_id "
+                "ON org_department_heads (tenant_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_department_heads_department_id "
+                "ON org_department_heads (department_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_department_heads_person_id "
+                "ON org_department_heads (person_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_department_head_department "
+                "ON org_department_heads (tenant_id, department_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_org_department_head_person "
+                "ON org_department_heads (tenant_id, person_id)"
+            ),
+        ):
+            connection.execute(text(index_sql))
+
+
+def _migrate_agent_primary_owner() -> None:
+    """Add AgentProfile.primary_owner_user_id and backfill from metadata.
+
+    Backfill runs exactly once (app_data_migrations guard): deleting a user
+    clears the column, and an unguarded re-run would restore the deleted
+    user id from metadata_json.owner_user_id on every restart.
+    """
+    if not database_url.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        tables = set(inspect(connection).get_table_names())
+        if "agent_profiles" not in tables:
+            return
+        connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS app_data_migrations (
+                    id VARCHAR PRIMARY KEY,
+                    applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        applied = connection.execute(
+            text("SELECT id FROM app_data_migrations WHERE id = :id"),
+            {"id": _AGENT_PRIMARY_OWNER_MIGRATION_ID},
+        ).first()
+        if applied:
+            return
+        columns = {
+            column["name"] for column in inspect(connection).get_columns("agent_profiles")
+        }
+        if "primary_owner_user_id" not in columns:
+            connection.execute(
+                text("ALTER TABLE agent_profiles ADD COLUMN primary_owner_user_id VARCHAR")
+            )
+        rows = connection.execute(
+            text(
+                "SELECT id, metadata_json FROM agent_profiles "
+                "WHERE primary_owner_user_id IS NULL AND metadata_json IS NOT NULL"
+            )
+        ).mappings().all()
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            owner_id = str((metadata or {}).get("owner_user_id") or "").strip()
+            if owner_id:
+                connection.execute(
+                    text(
+                        "UPDATE agent_profiles SET primary_owner_user_id = :owner_id "
+                        "WHERE id = :id"
+                    ),
+                    {"owner_id": owner_id, "id": row["id"]},
+                )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_agent_profiles_primary_owner_user_id "
+                "ON agent_profiles (primary_owner_user_id)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO app_data_migrations (id) VALUES (:id)"),
+            {"id": _AGENT_PRIMARY_OWNER_MIGRATION_ID},
+        )
 
 
 def _migrate_org_department_sibling_names() -> None:

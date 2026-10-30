@@ -97,10 +97,6 @@ def update_contact(
 
 def delete_contact(db: Session, tenant_id: str, agent_id: str, contact_id: str) -> None:
     row = _require_contact(db, tenant_id, agent_id, contact_id)
-    # Org rows point at this employee-scoped contact. Drop them with the contact.
-    from app.org.service import purge_contact_links
-
-    purge_contact_links(db, tenant_id, contact_id)
     db.delete(row)
     db.commit()
 

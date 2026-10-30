@@ -38,7 +38,7 @@ import {
   preferredEmployeeAgent,
 } from "./employee";
 import AccountsPage from "./pages/AccountsPage";
-import OrgStructurePage from "./pages/OrgStructurePage";
+import CompanyPage from "./pages/company/CompanyPage";
 import AgentsPage from "./pages/AgentsPage";
 import ChannelsPage from "./pages/ChannelsPage";
 import EmployeeAccessChannelsPage from "./pages/channels/EmployeeAccessChannelsPage";
@@ -811,14 +811,48 @@ function Shell({
                 }
               />
               <Route
-                path="/enterprise/organization"
+                path="/enterprise/company"
+                element={<Navigate to={EnterpriseRoute.CompanyOrganization} replace />}
+              />
+              <Route
+                path="/enterprise/company/organization"
                 element={
                   isAdmin ? (
-                    <OrgStructurePage currentUser={auth.user} onLogout={onLogout} />
+                    <CompanyPage
+                      tab="organization"
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
                   ) : (
                     <Navigate to={EnterpriseRoute.Gallery} replace />
                   )
                 }
+              />
+              <Route
+                path="/enterprise/company/members"
+                element={
+                  isAdmin ? (
+                    <CompanyPage
+                      tab="members"
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  ) : (
+                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                  )
+                }
+              />
+              <Route
+                path="/enterprise/company/people"
+                element={<Navigate to={EnterpriseRoute.CompanyMembers} replace />}
+              />
+              <Route
+                path="/enterprise/company/agents"
+                element={<Navigate to={EnterpriseRoute.CompanyMembers} replace />}
+              />
+              <Route
+                path="/enterprise/organization"
+                element={<Navigate to={EnterpriseRoute.CompanyOrganization} replace />}
               />
               <Route
                 path="/enterprise/accounts"

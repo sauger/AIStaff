@@ -463,9 +463,42 @@ def delete_user(
     avatar = db.get(UserAvatar, user_id)
     if avatar:
         db.delete(avatar)
-    # SQLite 未开外键时 ON DELETE SET NULL 不会生效,这里显式解开通讯录账号链接。
+    # SQLite 未开外键时 ON DELETE SET NULL 不会生效,这里显式解开人员/通讯录账号链接。
     from app.contacts.linking import clear_primary_user
+    from app.db.models import AgentProfile, EnterprisePerson
 
+    owned_agents = db.exec(
+        select(AgentProfile).where(
+            AgentProfile.tenant_id == tenant_id,
+            AgentProfile.primary_owner_user_id == user.id,
+        )
+    ).all()
+    active_owned_agents = [row for row in owned_agents if row.status == "active"]
+    if active_owned_agents:
+        raise HTTPException(
+            status_code=400,
+            detail="该账号仍是数字员工主负责人，请先转移负责人后再删除账号",
+        )
+    for row in owned_agents:
+        row.primary_owner_user_id = None
+        # owner 三键一并清除：组织页负责人名会回落到 metadata 旧值，
+        # 留着会把已删除用户的名字继续显示成负责人。
+        metadata = dict(row.metadata_json or {})
+        for key in ("owner_user_id", "owner_username", "owner_display_name"):
+            metadata.pop(key, None)
+        row.metadata_json = metadata
+        row.updated_at = utc_now()
+        db.add(row)
+    person = db.exec(
+        select(EnterprisePerson).where(
+            EnterprisePerson.tenant_id == tenant_id,
+            EnterprisePerson.primary_user_id == user.id,
+        )
+    ).first()
+    if person is not None:
+        person.primary_user_id = None
+        person.updated_at = utc_now()
+        db.add(person)
     clear_primary_user(db, user.id)
     db.delete(user)
     db.commit()

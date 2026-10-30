@@ -129,16 +129,16 @@ describe('AppSidebar agent switcher team group', () => {
     expect(within(trigger).getByText('增长团队')).toBeTruthy();
   });
 
-  it('keeps organization structure in admin navigation, not employee capabilities', () => {
+  it('keeps enterprise management in admin navigation, not employee capabilities', () => {
     renderSidebar({ selectedAgentId: 'agent-1' });
-    expect(screen.queryByText('组织架构')).toBeNull();
+    expect(screen.queryByText('企业管理')).toBeNull();
     cleanup();
     renderSidebar({ selectedAgentId: 'agent-1', isAdmin: true });
-    expect(screen.getByText('组织架构')).toBeTruthy();
+    expect(screen.getByText('企业管理')).toBeTruthy();
     expect(screen.getByText('员工能力')).toBeTruthy();
     expect(screen.getByText('通讯录')).toBeTruthy();
     const capability = screen.getByText('员工能力').parentElement;
-    expect(capability?.textContent?.includes('组织架构')).toBe(false);
+    expect(capability?.textContent?.includes('企业管理')).toBe(false);
   });
 
   it('places the file cabinet and mail next to knowledge in capability navigation', () => {
