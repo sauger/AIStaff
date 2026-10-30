@@ -1,9 +1,10 @@
 # 企微自建应用平台化 P0
 
 日期：2026-10-30  
+修订：2026-10-30，信息架构改为可折叠侧栏子菜单，路由仍沿用已合并的 PR #30（`abfabde`，`feat(company): 企业管理与成员管理`）。  
 仓库：sauger/AIStaff  
 状态：设计。本文件是 P0 的实现规格。本 PR 不改应用代码。  
-已决：三层模型、信息架构、多应用与默认应用、凭证加密方式，由药 李子（sauger）拍板。下文按已决目标写。与仓库现状不一致的地方记在 §3，不把已决项再改回现状。
+已决：三层模型、多应用与默认应用、凭证加密方式，由药 李子（sauger）拍板。企微应用留在企业管理里，和渠道管理分开。入口是侧栏里可折叠的子菜单，不是 `CompanyPage` 的页签。下文按这个目标写。与仓库现状不一致的地方记在 §3，不把已决项再改回现状。
 
 相关现状代码（只读，P0 实现时再改）：
 
@@ -13,7 +14,7 @@
 - 审批代发读凭证：`backend/app/wecom_oa/service.py` 的 `get_oa_credential`
 - 渠道页嵌套 OA 面板：`frontend-enterprise/src/pages/ChannelsPage.tsx` 引入 `WecomOaAdminPanel`
 - 员工档案上的审批场景表单：`WecomOaAgentConfigPanel`（`EmployeeProfileEditor`），不是应用凭证
-- 侧栏：`AppSidebar` 的 `SYSTEM_NAV`，组织架构与账号管理、模型配置、运行设置并列
+- 企业管理壳：`frontend-enterprise/src/pages/company/CompanyPage.tsx`（PR #30）。侧栏目前只有一项「企业管理」→ `/enterprise/company`。页内 `UnderlineTabs` 分成组织架构 `/enterprise/company/organization`、成员 `/enterprise/company/members`。`/enterprise/organization` 重定向到组织架构路由。`AppSidebar` 里「基本资料 / 员工能力」是静态分组，没有可折叠子菜单。整栏收起记在 `localStorage` 键 `ultrarag_enterprise_sidebar_expanded`（`App.tsx`）
 
 ## 1. 目标与非目标
 
@@ -57,7 +58,7 @@ P0 的「员工领用」沿用现在 OA 的用法：员工不持有 corp secret 
 | 层 | 持有者 | 凭证 | 入口 | P0 |
 | --- | --- | --- | --- | --- |
 | 智能机器人（Bot） | 数字员工，1:1 | 机器人 ID + Secret，外加绑定上的企业 ID。放在 `ChannelBinding` | 渠道管理里的企微卡片，只保留 `WecomSetup`。员工侧「接入渠道」同样只绑机器人 | 不改机器人行为 |
-| 自建应用（App） | 租户 / 平台 | `corp_id`、`agentid`、secret，以及回调 Token / EncodingAESKey | 企业管理 → 企微应用 | 本文 |
+| 自建应用（App） | 租户 / 平台 | `corp_id`、`agentid`、secret，以及回调 Token / EncodingAESKey | 侧栏「企业管理」展开后的子项「企微应用」，路由 `/enterprise/company/wecom-apps` | 本文 |
 | 事件池 + 认领 | 租户池，员工认领后才进会话 | 不另发凭证。认领的是事件，不是 secret | 尚未建页面 | 不建 |
 
 自建应用的用法与现有 OA 相同，叫「平台持证 + 员工领用」：secret 只在租户行上，员工侧能力（今天的审批代发）使用平台凭证，员工档案里不出现 secret 输入框。
@@ -71,7 +72,7 @@ P0 的「员工领用」沿用现在 OA 的用法：员工不持有 corp secret 
 1. **表只能一企业一行。** `wecom_oa_app_credentials` 的唯一约束是 `(tenant_id, corp_id)`（`uq_wecom_oa_app_tenant_corp`）。同一企业的第二个 agent 存不进去。`agentid` 可空。没有名称、没有默认标记、没有自检结果。
 2. **读取是「任意一行」。** `get_oa_credential` 在 `status == active` 上 `first()`。未按 `corp_id` 过滤时，没有「默认应用」。审批预览（`preview_approval`）不传 `corp_id`；提交和查询传 `intent.corp_id`。
 3. **管理入口嵌在渠道卡片里。** `ChannelsPage` 在 `binding.channel === 'wecom'` 时渲染 `WecomOaAdminPanel`。这个面板同时包含「OA 自建应用凭证」和「临时身份绑定（Mode B）」。接口是单条 `GET/PUT /api/enterprise/wecom-oa/credentials`。
-4. **侧栏没有「企业管理」父菜单。** `SYSTEM_NAV` 把「组织架构」与账号管理、模型配置、运行设置并列。组织架构路由是 `/enterprise/organization`，仅管理员可见，也不在员工能力里。
+4. **分区还在页面页签上，侧栏不能折叠子项。** PR #30 的侧栏是一项「企业管理」（`EnterpriseRoute.Company` = `/enterprise/company`）。`CompanyPage` 用 `UnderlineTabs` 放组织架构 `/enterprise/company/organization` 和成员 `/enterprise/company/members`。`/enterprise/company` 重定向到组织架构。旧路由 `/enterprise/organization` 重定向到 `/enterprise/company/organization`。`AppSidebar` 没有可折叠的导航子组：「基本资料」「员工能力」只是静态 `GroupLabel`。整栏图标模式的展开状态写在 `ultrarag_enterprise_sidebar_expanded`，那是侧栏宽窄，不是某一组的子项。P0 要把这三个分区做成「企业管理」下可折叠的侧栏子项，并去掉页面页签。账号管理、模型配置、运行设置仍是侧栏上的平级项。不使用 `/enterprise/wecom-apps`。
 5. **回调不区分应用。** 公开路径是 `GET/POST /api/public/wecom-oa/callback/{tenant_id}`。验签用该租户 `get_oa_credential` 返回的那一行。多应用之后这条路径无法选择 Token。
 6. **员工档案上的审批场景不是应用凭证。** `WecomOaAgentConfigPanel` 写 `AgentResourceBinding`（`resource_type = wecom_oa_approval`）：模板 ID、Mode A/B、字段映射。P0 保留这个表单和这些接口。它不搬到「企微应用」，也不在 P0 重写。
 7. **还没有事件池，也没有认领表。** 回调里非审批、或没有 `sp_no` 的消息只打日志。这和 P0「先不建池」一致，不要在 P0 顺手加表。
@@ -80,12 +81,34 @@ P0 的「员工领用」沿用现在 OA 的用法：员工不持有 corp secret 
 
 ## 4. 信息架构
 
-管理员侧栏增加父菜单 **企业管理**。它下面只有两项：
+依赖已合并的 PR #30 的路由，不依赖它的页签。P0 把 Company 从页面级 `UnderlineTabs` 迁到侧栏可折叠子菜单。企微应用是「企业管理」下的同级子项，不是 `CompanyPage` 上的第三个页签。
 
-- **组织架构** — 现有页面，路由仍是 `/enterprise/organization`，从平级系统项移入该父菜单
-- **企微应用** — 新页面，路由 `/enterprise/wecom-apps`
+父项 **企业管理** 只负责展开和收起，不单独占一个内容页。展开时显示三个子项，收起时子项不渲染。子项才导航：
 
-账号管理、模型配置、运行设置仍是父菜单之外的管理员项，不收进「企业管理」。非管理员看不到这一组，接口仍走租户管理员校验（与组织架构、现有 OA 凭证相同：`ensure_current_user_tenant` + `is_admin_user`）。
+| 侧栏子项 | 路由 | P0 |
+| --- | --- | --- |
+| 组织架构 | `/enterprise/company/organization` | 已有路由，从页签挪到子项 |
+| 成员 | `/enterprise/company/members` | 已有路由，从页签挪到子项 |
+| 企微应用 | `/enterprise/company/wecom-apps` | 新路由。`EnterpriseRoute` 增加常量。页面内容是应用凭证，不是 `CompanyTab` |
+
+`/enterprise/company` 继续重定向到 `/enterprise/company/organization`。`/enterprise/organization` 继续重定向到组织架构路由，不要改回独立页面。不新增 `/enterprise/wecom-apps`。`/enterprise/company/people` 与 `/enterprise/company/agents` 继续重定向到成员。
+
+交互：
+
+- 父行是按钮，带展开指示（现有侧栏的 chevron 一类），`aria-expanded` 表示开或关。点击父行只切换开合，不把父行当成第四个路由。
+- 展开时三个子项按上表顺序出现，缩进在父项下面，视觉沿用现有侧栏行（父行接近 `PrimaryNavButton`，子行接近「基本资料」下的 `CardNavButton`）。当前子路由高亮。任一子路由激活时，父行也保持选中态。
+- 收起时只留父行。若当前就在某个子路由上，允许收起；父行仍然呈选中态，避免人找不到这一组。
+- 非管理员不渲染这一组，和今天的企业管理入口一样。账号管理、模型配置、运行设置仍是侧栏平级项，不放进这组。
+- 侧栏收成图标时，子项文字藏起，父图标仍在。点父图标展开侧栏，或直接进入当前已选子路由；没有已选子路由时进入组织架构。不要在图标模式下把三行文字挤进窄栏。
+
+展开记忆：`AppSidebar` 里没有现成的「一组子导航可折叠」可照搬。「基本资料 / 员工能力」不能折叠。能持久化的只有整栏宽窄 `ultrarag_enterprise_sidebar_expanded`。P0 另用一个 `localStorage` 布尔键，读写方式和那个键相同，例如 `ultrarag_enterprise_company_nav_expanded`。缺省为展开。用户折叠或展开后写回。刷新后读回。若当前 URL 已经在 `/enterprise/company/` 下而存的是收起，进入该路由时展开并写回，保证深链能看到被选中的子项。不要把这组的开合写进整栏那个键。
+
+页面：
+
+- 去掉 `CompanyPage` 的 `UnderlineTabs` 和 `CompanyTab` 切换。组织架构、成员、企微应用各自是一条路由。
+- 三个路由仍可共用现在的页头外壳，标题保持「企业管理」。描述句补上自建应用。分区切换只在侧栏发生。
+- `App.tsx` 为 `/enterprise/company/wecom-apps` 增加管理员路由。非管理员重定向到广场，与组织架构、成员一致。
+- 企微应用页只渲染凭证内容，不再从 `CompanyPage` 的 `tab === 'wecom-apps'` 分支挂出来。
 
 ```
 管理员侧栏
@@ -93,28 +116,31 @@ P0 的「员工领用」沿用现在 OA 的用法：员工不持有 corp secret 
   我的数字员工
   我的团队
   渠道管理          ← 企微卡片只留智能机器人
-  企业管理
-    组织架构
-    企微应用        ← 自建应用 CRUD、默认、回调、自检
+  企业管理          ← 可折叠父项，点击展开/收起
+    组织架构        ← /enterprise/company/organization
+    成员            ← /enterprise/company/members
+    企微应用        ← /enterprise/company/wecom-apps
   账号管理
   模型配置
   运行设置
 ```
 
+接口仍走租户管理员校验（与组织架构、现有 OA 凭证相同：`ensure_current_user_tenant` + `is_admin_user`）。
+
 渠道管理：
 
 - 企微绑定卡片只保留 `WecomSetup`（机器人 ID、机器人 Secret、企业 ID）
-- 去掉嵌在卡片上的 `WecomOaAdminPanel`
+- 去掉嵌在卡片上的整块 `WecomOaAdminPanel`。凭证表单和 Mode B 临时绑定在同一块面板里，一起离开渠道页
 - 不在渠道页保留「只是藏起来」的应用 secret 表单
 
-企微应用页（管理员）：
+企微应用子页（管理员，路由 `/enterprise/company/wecom-apps`）：
 
 - 空状态：说明自建应用是租户级凭证，和智能机器人不是同一套，并给出新建入口
 - 列表：名称、企业 ID、AgentId、是否默认、最近一次自检结果、回调地址（可复制）
 - 新建 / 编辑：名称、企业 ID、AgentId、Secret、回调 Token、EncodingAESKey
 - 操作：保存、设为默认、连通性自检、删除
 - 密钥输入框只在填写时出现。已保存的密钥不回显，用「Secret 已存 / 回调 Token 已存」这样的标记
-- 页下单独一节 **临时身份绑定（Mode B）**。这是现有 `WecomOaAdminPanel` 下半截搬家，好让渠道页只剩机器人。绑定规则、接口路径、字段都不改。文案写明：这不是应用凭证，P0 不改 Mode A/B
+- 页底单独一节 **临时身份绑定（Mode B）**。它跟着凭证一起从 `WecomOaAdminPanel` 搬来，不留在渠道卡片上。绑定规则、接口路径、字段都不改。文案写明：这不是应用凭证，P0 不改 Mode A/B
 
 员工侧：
 
@@ -151,8 +177,9 @@ P0 的「员工领用」沿用现在 OA 的用法：员工不持有 corp secret 
 约束：
 
 - `UNIQUE(tenant_id, corp_id, agentid)`。同一企业的两个 agent 可以并存。
+- 空的 `agentid` 存空字符串 `''`，不存 NULL。SQLite 的 UNIQUE 把多个 NULL 当成互不重复，同一企业可以塞进两行空白 AgentId。空字符串才会被这条唯一约束挡住。新建接口仍然拒绝空白 AgentId，不依赖数据库去拦截手填的空值。
 - 每个租户最多一个 `is_default = 1`。启动时执行 `CREATE UNIQUE INDEX IF NOT EXISTS uq_wecom_app_one_default ON wecom_apps (tenant_id) WHERE is_default = 1`。设默认的接口也要在同一事务里清掉同租户其他行的默认标记。
-- 新建接口拒绝空的 `agentid`。旧行 `agentid` 为空时仍迁入，自检在调用企微之前直接返回「请先填写 AgentId」。审批代发今天并不读取 `agentid`，所以缺 AgentId 只挡住自检，不挡住已经在用的代发。
+- 新建接口拒绝空的 `agentid`。旧行 `agentid` 为空时仍迁入（写成 `''`），自检在调用企微之前直接返回「请先填写 AgentId」。审批代发今天并不读取 `agentid`，所以缺 AgentId 只挡住自检，不挡住已经在用的代发。
 - `disabled` 的行不能当默认。设默认之前必须是 `active`。回调和代发都不使用 `disabled` 行。
 
 P0 **不**给 `WecomApprovalIntent` 加 `app_id`。意图继续记 `corp_id`。代发时取默认应用，并核对该 `corp_id`。多应用路由需要的快照留到 P3，避免 P0 改审批写入路径。
@@ -191,7 +218,7 @@ P0 **不**建事件池表。目标表名和列放在 §10，避免 P1 另起一�
 
 旧管理接口：
 
-- `PUT /api/enterprise/wecom-oa/credentials` 在 P0 改为 409，提示改用企微应用页。不双写旧表。
+- `PUT /api/enterprise/wecom-oa/credentials` 在 P0 改为 409，提示改用企业管理侧栏子项「企微应用」（`/enterprise/company/wecom-apps`）。不双写旧表。
 - `GET /api/enterprise/wecom-oa/credentials` 改为只读投影：有默认应用则返回旧的 `credential` 公开字段（`id` 用新 `wapp_` id）；没有则 `credential: null`。给还没刷新的页面一个空状态，而不是继续写旧表。
 - `/api/enterprise/wecom-oa/temp-identity-bindings` 与 `/api/enterprise/wecom-oa/agents/{agent_id}/approval-config` 保持原样。
 - `/api/chat/wecom-oa/confirm` 与 `dismiss` 保持原样。
@@ -248,7 +275,7 @@ P0 **保留**这条路径，作为默认应用的兼容入口，避免已经配�
 - 审批变更仍走 `apply_status_update`
 - 打一条不含 secret 的日志，说明命中的是旧路径
 - 不接收「非默认应用」的事件。第二个应用必须把后台回调改成新路径
-- 企微应用页展示的、要求管理员复制的地址是新路径。旧路径不作为新应用的配置说明
+- 企微应用子页展示的、要求管理员复制的地址是新路径。旧路径不作为新应用的配置说明
 
 去掉旧路径不是 P0。等操作者把企微后台改到新地址之后，再在后续阶段删除。P0 不设自动下线。
 
@@ -271,7 +298,7 @@ P0 **保留**这条路径，作为默认应用的兼容入口，避免已经配�
 - 没有 active 行则不设默认。
 - 迁完后再跑设默认，不得破坏已经人工设好的默认（以「新表已有默认」为准，跳过自动选择）。
 
-`agentid` 为空的旧行照搬。唯一约束在 P0 新建时才要求 AgentId。旧数据里同一 `(tenant_id, corp_id)` 至多一行，迁移不会撞上「同一企业两个 agent」。
+`agentid` 为空的旧行照搬，并写成 `''` 而不是 NULL，见 §5。唯一约束在 P0 新建时才要求 AgentId。旧数据里同一 `(tenant_id, corp_id)` 至多一行，迁移不会撞上「同一企业两个 agent」。同一企业若再迁入第二行空白 AgentId，唯一约束应失败并停在这一行，不要静默改成 NULL 绕过。
 
 意图、临时身份绑定、员工审批配置都不改写。
 
@@ -312,8 +339,8 @@ P2 才规定谁可以认领、认领后会话挂在哪个数字员工。P3 才�
 ## 11. 实现时须守住的决定
 
 1. 机器人凭证留在 `ChannelBinding`。应用凭证只在 `wecom_apps`。员工身上不保存应用 secret。
-2. 渠道管理的企微卡片不再渲染应用凭证，也不再渲染 OA 凭证表单。Mode B 临时绑定挪到企微应用页底部，规则不变。
-3. 「企业管理」父菜单下是组织架构和企微应用。组织架构路由不变。
+2. 渠道管理的企微卡片不再渲染 `WecomOaAdminPanel`。凭证和 Mode B 临时绑定一起挪到企微应用子页底部，绑定规则不变。
+3. 「企业管理」是可折叠侧栏父项。展开后的子项是组织架构、成员、企微应用，路由分别是 `/enterprise/company/organization`、`/enterprise/company/members`、`/enterprise/company/wecom-apps`。去掉 `CompanyPage` 的 `UnderlineTabs`。展开状态单独记住，不做成页面页签，不新增 `/enterprise/wecom-apps`。
 4. 一个租户多行应用，唯一键是 `(tenant_id, corp_id, agentid)`，且只有一个默认应用。
 5. 审批代发只用默认应用。`corp_id` 对不上就失败，不扫描其他行。
 6. 新回调路径带 `app_id`。旧路径只服务默认应用，P0 不删除。
