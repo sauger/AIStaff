@@ -2146,6 +2146,40 @@ class WecomOaAppCredential(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class WecomApp(SQLModel, table=True):
+    """租户级企微自建应用。OA 代发使用 is_default 的那一行。"""
+
+    __tablename__ = "wecom_apps"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "corp_id",
+            "agentid",
+            name="uq_wecom_app_tenant_corp_agent",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("wapp"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    name: str
+    corp_id: str = Field(index=True)
+    # 空字符串而不是 NULL，避免 SQLite UNIQUE 把多个 NULL 当成互不重复。
+    agentid: str = Field(default="")
+    secret_enc: str
+    callback_token_enc: Optional[str] = None
+    callback_aes_key_enc: Optional[str] = None
+    is_default: bool = Field(default=False)
+    status: str = Field(default="active", index=True)
+    legacy_oa_credential_id: Optional[str] = Field(default=None, unique=True, index=True)
+    last_check_at: Optional[datetime] = None
+    last_check_ok: Optional[bool] = None
+    last_check_summary: Optional[str] = None
+    last_callback_verified_at: Optional[datetime] = None
+    created_by_user_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class WecomTempIdentityBinding(SQLModel, table=True):
     """组织架构上线前的临时身份绑定：staffdeck_user_id → 企微 userid。
 

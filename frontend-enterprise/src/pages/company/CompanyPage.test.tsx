@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe('CompanyPage', () => {
-  it('renders the members tab under the enterprise management shell', async () => {
+  it('renders members under the enterprise management shell', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/enterprise/org/people')) return jsonResponse({ people: [] });
@@ -45,16 +45,15 @@ describe('CompanyPage', () => {
     render(
       <I18nProvider>
         <MemoryRouter>
-          <CompanyPage tab="members" currentUser={admin} />
+          <CompanyPage section="members" currentUser={admin} />
         </MemoryRouter>
       </I18nProvider>,
     );
 
     expect(await screen.findByText('企业管理')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: '组织架构' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: '成员' })).toBeTruthy();
-    expect(screen.queryByRole('tab', { name: '企业人员' })).toBeNull();
-    expect(screen.queryByRole('tab', { name: '数字员工' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: '组织架构' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: '成员' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: '企微应用' })).toBeNull();
     expect(screen.getByRole('button', { name: '新建人员' })).toBeTruthy();
   });
 });

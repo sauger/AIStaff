@@ -11,7 +11,7 @@ from app.db.models import (
     Tenant,
     WecomApprovalIntent,
 )
-from app.wecom_oa.credentials import store_oa_credential
+from app.wecom_oa.apps import create_wecom_app
 from app.wecom_oa.service import (
     invoke_wecom_oa_approval,
     preview_approval,
@@ -64,7 +64,14 @@ class _RecordingClient:
 def _seed_mode_a(db: Session):
     db.add(Tenant(id="t1", name="T"))
     db.add(AgentProfile(id="agent_1", tenant_id="t1", name="Bot"))
-    store_oa_credential(db, tenant_id="t1", corp_id="ww", secret="sec")
+    create_wecom_app(
+        db,
+        tenant_id="t1",
+        name="OA",
+        corp_id="ww",
+        agentid="1000002",
+        secret="sec",
+    )
     save_agent_approval_config(
         db,
         tenant_id="t1",

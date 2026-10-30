@@ -24,7 +24,7 @@ from app.db.models import (
     WecomApprovalStatusEvent,
 )
 from app.wecom_oa.callback import apply_status_update, verify_callback
-from app.wecom_oa.credentials import store_oa_credential
+from app.wecom_oa.apps import create_wecom_app
 from app.wecom_oa.identity import upsert_temp_binding
 from app.wecom_oa.service import preview_approval, save_agent_approval_config, submit_approval
 
@@ -85,10 +85,12 @@ def _seed_mode_b(db: Session, *, compliance=False):
     db.add(Tenant(id="t1", name="T"))
     db.add(AgentProfile(id="agent_1", tenant_id="t1", name="Bot"))
     aes_key = base64.b64encode(bytes(range(32))).decode().rstrip("=")
-    store_oa_credential(
+    create_wecom_app(
         db,
         tenant_id="t1",
+        name="OA",
         corp_id="wwcorp",
+        agentid="1000002",
         secret="sec",
         callback_token="callback-token",
         callback_aes_key=aes_key,

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   DropdownMenu,
@@ -100,6 +100,54 @@ const SYSTEM_NAV: NavItem[] = [
   { route: EnterpriseRoute.Models, label: '模型配置', Icon: IconModels },
   { route: EnterpriseRoute.RuntimeSettings, label: '运行设置', Icon: IconSettings },
 ];
+
+const COMPANY_NAV_STORAGE_KEY = 'ultrarag_enterprise_company_nav_expanded';
+
+const COMPANY_CHILDREN: NavItem[] = [
+  { route: EnterpriseRoute.CompanyOrganization, label: '组织架构', Icon: IconOrg },
+  { route: EnterpriseRoute.CompanyMembers, label: '成员', Icon: IconContacts },
+  { route: EnterpriseRoute.CompanyWecomApps, label: '企微应用', Icon: IconGlobe },
+];
+
+function companySectionActive(selected: string): boolean {
+  return selected === EnterpriseRoute.Company || selected.startsWith(`${EnterpriseRoute.Company}/`);
+}
+
+function readCompanyNavExpanded(selected: string): boolean {
+  if (companySectionActive(selected)) return true;
+  const stored = window.localStorage.getItem(COMPANY_NAV_STORAGE_KEY);
+  return stored == null ? true : stored === '1';
+}
+
+function writeCompanyNavExpanded(expanded: boolean) {
+  window.localStorage.setItem(COMPANY_NAV_STORAGE_KEY, expanded ? '1' : '0');
+}
+
+function useCompanyNavExpanded(selected: string) {
+  const [expanded, setExpanded] = useState(() => readCompanyNavExpanded(selected));
+  useEffect(() => {
+    if (!companySectionActive(selected)) return;
+    setExpanded(true);
+    writeCompanyNavExpanded(true);
+  }, [selected]);
+  const toggle = () => {
+    setExpanded((current) => {
+      const next = !current;
+      writeCompanyNavExpanded(next);
+      return next;
+    });
+  };
+  return { expanded, toggle };
+}
+
+function companyChildActive(route: EnterpriseRoute, selected: string): boolean {
+  if (route === EnterpriseRoute.CompanyMembers) {
+    return selected === route
+      || selected === EnterpriseRoute.CompanyPeople
+      || selected === EnterpriseRoute.CompanyAgents;
+  }
+  return selected === route;
+}
 
 function primaryNavItems(isAdmin: boolean): NavItem[] {
   return isAdmin ? [...PRIMARY_NAV, ...SYSTEM_NAV] : PRIMARY_NAV;
@@ -223,6 +271,83 @@ function CardNavButton({
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
+}
+
+function CompanyNavGroup({
+  expanded,
+  onToggle,
+  selected,
+  onNavigate,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  selected: string;
+  onNavigate: (route: string) => void;
+}) {
+  const parentActive = companySectionActive(selected);
+  return (
+    <>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          type="button"
+          data-guide-target={`route-${EnterpriseRoute.Company}`}
+          tooltip="企业管理"
+          aria-expanded={expanded}
+          aria-label="企业管理"
+          isActive={parentActive}
+          onClick={onToggle}
+          className={cn(
+            'h-[40px] gap-[10px] rounded-[14px] px-[20px] py-[10px] text-[14px] text-sidebar-foreground',
+            'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            'data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground data-active:font-normal',
+            'group-data-[collapsible=icon]:px-0!',
+          )}
+        >
+          <IconOrg className="size-[16px]!" />
+          <span className="text-[14px]">企业管理</span>
+          <IconChevronDown
+            className={cn(
+              'ml-auto size-[14px]! text-[#7a35cd] transition-transform group-data-[collapsible=icon]:hidden',
+              expanded ? 'rotate-0' : '-rotate-90',
+            )}
+          />
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      {expanded && COMPANY_CHILDREN.map((item) => (
+        <SidebarMenuItem key={item.route} className="group-data-[collapsible=icon]:hidden">
+          <SidebarMenuButton
+            type="button"
+            data-guide-target={`route-${item.route}`}
+            tooltip={item.label}
+            isActive={companyChildActive(item.route, selected)}
+            onClick={() => onNavigate(item.route)}
+            className={cn(
+              'ml-[18px] h-[36px] gap-[8px] rounded-[12px] border-l border-[#d7c6ff] px-[12px] py-[4px] text-[12px]',
+              'text-sidebar-foreground hover:bg-[#f6f0ff] hover:text-[#5b2d9e]',
+              'data-active:bg-[#f3e8ff] data-active:text-[#6d28d9] data-active:font-normal',
+            )}
+          >
+            <item.Icon className="size-[14px]!" />
+            <span>{item.label}</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      ))}
+    </>
+  );
+}
+
+function collapsedCompanyNavigate(
+  selected: string,
+  onNavigate: (route: string) => void,
+  onToggle: () => void,
+): (route: string) => void {
+  return () => {
+    if (companySectionActive(selected)) {
+      onToggle();
+      return;
+    }
+    onNavigate(EnterpriseRoute.CompanyOrganization);
+  };
 }
 
 function GroupLabel({ children }: { children: string }) {
@@ -561,7 +686,11 @@ function CollapsedSidebar({
             key={item.route}
             item={item}
             selected={selected}
-            onNavigate={onNavigate}
+            onNavigate={
+              item.route === EnterpriseRoute.Company
+                ? collapsedCompanyNavigate(selected, onNavigate, onToggle)
+                : onNavigate
+            }
             radius={10}
             iconSize={16}
             attention={modelSetupAttention && item.route === EnterpriseRoute.Models}
@@ -647,6 +776,7 @@ function ManagementSidebar({
   const { toggleSidebar, state } = useSidebar();
   const brandCollapsed = useMemo(() => state === 'collapsed', [state]);
   const primaryItems = useMemo(() => primaryNavItems(isAdmin), [isAdmin]);
+  const companyNav = useCompanyNavExpanded(selected);
 
   if (brandCollapsed) {
     return (
@@ -692,13 +822,23 @@ function ManagementSidebar({
         <div className="flex flex-col gap-[18px]">
           <SidebarMenu className="gap-[10px]">
             {primaryItems.map((item) => (
-              <PrimaryNavButton
-                key={item.route}
-                item={item}
-                selected={selected}
-                onNavigate={onNavigate}
-                attention={modelSetupAttention && item.route === EnterpriseRoute.Models}
-              />
+              item.route === EnterpriseRoute.Company ? (
+                <CompanyNavGroup
+                  key={item.route}
+                  expanded={companyNav.expanded}
+                  onToggle={companyNav.toggle}
+                  selected={selected}
+                  onNavigate={onNavigate}
+                />
+              ) : (
+                <PrimaryNavButton
+                  key={item.route}
+                  item={item}
+                  selected={selected}
+                  onNavigate={onNavigate}
+                  attention={modelSetupAttention && item.route === EnterpriseRoute.Models}
+                />
+              )
             ))}
           </SidebarMenu>
           <div className="h-px w-full bg-sidebar-border group-data-[collapsible=icon]:hidden" />

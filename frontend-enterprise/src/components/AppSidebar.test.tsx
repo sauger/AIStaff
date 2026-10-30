@@ -72,14 +72,16 @@ function renderSidebar(props: {
   onSelectAgent?: (value: string) => void;
   scopeTeams?: TeamRead[];
   isAdmin?: boolean;
+  selected?: string;
+  onNavigate?: (route: string) => void;
 }) {
   return render(
     <I18nProvider>
       <TooltipProvider>
         <SidebarProvider>
           <AppSidebar
-            selected="/enterprise/dashboard"
-            onNavigate={() => {}}
+            selected={props.selected ?? '/enterprise/dashboard'}
+            onNavigate={props.onNavigate ?? (() => {})}
             isAdmin={props.isAdmin ?? false}
             scopeAgents={[agent]}
             scopeTeams={props.scopeTeams ?? [team]}
@@ -100,6 +102,7 @@ afterEach(() => {
 
 beforeEach(() => {
   stubRadixPointerApis();
+  window.localStorage.removeItem('ultrarag_enterprise_company_nav_expanded');
 });
 
 describe('AppSidebar agent switcher team group', () => {
@@ -139,6 +142,39 @@ describe('AppSidebar agent switcher team group', () => {
     expect(screen.getByText('通讯录')).toBeTruthy();
     const capability = screen.getByText('员工能力').parentElement;
     expect(capability?.textContent?.includes('企业管理')).toBe(false);
+    expect(screen.getByRole('button', { name: '企业管理', expanded: true })).toBeTruthy();
+    expect(screen.getByText('组织架构')).toBeTruthy();
+    expect(screen.getByText('成员')).toBeTruthy();
+    expect(screen.getByText('企微应用')).toBeTruthy();
+  });
+
+  it('folds company children without navigating and restores a deep link', async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    renderSidebar({ selectedAgentId: 'agent-1', isAdmin: true, onNavigate });
+
+    await user.click(screen.getByRole('button', { name: '企业管理' }));
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(screen.queryByText('组织架构')).toBeNull();
+    expect(screen.queryByText('企微应用')).toBeNull();
+    expect(window.localStorage.getItem('ultrarag_enterprise_company_nav_expanded')).toBe('0');
+    cleanup();
+
+    renderSidebar({ selectedAgentId: 'agent-1', isAdmin: true, onNavigate });
+    expect(screen.queryByText('企微应用')).toBeNull();
+    cleanup();
+
+    window.localStorage.setItem('ultrarag_enterprise_company_nav_expanded', '0');
+    renderSidebar({
+      selectedAgentId: 'agent-1',
+      isAdmin: true,
+      onNavigate,
+      selected: '/enterprise/company/wecom-apps',
+    });
+    expect(screen.getByText('企微应用')).toBeTruthy();
+    expect(window.localStorage.getItem('ultrarag_enterprise_company_nav_expanded')).toBe('1');
+    await user.click(screen.getByText('企微应用'));
+    expect(onNavigate).toHaveBeenCalledWith('/enterprise/company/wecom-apps');
   });
 
   it('places the file cabinet and mail next to knowledge in capability navigation', () => {
