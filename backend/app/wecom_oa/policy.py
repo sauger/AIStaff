@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from datetime import date, datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 ApplicantMode = Literal["fixed", "chat_partner"]
 
@@ -26,6 +29,14 @@ DENIED_WIDGET_TYPES = frozenset(
 )
 _ALLOWED_WIDGET_TYPES_LOWER = frozenset(t.lower() for t in ALLOWED_WIDGET_TYPES)
 _DENIED_WIDGET_TYPES_LOWER = frozenset(t.lower() for t in DENIED_WIDGET_TYPES)
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
+# 9–12 位纯数字视为已经算好的 unix 秒；8 位 YYYYMMDD 走日历解析。
+_UNIX_SECONDS_RE = re.compile(r"^\d{9,12}$")
+_COMPACT_DATE_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
+_CIVIL_DATE_RE = re.compile(
+    r"^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?"
+    r"(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$"
+)
 
 RESOURCE_TYPE = "wecom_oa_approval"
 
@@ -188,11 +199,11 @@ def _control_payload(control_id: str, widget_type: str, value: Any) -> dict[str,
     if wt == "money":
         return {"control": "Money", "id": control_id, "value": {"new_money": text}}
     if wt == "date":
-        # 期望 unix 秒或可解析字符串；原样放入
+        # 企微 Date 只认 unix 秒。日历字符串会被当成缺字段（301025 item required）。
         return {
             "control": "Date",
             "id": control_id,
-            "value": {"date": {"type": "day", "s_timestamp": text}},
+            "value": {"date": {"type": "day", "s_timestamp": _to_wecom_day_timestamp(value)}},
         }
     if wt == "selector":
         options = value if isinstance(value, list) else [value]
@@ -207,3 +218,54 @@ def _control_payload(control_id: str, widget_type: str, value: Any) -> dict[str,
             },
         }
     raise WecomOaConfigError(f"无法序列化控件: {widget_type}")
+
+
+def _to_wecom_day_timestamp(value: Any) -> str:
+    """把日期收成 Asia/Shanghai 当日 0 点的 unix 秒字符串。
+
+    2026-10-31 → "1793376000"。已经是 unix 秒的值原样保留。
+    """
+    if isinstance(value, bool) or value is None:
+        raise WecomOaConfigError("日期字段无效")
+    if isinstance(value, (int, float)):
+        seconds = int(value)
+        if seconds < 0:
+            raise WecomOaConfigError(f"日期时间戳无效: {value}")
+        return str(seconds)
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return _shanghai_midnight_unix(value.year, value.month, value.day)
+    text = str(value).strip()
+    if not text:
+        raise WecomOaConfigError("日期字段为空")
+    if _UNIX_SECONDS_RE.fullmatch(text):
+        return text
+    compact = _COMPACT_DATE_RE.fullmatch(text)
+    if compact:
+        return _shanghai_midnight_unix(
+            int(compact.group(1)),
+            int(compact.group(2)),
+            int(compact.group(3)),
+            text,
+        )
+    matched = _CIVIL_DATE_RE.fullmatch(text)
+    if matched is None:
+        raise WecomOaConfigError(f"无法解析日期: {text}")
+    return _shanghai_midnight_unix(
+        int(matched.group(1)),
+        int(matched.group(2)),
+        int(matched.group(3)),
+        text,
+    )
+
+
+def _shanghai_midnight_unix(
+    year: int, month: int, day: int, raw: str | None = None
+) -> str:
+    try:
+        moment = datetime(year, month, day, tzinfo=_SHANGHAI)
+    except ValueError as exc:
+        label = raw if raw is not None else f"{year:04d}-{month:02d}-{day:02d}"
+        raise WecomOaConfigError(f"无法解析日期: {label}") from exc
+    return str(int(moment.timestamp()))

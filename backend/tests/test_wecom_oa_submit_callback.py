@@ -81,7 +81,7 @@ def _signature(token: str, timestamp: str, nonce: str, ciphertext: str) -> str:
     ).hexdigest()
 
 
-def _seed_mode_b(db: Session, *, compliance=False):
+def _seed_mode_b(db: Session, *, compliance=False, field_mappings=None):
     db.add(Tenant(id="t1", name="T"))
     db.add(AgentProfile(id="agent_1", tenant_id="t1", name="Bot"))
     aes_key = base64.b64encode(bytes(range(32))).decode().rstrip("=")
@@ -111,7 +111,8 @@ def _seed_mode_b(db: Session, *, compliance=False):
             "template_id": "tpl_b",
             "scenario_key": "default",
             "applicant_mode": "chat_partner",
-            "field_mappings": [
+            "field_mappings": field_mappings
+            or [
                 {
                     "control_id": "Text-1",
                     "widget_type": "Text",
@@ -251,6 +252,162 @@ def test_applyevent_failure_clear_message_not_submitted():
         assert "失败" in out["error"]
         intent = db.get(WecomApprovalIntent, preview["intent_id"])
         assert intent.status == "failed"
+        assert intent.sp_no is None
+
+
+def test_submit_sends_date_as_shanghai_unix_seconds():
+    engine = _engine()
+    apply_bodies = []
+
+    def handler(method, url, params, json):
+        if "gettoken" in url:
+            return _FakeResponse(
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200}
+            )
+        if "applyevent" in url:
+            apply_bodies.append(json)
+            return _FakeResponse({"errcode": 0, "sp_no": "SPDATE"})
+        if "getapprovaldetail" in url:
+            return _FakeResponse({"errcode": 0, "info": {"sp_status": 1}})
+        raise AssertionError(url)
+
+    with Session(engine) as db:
+        _seed_mode_b(
+            db,
+            field_mappings=[
+                {
+                    "control_id": "Date-15611111111",
+                    "widget_type": "Date",
+                    "slot_key": "day",
+                    "title": "日期",
+                }
+            ],
+        )
+        preview = preview_approval(
+            db,
+            tenant_id="t1",
+            session_id="sess_date",
+            agent_id="agent_1",
+            user_id="user_partner",
+            scenario_key="default",
+            fields={"day": "2026-10-31"},
+        )
+        out = submit_approval(
+            db,
+            tenant_id="t1",
+            session_id="sess_date",
+            agent_id="agent_1",
+            user_id="user_partner",
+            intent_id=preview["intent_id"],
+            confirmed_digest=preview["submission_digest"],
+            client_factory=lambda: _Client(handler),
+        )
+        assert out["ok"] is True
+        assert len(apply_bodies) == 1
+        content = apply_bodies[0]["apply_data"]["contents"][0]
+        assert content["value"]["date"]["s_timestamp"] == "1793376000"
+        assert apply_bodies[0]["use_template_approver"] == 1
+
+
+def test_missing_template_flow_falls_back_to_applicant_approver():
+    engine = _engine()
+    apply_bodies = []
+
+    def handler(method, url, params, json):
+        if "gettoken" in url:
+            return _FakeResponse(
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200}
+            )
+        if "applyevent" in url:
+            apply_bodies.append(json)
+            if json.get("use_template_approver") == 1:
+                return _FakeResponse(
+                    {"errcode": 301025, "errmsg": "get approval param error:"}
+                )
+            return _FakeResponse({"errcode": 0, "sp_no": "SPFLOW"})
+        if "getapprovaldetail" in url:
+            return _FakeResponse({"errcode": 0, "info": {"sp_status": 1}})
+        raise AssertionError(url)
+
+    with Session(engine) as db:
+        _seed_mode_b(db)
+        preview = preview_approval(
+            db,
+            tenant_id="t1",
+            session_id="sess_flow",
+            agent_id="agent_1",
+            user_id="user_partner",
+            scenario_key="default",
+            fields={"reason": "无流程"},
+        )
+        out = submit_approval(
+            db,
+            tenant_id="t1",
+            session_id="sess_flow",
+            agent_id="agent_1",
+            user_id="user_partner",
+            intent_id=preview["intent_id"],
+            confirmed_digest=preview["submission_digest"],
+            client_factory=lambda: _Client(handler),
+        )
+        assert out["ok"] is True
+        assert out["sp_no"] == "SPFLOW"
+        assert len(apply_bodies) == 2
+        assert apply_bodies[0]["use_template_approver"] == 1
+        assert "approver" not in apply_bodies[0]
+        assert apply_bodies[1]["use_template_approver"] == 0
+        assert apply_bodies[1]["approver"] == [
+            {"attr": 1, "userid": ["partner_wx"]}
+        ]
+        assert out["audit"]["approver_source"] == "applicant_fallback"
+        msgs = db.exec(select(Message).where(Message.session_id == "sess_flow")).all()
+        assert any("申请人 partner_wx 本人审批" in m.content for m in msgs)
+
+
+def test_required_control_error_does_not_self_approve():
+    engine = _engine()
+    apply_count = {"n": 0}
+
+    def handler(method, url, params, json):
+        if "gettoken" in url:
+            return _FakeResponse(
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200}
+            )
+        if "applyevent" in url:
+            apply_count["n"] += 1
+            return _FakeResponse(
+                {
+                    "errcode": 301025,
+                    "errmsg": "get approval param error:item-Date-1 is required",
+                }
+            )
+        raise AssertionError(url)
+
+    with Session(engine) as db:
+        _seed_mode_b(db)
+        preview = preview_approval(
+            db,
+            tenant_id="t1",
+            session_id="sess_req",
+            agent_id="agent_1",
+            user_id="user_partner",
+            scenario_key="default",
+            fields={"reason": "缺控件"},
+        )
+        out = submit_approval(
+            db,
+            tenant_id="t1",
+            session_id="sess_req",
+            agent_id="agent_1",
+            user_id="user_partner",
+            intent_id=preview["intent_id"],
+            confirmed_digest=preview["submission_digest"],
+            client_factory=lambda: _Client(handler),
+        )
+        assert out["ok"] is False
+        assert out["status"] == "failed"
+        assert apply_count["n"] == 1
+        intent = db.get(WecomApprovalIntent, preview["intent_id"])
         assert intent.sp_no is None
 
 
