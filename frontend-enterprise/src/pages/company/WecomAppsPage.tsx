@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { Input } from '@/components/ui';
+import { Input, UnderlineTabs, type UnderlineTabItem } from '@/components/ui';
 import { Button as UIButton } from '@/components/ui/button';
 import { notify } from '@/components/ui/app-toast';
 
 import { api, TENANT_ID } from '../../api/client';
 import type { EnterpriseAuthUser } from '../../auth';
 import { CompanyShell } from './CompanyPage';
+import WecomAppApprovalTemplatesTab from './WecomAppApprovalTemplatesTab';
 import WecomTempIdentitySection from './WecomTempIdentitySection';
+
+type WecomAppTab = 'basic' | 'templates';
+
+const APP_TABS: UnderlineTabItem<WecomAppTab>[] = [
+  { value: 'basic', label: '基础信息' },
+  { value: 'templates', label: '审批模板' },
+];
 
 const PRIMARY_BUTTON_CLASS =
   'h-8 gap-1 rounded-[10px] bg-[#18181a] px-5 text-[12px] font-normal text-white hover:bg-[#303030]';
@@ -70,6 +78,7 @@ export default function WecomAppsPage({
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<AppForm>(EMPTY_FORM);
   const [pendingDelete, setPendingDelete] = useState<WecomAppView | null>(null);
+  const [tab, setTab] = useState<WecomAppTab>('basic');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -229,6 +238,18 @@ export default function WecomAppsPage({
 
   return (
     <CompanyShell currentUser={currentUser} onLogout={onLogout}>
+      <UnderlineTabs
+        aria-label="企微应用内容"
+        value={tab}
+        onChange={setTab}
+        items={APP_TABS}
+        className="mb-[16px]"
+        tabClassName="w-auto min-w-[96px] px-[10px]"
+      />
+      {tab === 'templates' ? (
+        <WecomAppApprovalTemplatesTab apps={apps} preferredAppId={editingId} />
+      ) : (
+      <>
       <section className="flex flex-col gap-[16px]" data-testid="wecom-apps-page">
         <div className="flex flex-wrap items-start justify-between gap-[12px]">
           <div className="flex min-w-0 flex-col gap-[4px]">
@@ -387,6 +408,8 @@ export default function WecomAppsPage({
       </section>
 
       <WecomTempIdentitySection currentUser={currentUser} />
+      </>
+      )}
 
       <ConfirmDialog
         open={pendingDelete !== null}

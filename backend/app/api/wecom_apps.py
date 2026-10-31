@@ -37,6 +37,12 @@ from app.wecom_oa.directory import (
     load_department_tree,
     load_department_users,
 )
+from app.wecom_oa.templates import (
+    WecomTemplateError,
+    assign_approval_template,
+    load_visible_approval_templates,
+    lookup_approval_template,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +93,17 @@ class WecomDirectoryUser(BaseModel):
 class WecomDirectoryUsersResponse(BaseModel):
     department_id: int
     users: list[WecomDirectoryUser]
+
+
+class ApprovalTemplateLookup(BaseModel):
+    template_id: str
+
+
+class ApprovalTemplateAssign(BaseModel):
+    template_id: str
+    template_name: str | None = None
+    agent_ids: list[str]
+    scenario_key: str = "default"
 
 
 def _require_admin(tenant_id: str, user: User) -> None:
@@ -272,6 +289,70 @@ def post_check(
         return check_wecom_app(db, row)
     except WecomAppError as exc:
         _raise_app_error(exc)
+
+
+def _raise_template_error(exc: WecomTemplateError) -> NoReturn:
+    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+
+
+@router.get("/{app_id}/approval-templates")
+def get_approval_templates(
+    app_id: str,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_admin(tenant_id, current_user)
+    try:
+        return load_visible_approval_templates(db, tenant_id=tenant_id, app_id=app_id)
+    except WecomTemplateError as exc:
+        _raise_template_error(exc)
+
+
+@router.post("/{app_id}/approval-templates/lookup")
+def post_approval_template_lookup(
+    app_id: str,
+    body: ApprovalTemplateLookup,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_admin(tenant_id, current_user)
+    try:
+        return lookup_approval_template(
+            db,
+            tenant_id=tenant_id,
+            app_id=app_id,
+            template_id=body.template_id,
+        )
+    except WecomTemplateError as exc:
+        _raise_template_error(exc)
+
+
+@router.post("/{app_id}/approval-templates/assignments")
+def post_approval_template_assignments(
+    app_id: str,
+    body: ApprovalTemplateAssign,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_admin(tenant_id, current_user)
+    try:
+        rows = assign_approval_template(
+            db,
+            tenant_id=tenant_id,
+            app_id=app_id,
+            template_id=body.template_id,
+            template_name=body.template_name,
+            agent_ids=body.agent_ids,
+            scenario_key=body.scenario_key,
+        )
+    except WecomTemplateError as exc:
+        _raise_template_error(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"assignments": rows}
 
 
 @callback_router.get("/callback/{tenant_id}/{app_id}")

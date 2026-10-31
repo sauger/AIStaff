@@ -52,6 +52,8 @@ describe('WecomAppsPage', () => {
     );
 
     expect(await screen.findByText('还没有企微自建应用')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '基础信息' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '审批模板' })).toBeTruthy();
     expect(screen.getByText('临时身份绑定（Mode B）')).toBeTruthy();
     expect(screen.getByText('新增/更新绑定')).toBeTruthy();
     expect(screen.queryByText('保存 OA 凭证')).toBeNull();
