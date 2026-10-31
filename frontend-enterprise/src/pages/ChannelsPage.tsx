@@ -57,7 +57,6 @@ import { formatHandoffAssigneeValue, parseHandoffAssigneeValue } from '../lib/ha
 import { feishuAppIdFromIdentityScope } from '../lib/identity-scope';
 import WechatSetup from './channels/WechatSetup';
 import WecomSetup from './channels/WecomSetup';
-import WecomOaAdminPanel from './channels/WecomOaAdminPanel';
 import FeishuSetup from './channels/FeishuSetup';
 import DingTalkSetup from './channels/DingTalkSetup';
 import WechatKfSetup from './channels/WechatKfSetup';
@@ -1061,9 +1060,6 @@ export default function ChannelsPage({
           />
         ) : (
           <WechatSetup binding={binding} onChanged={() => void load()} />
-        )}
-        {binding.channel === 'wecom' && (
-          <WecomOaAdminPanel currentUser={currentUser} />
         )}
         <div className="flex items-center justify-between gap-[12px] border-t border-[#eef0f4] pt-[16px]">
           <div className="flex min-w-0 flex-col gap-[4px]">

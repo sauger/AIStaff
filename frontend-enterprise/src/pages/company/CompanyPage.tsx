@@ -1,56 +1,51 @@
-import { useNavigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
 
 import AppHeader from '@/components/AppHeader';
-import { UnderlineTabs, type UnderlineTabItem } from '@/components/ui';
 
 import type { EnterpriseAuthUser } from '../../auth';
-import { EnterpriseRoute } from '../../enums/routes';
 import CompanyMembersPage from './CompanyMembersPage';
 import OrgStructurePage from '../OrgStructurePage';
 
-export type CompanyTab = 'organization' | 'members';
+export type CompanySection = 'organization' | 'members';
 
-const TABS: UnderlineTabItem<CompanyTab>[] = [
-  { value: 'organization', label: '组织架构' },
-  { value: 'members', label: '成员' },
-];
-
-const ROUTES: Record<CompanyTab, string> = {
-  organization: EnterpriseRoute.CompanyOrganization,
-  members: EnterpriseRoute.CompanyMembers,
-};
-
-export default function CompanyPage({
-  tab,
+export function CompanyShell({
   currentUser,
   onLogout,
+  children,
 }: {
-  tab: CompanyTab;
   currentUser?: EnterpriseAuthUser;
   onLogout?: () => void;
+  children: ReactNode;
 }) {
-  const navigate = useNavigate();
-
   return (
     <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]">
       <AppHeader
         onLogout={onLogout}
         userName={currentUser?.username}
         title="企业管理"
-        description="维护企业信息、组织架构，以及企业人员与数字员工的成员关系。"
+        description="维护企业信息、组织架构、企业人员与数字员工的成员关系，以及企微自建应用凭证。"
       />
-      <UnderlineTabs
-        className="mt-[20px] mb-[16px]"
-        aria-label="企业管理分区"
-        value={tab}
-        onChange={(next) => navigate(ROUTES[next])}
-        items={TABS}
-      />
-      {tab === 'organization' ? (
+      <div className="mt-[20px]">{children}</div>
+    </div>
+  );
+}
+
+export default function CompanyPage({
+  section,
+  currentUser,
+  onLogout,
+}: {
+  section: CompanySection;
+  currentUser?: EnterpriseAuthUser;
+  onLogout?: () => void;
+}) {
+  return (
+    <CompanyShell currentUser={currentUser} onLogout={onLogout}>
+      {section === 'organization' ? (
         <OrgStructurePage currentUser={currentUser} embedded />
       ) : (
         <CompanyMembersPage currentUser={currentUser} />
       )}
-    </div>
+    </CompanyShell>
   );
 }

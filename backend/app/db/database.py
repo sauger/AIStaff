@@ -72,7 +72,142 @@ def init_db() -> None:
     _migrate_org_department_sync_fields()
     _migrate_org_people_schema()
     _migrate_agent_primary_owner()
+    _migrate_wecom_apps()
     _purge_orphaned_chat_sessions()
+
+
+def _migrate_wecom_apps() -> None:
+    with engine.begin() as connection:
+        migrate_wecom_apps(connection)
+
+
+def migrate_wecom_apps(connection) -> None:
+    """Copy legacy OA credentials into wecom_apps. Ciphertext is copied, not re-encrypted.
+
+    Safe to run repeatedly. Skips rows already recorded by legacy_oa_credential_id.
+    Does not replace a default an operator already chose.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    tables = set(inspect(connection).get_table_names())
+    if "wecom_apps" not in tables:
+        return
+    if connection.dialect.name in {"sqlite", "postgresql"}:
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_wecom_app_one_default "
+                "ON wecom_apps (tenant_id) WHERE is_default = 1"
+            )
+        )
+    if "wecom_oa_app_credentials" not in tables:
+        return
+
+    legacy_rows = connection.execute(
+        text(
+            "SELECT id, tenant_id, corp_id, agentid, secret_enc, callback_token_enc, "
+            "callback_aes_key_enc, status, created_by_user_id, created_at, updated_at "
+            "FROM wecom_oa_app_credentials"
+        )
+    ).mappings().all()
+    inserted_by_tenant: dict[str, list[str]] = {}
+    for legacy in legacy_rows:
+        legacy_id = str(legacy["id"])
+        already = connection.execute(
+            text(
+                "SELECT id FROM wecom_apps WHERE legacy_oa_credential_id = :legacy_id"
+            ),
+            {"legacy_id": legacy_id},
+        ).first()
+        if already is not None:
+            continue
+        corp_id = str(legacy["corp_id"] or "").strip()
+        agentid_raw = legacy["agentid"]
+        agentid = "" if agentid_raw is None else str(agentid_raw).strip()
+        app_id = new_id("wapp")
+        tenant_id = str(legacy["tenant_id"])
+        try:
+            connection.execute(
+                text(
+                    "INSERT INTO wecom_apps ("
+                    "id, tenant_id, name, corp_id, agentid, secret_enc, "
+                    "callback_token_enc, callback_aes_key_enc, is_default, status, "
+                    "legacy_oa_credential_id, last_check_at, last_check_ok, "
+                    "last_check_summary, last_callback_verified_at, created_by_user_id, "
+                    "created_at, updated_at"
+                    ") VALUES ("
+                    ":id, :tenant_id, :name, :corp_id, :agentid, :secret_enc, "
+                    ":callback_token_enc, :callback_aes_key_enc, 0, :status, "
+                    ":legacy_oa_credential_id, NULL, NULL, NULL, NULL, :created_by_user_id, "
+                    ":created_at, :updated_at"
+                    ")"
+                ),
+                {
+                    "id": app_id,
+                    "tenant_id": tenant_id,
+                    "name": f"企业微信应用 {corp_id}",
+                    "corp_id": corp_id,
+                    "agentid": agentid,
+                    "secret_enc": legacy["secret_enc"],
+                    "callback_token_enc": legacy["callback_token_enc"],
+                    "callback_aes_key_enc": legacy["callback_aes_key_enc"],
+                    "status": str(legacy["status"] or "active"),
+                    "legacy_oa_credential_id": legacy_id,
+                    "created_by_user_id": legacy["created_by_user_id"],
+                    "created_at": legacy["created_at"],
+                    "updated_at": legacy["updated_at"],
+                },
+            )
+        except IntegrityError:
+            raise RuntimeError(
+                "企微应用迁移在唯一约束处停止 "
+                f"tenant_id={tenant_id} corp_id={corp_id} legacy_id={legacy_id}"
+            ) from None
+        inserted_by_tenant.setdefault(tenant_id, []).append(app_id)
+
+    for tenant_id, inserted_ids in inserted_by_tenant.items():
+        has_default = connection.execute(
+            text(
+                "SELECT 1 FROM wecom_apps WHERE tenant_id = :tenant_id AND is_default = 1 LIMIT 1"
+            ),
+            {"tenant_id": tenant_id},
+        ).first()
+        if has_default is not None:
+            continue
+        placeholders = ", ".join(f":id_{index}" for index in range(len(inserted_ids)))
+        params = {f"id_{index}": app_id for index, app_id in enumerate(inserted_ids)}
+        params["tenant_id"] = tenant_id
+        candidates = connection.execute(
+            text(
+                "SELECT id, updated_at, legacy_oa_credential_id FROM wecom_apps "
+                "WHERE tenant_id = :tenant_id AND status = 'active' "
+                f"AND id IN ({placeholders})"
+            ),
+            params,
+        ).mappings().all()
+        if not candidates:
+            continue
+        chosen = _choose_migrated_default(candidates)
+        connection.execute(
+            text("UPDATE wecom_apps SET is_default = 1 WHERE id = :id"),
+            {"id": chosen["id"]},
+        )
+
+
+def _migration_timestamp(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _choose_migrated_default(candidates):
+    """Newest updated_at. Equal timestamps pick the smaller legacy id."""
+    newest = max(_migration_timestamp(row["updated_at"]) for row in candidates)
+    tied = [
+        row for row in candidates if _migration_timestamp(row["updated_at"]) == newest
+    ]
+    return min(tied, key=lambda row: str(row["legacy_oa_credential_id"] or ""))
 
 
 def ensure_org_department_sibling_unique(connection) -> None:

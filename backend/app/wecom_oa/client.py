@@ -11,7 +11,6 @@ from typing import Any
 import httpx
 
 from app.channels.adapters.wecom import WECOM_API_BASE, WECOM_TOKEN_REFRESH_SKEW_SECONDS
-from app.db.models import WecomOaAppCredential
 from app.wecom_oa.credentials import WecomOaCredentialError, load_plaintext_secrets
 
 logger = logging.getLogger(__name__)
@@ -57,12 +56,10 @@ class WecomOaTokenProvider:
         self._lock = threading.Lock()
 
     @staticmethod
-    def _key(credential: WecomOaAppCredential) -> tuple[str, str]:
+    def _key(credential: Any) -> tuple[str, str]:
         return credential.id, credential.corp_id
 
-    def get(
-        self, credential: WecomOaAppCredential, *, force_refresh: bool = False
-    ) -> str:
+    def get(self, credential: Any, *, force_refresh: bool = False) -> str:
         key = self._key(credential)
         with self._lock:
             cached = self._cache.get(key)
@@ -101,7 +98,7 @@ class WecomOaTokenProvider:
             )
         return token
 
-    def invalidate(self, credential: WecomOaAppCredential) -> None:
+    def invalidate(self, credential: Any) -> None:
         with self._lock:
             self._cache.pop(self._key(credential), None)
 
@@ -111,7 +108,7 @@ class WecomOaClient:
 
     def __init__(
         self,
-        credential: WecomOaAppCredential,
+        credential: Any,
         *,
         token_provider: WecomOaTokenProvider | None = None,
         client_factory: Callable[[], httpx.Client] | None = None,

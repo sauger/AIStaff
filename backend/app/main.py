@@ -32,6 +32,7 @@ from app.api import (
     traces,
     ui_config,
     wechat_kf,
+    wecom_apps,
     wecom_oa,
 )
 from app.cabinet.api import router as cabinet_router
@@ -168,6 +169,8 @@ app.include_router(wechat_kf.router)
 app.include_router(wecom_oa.router)
 app.include_router(wecom_oa.callback_router)
 app.include_router(wecom_oa.chat_router)
+app.include_router(wecom_apps.router)
+app.include_router(wecom_apps.callback_router)
 app.include_router(teams.router)
 app.include_router(teams.threads_router)
 app.include_router(tools.router)

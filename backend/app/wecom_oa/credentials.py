@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cryptography.fernet import InvalidToken
 from sqlmodel import Session, select
 
 from app.channels.crypto import decrypt_channel_secret, encrypt_channel_secret
@@ -65,51 +66,56 @@ def store_oa_credential(
     return row
 
 
-def get_oa_credential(
-    db: Session, *, tenant_id: str, corp_id: str | None = None
-) -> WecomOaAppCredential | None:
-    stmt = select(WecomOaAppCredential).where(
-        WecomOaAppCredential.tenant_id == tenant_id,
-        WecomOaAppCredential.status == "active",
-    )
-    if corp_id:
-        stmt = stmt.where(WecomOaAppCredential.corp_id == corp_id)
-    return db.exec(stmt).first()
+def _decrypt_secret(token: str) -> str:
+    try:
+        return decrypt_channel_secret(token)
+    except (InvalidToken, ValueError, TypeError) as exc:
+        raise WecomOaCredentialError("企微应用密钥无法解密，请检查服务端密钥配置") from exc
 
 
-def load_plaintext_secrets(row: WecomOaAppCredential) -> dict[str, str]:
-    if not row.secret_enc:
+def load_plaintext_secrets(row: Any) -> dict[str, str]:
+    if not getattr(row, "secret_enc", None):
         raise WecomOaCredentialError("OA 应用 secret 缺失")
     out: dict[str, str] = {
         "corp_id": row.corp_id,
-        "secret": decrypt_channel_secret(row.secret_enc),
+        "secret": _decrypt_secret(row.secret_enc),
     }
-    if row.agentid:
-        out["agentid"] = row.agentid
+    agentid = str(getattr(row, "agentid", "") or "").strip()
+    if agentid:
+        out["agentid"] = agentid
     if row.callback_token_enc:
-        out["callback_token"] = decrypt_channel_secret(row.callback_token_enc)
+        out["callback_token"] = _decrypt_secret(row.callback_token_enc)
     if row.callback_aes_key_enc:
-        out["callback_aes_key"] = decrypt_channel_secret(row.callback_aes_key_enc)
+        out["callback_aes_key"] = _decrypt_secret(row.callback_aes_key_enc)
     return out
 
 
-def credential_public_view(row: WecomOaAppCredential) -> dict[str, Any]:
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def credential_public_view(row: Any) -> dict[str, Any]:
     """对外返回不含明文密钥的视图。"""
+    agentid = str(getattr(row, "agentid", "") or "").strip() or None
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
         "corp_id": row.corp_id,
-        "agentid": row.agentid,
+        "agentid": agentid,
         "status": row.status,
         "has_secret": bool(row.secret_enc),
         "has_callback_token": bool(row.callback_token_enc),
         "has_callback_aes_key": bool(row.callback_aes_key_enc),
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "created_at": _iso(getattr(row, "created_at", None)),
+        "updated_at": _iso(getattr(row, "updated_at", None)),
     }
 
 
-def dump_callback_bundle(row: WecomOaAppCredential) -> dict[str, str]:
+def dump_callback_bundle(row: Any) -> dict[str, str]:
     """回调验签所需的 token / aes_key / corp_id。"""
     secrets = load_plaintext_secrets(row)
     token = secrets.get("callback_token") or ""

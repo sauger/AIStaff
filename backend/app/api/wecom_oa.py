@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -16,20 +15,14 @@ from app.db import engine, get_session
 from app.db.models import AgentProfile, User, WecomApprovalIntent
 from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import is_admin_user
-from app.wecom_oa.callback import (
-    WecomOaCallbackError,
-    apply_status_update,
-    decrypt_callback_message,
-    parse_approval_change_xml,
-    verify_callback,
+from app.wecom_oa.apps import get_default_wecom_app
+from app.wecom_oa.callback import WecomOaCallbackError
+from app.wecom_oa.callback_ingress import (
+    accept_app_callback_event,
+    callback_http_status,
+    verify_app_callback_url,
 )
-from app.wecom_oa.credentials import (
-    WecomOaCredentialError,
-    credential_public_view,
-    dump_callback_bundle,
-    get_oa_credential,
-    store_oa_credential,
-)
+from app.wecom_oa.credentials import WecomOaCredentialError, credential_public_view
 from app.wecom_oa.identity import (
     delete_temp_binding,
     list_temp_bindings,
@@ -108,7 +101,7 @@ def get_credentials(
     db: Session = Depends(get_session),
 ) -> dict[str, Any]:
     _require_admin(tenant_id, current_user)
-    row = get_oa_credential(db, tenant_id=tenant_id)
+    row = get_default_wecom_app(db, tenant_id=tenant_id)
     if row is None:
         return {"credential": None}
     return {"credential": credential_public_view(row)}
@@ -122,20 +115,10 @@ def upsert_credentials(
     db: Session = Depends(get_session),
 ) -> dict[str, Any]:
     _require_admin(tenant_id, current_user)
-    try:
-        row = store_oa_credential(
-            db,
-            tenant_id=tenant_id,
-            corp_id=body.corp_id,
-            secret=body.secret,
-            agentid=body.agentid,
-            callback_token=body.callback_token,
-            callback_aes_key=body.callback_aes_key,
-            created_by_user_id=current_user.id,
-        )
-    except WecomOaCredentialError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"credential": credential_public_view(row)}
+    raise HTTPException(
+        status_code=409,
+        detail="请改用企业管理侧栏子项「企微应用」（/enterprise/company/wecom-apps）",
+    )
 
 
 @router.get("/temp-identity-bindings")
@@ -336,15 +319,27 @@ def callback_verify(
     if not all((msg_signature, timestamp, nonce, echostr)):
         raise HTTPException(status_code=400, detail="缺少回调校验参数")
     with Session(engine) as db:
-        cred = get_oa_credential(db, tenant_id=tenant_id)
-        if cred is None:
-            raise HTTPException(status_code=404, detail="未配置 OA 凭证")
+        app = get_default_wecom_app(db, tenant_id=tenant_id)
+        if app is None:
+            raise HTTPException(status_code=404, detail="未配置默认企微应用")
+        logger.info(
+            "wecom oa legacy callback tenant_id=%s app_id=%s",
+            tenant_id,
+            app.id,
+        )
         try:
-            bundle = dump_callback_bundle(cred)
-            verify_callback(bundle["token"], msg_signature, timestamp, nonce, echostr)
-            plain = decrypt_callback_message(echostr, bundle["aes_key"], bundle["corp_id"])
+            plain = verify_app_callback_url(
+                db,
+                app,
+                msg_signature=msg_signature,
+                timestamp=timestamp,
+                nonce=nonce,
+                echostr=echostr,
+            )
         except (WecomOaCallbackError, WecomOaCredentialError) as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=callback_http_status(exc), detail=str(exc)
+            ) from None
     return Response(content=plain, media_type="text/plain")
 
 
@@ -357,44 +352,26 @@ async def callback_event(
     nonce: str = Query(""),
 ) -> Response:
     body = await request.body()
-    ciphertext = ""
-    try:
-        # JSON 或 XML Encrypt 节点
-        text = body.decode("utf-8")
-        if "<Encrypt>" in text:
-            from defusedxml import ElementTree as ET
-
-            root = ET.fromstring(text)
-            node = root.find("Encrypt")
-            ciphertext = (node.text or "") if node is not None else ""
-        else:
-            payload = json.loads(text or "{}")
-            ciphertext = str(payload.get("Encrypt") or payload.get("encrypt") or "")
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="回调体无效") from exc
-    if not all((msg_signature, timestamp, nonce, ciphertext)):
-        raise HTTPException(status_code=400, detail="缺少回调参数")
     with Session(engine) as db:
-        cred = get_oa_credential(db, tenant_id=tenant_id)
-        if cred is None:
-            raise HTTPException(status_code=404, detail="未配置 OA 凭证")
+        app = get_default_wecom_app(db, tenant_id=tenant_id)
+        if app is None:
+            raise HTTPException(status_code=404, detail="未配置默认企微应用")
+        logger.info(
+            "wecom oa legacy callback tenant_id=%s app_id=%s",
+            tenant_id,
+            app.id,
+        )
         try:
-            bundle = dump_callback_bundle(cred)
-            verify_callback(bundle["token"], msg_signature, timestamp, nonce, ciphertext)
-            plain = decrypt_callback_message(ciphertext, bundle["aes_key"], bundle["corp_id"])
-            parsed = parse_approval_change_xml(plain)
-            if parsed.get("sp_no"):
-                apply_status_update(
-                    db,
-                    sp_no=parsed["sp_no"],
-                    sp_status=parsed.get("sp_status") or "",
-                    change_event=parsed.get("event") or "sys_approval_change",
-                    source="callback",
-                    payload=parsed,
-                    tenant_id=tenant_id,
-                )
-            else:
-                logger.info("wecom_oa callback without sp_no for tenant=%s", tenant_id)
+            accept_app_callback_event(
+                db,
+                app,
+                body=body,
+                msg_signature=msg_signature,
+                timestamp=timestamp,
+                nonce=nonce,
+            )
         except (WecomOaCallbackError, WecomOaCredentialError) as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=callback_http_status(exc), detail=str(exc)
+            ) from None
     return Response(content="success", media_type="text/plain")

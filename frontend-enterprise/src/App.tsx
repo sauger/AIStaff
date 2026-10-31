@@ -39,6 +39,7 @@ import {
 } from "./employee";
 import AccountsPage from "./pages/AccountsPage";
 import CompanyPage from "./pages/company/CompanyPage";
+import WecomAppsPage from "./pages/company/WecomAppsPage";
 import AgentsPage from "./pages/AgentsPage";
 import ChannelsPage from "./pages/ChannelsPage";
 import EmployeeAccessChannelsPage from "./pages/channels/EmployeeAccessChannelsPage";
@@ -819,7 +820,7 @@ function Shell({
                 element={
                   isAdmin ? (
                     <CompanyPage
-                      tab="organization"
+                      section="organization"
                       currentUser={auth.user}
                       onLogout={onLogout}
                     />
@@ -833,7 +834,20 @@ function Shell({
                 element={
                   isAdmin ? (
                     <CompanyPage
-                      tab="members"
+                      section="members"
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  ) : (
+                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                  )
+                }
+              />
+              <Route
+                path="/enterprise/company/wecom-apps"
+                element={
+                  isAdmin ? (
+                    <WecomAppsPage
                       currentUser={auth.user}
                       onLogout={onLogout}
                     />

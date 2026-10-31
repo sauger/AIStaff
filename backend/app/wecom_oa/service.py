@@ -13,9 +13,9 @@ from app.db.models import (
     WecomApprovalIntent,
     utc_now,
 )
+from app.wecom_oa.apps import resolve_default_oa_app
 from app.wecom_oa.callback import apply_status_update
 from app.wecom_oa.client import WecomOaApiError, WecomOaClient
-from app.wecom_oa.credentials import get_oa_credential
 from app.wecom_oa.identity import resolve_wecom_userid
 from app.wecom_oa.intent import (
     WecomOaIntentError,
@@ -218,9 +218,9 @@ def preview_approval(
     except (WecomOaServiceError, WecomOaConfigError) as exc:
         return _err(getattr(exc, "code", "WECOM_OA_CONFIG_ERROR"), str(exc))
 
-    cred = get_oa_credential(db, tenant_id=tenant_id)
+    cred, cred_code = resolve_default_oa_app(db, tenant_id=tenant_id)
     if cred is None:
-        return _err("WECOM_OA_NO_CREDENTIAL", "租户未配置企微 OA 自建应用凭证")
+        return _err(cred_code or "WECOM_OA_NO_CREDENTIAL", "租户未配置企微 OA 自建应用凭证")
 
     mode = config["applicant_mode"]
     identity_source = None
@@ -430,12 +430,17 @@ def submit_approval(
         _write_failure(db, intent, reason)
         return _err("WECOM_OA_APPLICANT_MISSING", reason, intent=intent)
 
-    cred = get_oa_credential(db, tenant_id=tenant_id, corp_id=intent.corp_id)
+    cred, cred_code = resolve_default_oa_app(
+        db, tenant_id=tenant_id, intent_corp_id=intent.corp_id
+    )
     if cred is None:
-        reason = "OA 应用凭证缺失，未提交"
+        if cred_code == "WECOM_OA_APP_CORP_MISMATCH":
+            reason = "审批企业与默认企微应用不一致，未提交"
+        else:
+            reason = "OA 应用凭证缺失，未提交"
         intent = mark_failed(db, intent, reason=reason)
         _write_failure(db, intent, reason)
-        return _err("WECOM_OA_NO_CREDENTIAL", reason, intent=intent)
+        return _err(cred_code or "WECOM_OA_NO_CREDENTIAL", reason, intent=intent)
 
     try:
         apply_data = build_apply_data_from_fields(
@@ -539,8 +544,12 @@ def query_approval(
             "progress": intent.last_progress_json or {},
             "message": "尚未提交，无审批单号",
         }
-    cred = get_oa_credential(db, tenant_id=tenant_id, corp_id=intent.corp_id)
+    cred, cred_code = resolve_default_oa_app(
+        db, tenant_id=tenant_id, intent_corp_id=intent.corp_id
+    )
     if cred is None:
+        if cred_code == "WECOM_OA_APP_CORP_MISMATCH":
+            return _err(cred_code, "审批企业与默认企微应用不一致")
         return _err("WECOM_OA_NO_CREDENTIAL", "OA 凭证缺失")
     client = _oa_client(cred, client_factory)
     try:

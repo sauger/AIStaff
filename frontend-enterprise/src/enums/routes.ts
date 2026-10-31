@@ -23,6 +23,7 @@ export enum EnterpriseRoute {
   Company = '/enterprise/company',
   CompanyOrganization = '/enterprise/company/organization',
   CompanyMembers = '/enterprise/company/members',
+  CompanyWecomApps = '/enterprise/company/wecom-apps',
   CompanyPeople = '/enterprise/company/people',
   CompanyAgents = '/enterprise/company/agents',
   Organization = '/enterprise/organization',

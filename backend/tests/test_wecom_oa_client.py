@@ -14,7 +14,6 @@ from app.db.models import WecomOaAppCredential
 from app.wecom_oa.client import WecomOaApiError, WecomOaClient, WecomOaTokenProvider
 from app.wecom_oa.credentials import (
     WecomOaCredentialError,
-    get_oa_credential,
     load_plaintext_secrets,
     store_oa_credential,
 )
@@ -76,9 +75,7 @@ def test_store_and_load_oa_credential_encrypts_secret():
         secrets = load_plaintext_secrets(row)
         assert secrets["secret"] == "super-secret"
         assert secrets["callback_token"] == "tok"
-        loaded = get_oa_credential(db, tenant_id="t1", corp_id="ww_corp")
-        assert loaded is not None
-        assert loaded.id == row.id
+        assert row.corp_id == "ww_corp"
 
 
 def test_store_oa_credential_rejects_missing_secret():
