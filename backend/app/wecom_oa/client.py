@@ -164,6 +164,38 @@ class WecomOaClient:
             "/oa/getapprovaldetail", {"sp_no": sp_no}
         )
 
+    def get_template_detail(self, template_id: str) -> dict[str, Any]:
+        template_id = str(template_id or "").strip()
+        if not template_id:
+            raise WecomOaApiError(
+                "gettemplatedetail 缺少 template_id", code="WECOM_OA_INVALID_ARGS"
+            )
+        return self._post_with_token_retry(
+            "/oa/gettemplatedetail", {"template_id": template_id}
+        )
+
+    def list_template_catalog(self) -> dict[str, Any]:
+        """尝试读取模板目录。公开文档未保证该路径，调用方需处理不存在的情况。"""
+        return self._post_with_token_retry("/oa/gettemplatelist", {})
+
+    def list_approval_info(
+        self,
+        *,
+        starttime: int,
+        endtime: int,
+        cursor: str = "",
+        size: int = 100,
+    ) -> dict[str, Any]:
+        return self._post_with_token_retry(
+            "/oa/getapprovalinfo",
+            {
+                "starttime": int(starttime),
+                "endtime": int(endtime),
+                "new_cursor": cursor,
+                "size": int(size),
+            },
+        )
+
     def _post_with_token_retry(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         token = self._tokens.get(self.credential)
         try:
