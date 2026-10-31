@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -31,8 +31,10 @@ from app.wecom_oa.identity import (
 from app.wecom_oa.intent import WecomOaIntentError, confirm_intent, list_intents_for_session
 from app.wecom_oa.policy import WecomOaConfigError
 from app.wecom_oa.service import (
-    load_agent_approval_config,
+    WecomOaServiceError,
+    approval_config_for_edit,
     save_agent_approval_config,
+    set_agent_wecom_applicant,
     submit_approval,
 )
 
@@ -63,10 +65,17 @@ class AgentApprovalConfigUpsert(BaseModel):
     scenario_key: str = "default"
     applicant_mode: str
     mode_a_userid: str | None = None
+    mode_a_display_name: str | None = None
     field_mappings: list[dict[str, Any]] = Field(default_factory=list)
     compliance_enabled: bool = False
     compliance_policy_ref: str | None = None
     display_name: str | None = None
+
+
+class AgentWecomApplicantUpsert(BaseModel):
+    wecom_userid: str
+    display_name: str | None = None
+    scenario_key: str = "default"
 
 
 class ConfirmRequest(BaseModel):
@@ -185,14 +194,11 @@ def get_agent_config(
     agent = db.get(AgentProfile, agent_id)
     if agent is None or agent.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="员工不存在")
-    try:
-        config = load_agent_approval_config(
+    return {
+        "config": approval_config_for_edit(
             db, tenant_id=tenant_id, agent_id=agent_id, scenario_key=scenario_key
         )
-    except Exception as exc:  # noqa: BLE001 - missing/invalid config means empty UI state
-        logger.debug("approval config unavailable for agent=%s: %s", agent_id, exc)
-        return {"config": None}
-    return {"config": config}
+    }
 
 
 @router.put("/agents/{agent_id}/approval-config")
@@ -218,6 +224,64 @@ def put_agent_config(
     except WecomOaConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"config": row.metadata_json}
+
+
+def _applicant_http_error(exc: WecomOaServiceError) -> NoReturn:
+    status = 404 if exc.code == "WECOM_OA_AGENT_NOT_FOUND" else 400
+    raise HTTPException(status_code=status, detail=str(exc)) from None
+
+
+@router.put("/agents/{agent_id}/wecom-applicant")
+def put_agent_wecom_applicant(
+    agent_id: str,
+    body: AgentWecomApplicantUpsert,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    ensure_current_user_tenant(tenant_id, current_user)
+    agent = db.get(AgentProfile, agent_id)
+    if agent is None or agent.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    _ensure_can_manage_agent(agent, current_user)
+    try:
+        applicant = set_agent_wecom_applicant(
+            db,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            wecom_userid=body.wecom_userid,
+            display_name=body.display_name,
+            scenario_key=body.scenario_key,
+        )
+    except WecomOaServiceError as exc:
+        _applicant_http_error(exc)
+    return {"applicant": applicant}
+
+
+@router.delete("/agents/{agent_id}/wecom-applicant")
+def delete_agent_wecom_applicant(
+    agent_id: str,
+    tenant_id: str = Query(...),
+    scenario_key: str = Query("default"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    ensure_current_user_tenant(tenant_id, current_user)
+    agent = db.get(AgentProfile, agent_id)
+    if agent is None or agent.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    _ensure_can_manage_agent(agent, current_user)
+    try:
+        applicant = set_agent_wecom_applicant(
+            db,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            wecom_userid=None,
+            scenario_key=scenario_key,
+        )
+    except WecomOaServiceError as exc:
+        _applicant_http_error(exc)
+    return {"applicant": applicant}
 
 
 @chat_router.get("/sessions/{session_id}/intents")

@@ -82,10 +82,13 @@ class WecomOaServiceError(RuntimeError):
         self.code = code
 
 
-def load_agent_approval_config(
-    db: Session, *, tenant_id: str, agent_id: str, scenario_key: str = "default"
-) -> dict[str, Any]:
-    scenario_key = str(scenario_key or "default").strip() or "default"
+def _scenario_key(value: str | None) -> str:
+    return str(value or "default").strip() or "default"
+
+
+def _stored_approval_metadata(
+    db: Session, *, tenant_id: str, agent_id: str, scenario_key: str
+) -> dict[str, Any] | None:
     bindings = db.exec(
         select(AgentResourceBinding).where(
             AgentResourceBinding.tenant_id == tenant_id,
@@ -96,11 +99,9 @@ def load_agent_approval_config(
     ).all()
     for row in bindings:
         meta = row.metadata_json or {}
-        # resource_id 或 metadata.scenario_key 定位场景
         key = str(meta.get("scenario_key") or row.resource_id or "default").strip()
         if key == scenario_key:
-            return validate_approval_config({**meta, "scenario_key": key})
-    # 兼容：AgentProfile.metadata_json.wecom_oa_approval
+            return dict(meta)
     from app.db.models import AgentProfile
 
     agent = db.get(AgentProfile, agent_id)
@@ -110,13 +111,98 @@ def load_agent_approval_config(
             scenarios = blob.get("scenarios")
             if isinstance(scenarios, list):
                 for item in scenarios:
-                    if isinstance(item, dict) and str(item.get("scenario_key") or "default") == scenario_key:
-                        return validate_approval_config(item)
+                    if not isinstance(item, dict):
+                        continue
+                    item_key = str(item.get("scenario_key") or "default")
+                    if item_key == scenario_key:
+                        return dict(item)
             elif str(blob.get("scenario_key") or "default") == scenario_key:
-                return validate_approval_config(blob)
-    raise WecomOaServiceError(
-        f"数字员工未配置审批场景: {scenario_key}", code="WECOM_OA_CONFIG_MISSING"
+                return dict(blob)
+    return None
+
+
+def _editable_approval_config(raw: dict[str, Any], scenario_key: str) -> dict[str, Any]:
+    mode = str(raw.get("applicant_mode") or "fixed").strip()
+    if mode not in {"fixed", "chat_partner"}:
+        mode = "fixed"
+    mappings = raw.get("field_mappings")
+    return {
+        "template_id": str(raw.get("template_id") or ""),
+        "scenario_key": scenario_key,
+        "applicant_mode": mode,
+        "mode_a_userid": str(raw.get("mode_a_userid") or "").strip() or None,
+        "mode_a_display_name": str(raw.get("mode_a_display_name") or "").strip() or None,
+        "field_mappings": mappings if isinstance(mappings, list) else [],
+        "compliance_enabled": bool(raw.get("compliance_enabled", False)),
+        "compliance_policy_ref": str(raw.get("compliance_policy_ref") or "").strip() or None,
+        "display_name": str(raw.get("display_name") or "").strip() or None,
+    }
+
+
+def _upsert_approval_binding(
+    db: Session,
+    *,
+    tenant_id: str,
+    agent_id: str,
+    scenario_key: str,
+    metadata: dict[str, Any],
+) -> AgentResourceBinding:
+    row = db.exec(
+        select(AgentResourceBinding).where(
+            AgentResourceBinding.tenant_id == tenant_id,
+            AgentResourceBinding.agent_id == agent_id,
+            AgentResourceBinding.resource_type == RESOURCE_TYPE,
+            AgentResourceBinding.resource_id == scenario_key,
+        )
+    ).first()
+    if row is None:
+        row = AgentResourceBinding(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            resource_type=RESOURCE_TYPE,
+            resource_id=scenario_key,
+            status="active",
+            metadata_json=metadata,
+        )
+        db.add(row)
+    else:
+        row.metadata_json = metadata
+        row.status = "active"
+        row.updated_at = utc_now()
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def load_agent_approval_config(
+    db: Session, *, tenant_id: str, agent_id: str, scenario_key: str = "default"
+) -> dict[str, Any]:
+    scenario_key = _scenario_key(scenario_key)
+    raw = _stored_approval_metadata(
+        db, tenant_id=tenant_id, agent_id=agent_id, scenario_key=scenario_key
     )
+    if raw is None:
+        raise WecomOaServiceError(
+            f"数字员工未配置审批场景: {scenario_key}", code="WECOM_OA_CONFIG_MISSING"
+        )
+    return validate_approval_config({**raw, "scenario_key": scenario_key})
+
+
+def approval_config_for_edit(
+    db: Session, *, tenant_id: str, agent_id: str, scenario_key: str = "default"
+) -> dict[str, Any] | None:
+    """编辑页可读配置。缺模板或未绑 userid 时仍返回已存字段，预览仍走严格校验。"""
+    scenario_key = _scenario_key(scenario_key)
+    raw = _stored_approval_metadata(
+        db, tenant_id=tenant_id, agent_id=agent_id, scenario_key=scenario_key
+    )
+    if raw is None:
+        return None
+    try:
+        return validate_approval_config({**raw, "scenario_key": scenario_key})
+    except WecomOaConfigError:
+        return _editable_approval_config(raw, scenario_key)
 
 
 def save_agent_approval_config(
@@ -154,6 +240,59 @@ def save_agent_approval_config(
     db.commit()
     db.refresh(row)
     return row
+
+
+def set_agent_wecom_applicant(
+    db: Session,
+    *,
+    tenant_id: str,
+    agent_id: str,
+    wecom_userid: str | None,
+    display_name: str | None = None,
+    scenario_key: str = "default",
+) -> dict[str, Any]:
+    """把企微 userid 写入该数字员工审批配置的 mode_a_userid。
+
+    这是 Mode A 固定申请人，preview/submit 直接读取。绑定会把申请人模式设为 fixed。
+    清空只去掉 userid 与姓名，保留模板等其余配置。
+    """
+    from app.db.models import AgentProfile
+
+    scenario_key = _scenario_key(scenario_key)
+    agent = db.get(AgentProfile, agent_id)
+    if agent is None or agent.tenant_id != tenant_id:
+        raise WecomOaServiceError("数字员工不存在", code="WECOM_OA_AGENT_NOT_FOUND")
+    raw = _stored_approval_metadata(
+        db, tenant_id=tenant_id, agent_id=agent_id, scenario_key=scenario_key
+    )
+    userid = str(wecom_userid or "").strip()
+    if not userid and raw is None:
+        return {
+            "scenario_key": scenario_key,
+            "applicant_mode": "fixed",
+            "wecom_userid": None,
+            "display_name": None,
+        }
+    meta = dict(raw or {})
+    meta["scenario_key"] = scenario_key
+    if userid:
+        meta["applicant_mode"] = "fixed"
+        meta["mode_a_userid"] = userid[:128]
+        name = str(display_name or "").strip()[:128]
+        meta["mode_a_display_name"] = name or None
+    else:
+        meta["mode_a_userid"] = None
+        meta["mode_a_display_name"] = None
+    row = _upsert_approval_binding(
+        db, tenant_id=tenant_id, agent_id=agent_id, scenario_key=scenario_key, metadata=meta
+    )
+    stored = dict(row.metadata_json or {})
+    return {
+        "scenario_key": scenario_key,
+        "applicant_mode": str(stored.get("applicant_mode") or "fixed"),
+        "wecom_userid": str(stored.get("mode_a_userid") or "").strip() or None,
+        "display_name": str(stored.get("mode_a_display_name") or "").strip() or None,
+    }
 
 
 def invoke_wecom_oa_approval(
@@ -228,7 +367,8 @@ def preview_approval(
     creator_display = None
     if mode == "fixed":
         creator_userid = config["mode_a_userid"]
-        creator_display = creator_userid
+        creator_display = str(config.get("mode_a_display_name") or "").strip() or creator_userid
+        identity_source = "mode_a_userid"
     else:
         if not user_id:
             return _err(

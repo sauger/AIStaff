@@ -2235,7 +2235,7 @@ class WecomApprovalIntent(SQLModel, table=True):
     corp_id: str = Field(index=True)
     sp_no: Optional[str] = Field(default=None, index=True)
     failure_reason: Optional[str] = None
-    identity_source: Optional[str] = None  # channel_identity | temp_binding
+    identity_source: Optional[str] = None  # channel_identity | temp_binding | mode_a_userid
     compliance_checked: bool = False
     compliance_passed: Optional[bool] = None
     # 审计：触发代发的平台用户

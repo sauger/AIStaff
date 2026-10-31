@@ -15,8 +15,9 @@ import { notify } from '@/components/ui/app-toast';
 import { cn } from '@/lib/utils';
 
 import { api, TENANT_ID } from '../../api/client';
-import type { EnterpriseAuthUser } from '../../auth';
+import { isEnterpriseAdmin, type EnterpriseAuthUser } from '../../auth';
 import { EnterpriseRoute } from '../../enums/routes';
+import WecomDirectoryPicker, { type WecomDirectoryUser } from './WecomDirectoryPicker';
 import type {
   EnterprisePersonListResponse,
   EnterprisePersonRead,
@@ -39,6 +40,7 @@ type PersonDraft = {
   status: 'active' | 'left';
   primaryUserId: string;
   primaryUsername: string;
+  wecomUserid: string;
 };
 
 type AgentDraft = {
@@ -55,6 +57,7 @@ const EMPTY_PERSON: PersonDraft = {
   status: 'active',
   primaryUserId: '',
   primaryUsername: '',
+  wecomUserid: '',
 };
 
 const INPUT_CLASS = 'h-8 rounded-[10px] text-[12px]';
@@ -69,7 +72,12 @@ function draftFromPerson(row: EnterprisePersonRead): PersonDraft {
     status: row.status === 'left' ? 'left' : 'active',
     primaryUserId: row.primary_user_id || '',
     primaryUsername: row.primary_username || '',
+    wecomUserid: '',
   };
+}
+
+function formatWecomPerson(person: WecomDirectoryUser): string {
+  return [person.name, person.email, person.userid].filter(Boolean).join(' ');
 }
 
 function personStatus(status: string): { label: string; className: string } {
@@ -85,7 +93,7 @@ function agentStatus(status: string): { label: string; className: string } {
 }
 
 export default function CompanyMembersPage({ currentUser }: { currentUser?: EnterpriseAuthUser }) {
-  void currentUser;
+  const canPickWecom = isEnterpriseAdmin(currentUser);
   const navigate = useNavigate();
   const [people, setPeople] = useState<EnterprisePersonRead[]>([]);
   const [agents, setAgents] = useState<OrgAgentRead[]>([]);
@@ -102,6 +110,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
   const [agentDraft, setAgentDraft] = useState<AgentDraft | null>(null);
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentSearch, setAgentSearch] = useState('');
+  const [wecomSelection, setWecomSelection] = useState<WecomDirectoryUser[]>([]);
 
   async function load() {
     setLoading(true);
@@ -204,6 +213,28 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
 
   function openPersonCreate() {
     setPersonDraft({ ...EMPTY_PERSON });
+  }
+
+  function fillPersonFromWecom(person: WecomDirectoryUser) {
+    setPersonDraft({
+      ...EMPTY_PERSON,
+      name: person.name,
+      email: person.email,
+      wecomUserid: person.userid,
+    });
+  }
+
+  async function copyText(value: string) {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        notify.error('当前浏览器不支持复制');
+        return;
+      }
+      await navigator.clipboard.writeText(value);
+      notify.success('已复制');
+    } catch {
+      notify.error('复制失败');
+    }
   }
 
   function openPersonEdit(person: EnterprisePersonRead) {
@@ -334,6 +365,15 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
           >
             创建数字员工
           </UIButton>
+          {canPickWecom ? (
+            <WecomDirectoryPicker
+              buttonLabel="从企微选择"
+              title="从企微通讯录选择"
+              description="可多选。确认后把姓名、邮箱和 userid 留在本页，用于核对账号和权限；不会写入组织或通讯录。"
+              buttonClassName="h-8 rounded-[10px] px-3 text-[12px]"
+              onConfirm={(users) => setWecomSelection(users)}
+            />
+          ) : null}
           <UIButton
             className="h-8 rounded-[10px] bg-[#18181a] px-3 text-[12px] text-white"
             onClick={openPersonCreate}
@@ -342,6 +382,74 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
           </UIButton>
         </div>
       </div>
+
+      {wecomSelection.length > 0 ? (
+        <section className="rounded-[14px] border border-[#e3e7f1] bg-white p-[14px]" data-testid="wecom-selected-people">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="m-0 text-[13px] font-semibold text-[#18181a]">{`已从企微选择 ${wecomSelection.length} 人`}</h3>
+              <p className="m-0 mt-1 text-[12px] leading-[1.6] text-[#858b9c]">
+                这些信息只留在本页，用于配账号和权限。复制后可到账号管理调整角色，或到企微应用填写临时身份绑定。一次只能把一位成员填入新建人员表单，userid 不会写入人员档案。
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <UIButton
+                type="button"
+                variant="outline"
+                className="h-8 rounded-[10px] px-3 text-[12px]"
+                onClick={() => copyText(wecomSelection.map(formatWecomPerson).join('\n'))}
+              >
+                复制全部
+              </UIButton>
+              <UIButton
+                type="button"
+                variant="outline"
+                className="h-8 rounded-[10px] px-3 text-[12px]"
+                onClick={() => navigate(EnterpriseRoute.Accounts)}
+              >
+                前往账号管理
+              </UIButton>
+              <UIButton
+                type="button"
+                variant="outline"
+                className="h-8 rounded-[10px] px-3 text-[12px]"
+                onClick={() => navigate(EnterpriseRoute.CompanyWecomApps)}
+              >
+                前往企微应用
+              </UIButton>
+              <UIButton
+                type="button"
+                className="h-8 rounded-[10px] bg-[#18181a] px-3 text-[12px] text-white"
+                disabled={wecomSelection.length !== 1}
+                onClick={() => wecomSelection[0] && fillPersonFromWecom(wecomSelection[0])}
+              >
+                填入新建人员
+              </UIButton>
+            </div>
+          </div>
+          <ul className="m-0 mt-3 flex list-none flex-col gap-2 p-0">
+            {wecomSelection.map((person) => (
+              <li key={person.userid} className="flex flex-wrap items-center justify-between gap-2 rounded-[8px] bg-[#fafbfc] px-3 py-2 text-[12px]">
+                <span data-i18n-ignore>
+                  {person.name}
+                  {' · '}
+                  {person.email || '无邮箱'}
+                  {' · '}
+                  {person.userid}
+                </span>
+                <UIButton
+                  type="button"
+                  variant="outline"
+                  className="h-7 rounded-[8px] px-2 text-[11px]"
+                  onClick={() => copyText(formatWecomPerson(person))}
+                >
+                  复制
+                </UIButton>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <div className="flex flex-wrap items-end justify-between gap-[12px]">
         <UnderlineTabs
@@ -507,6 +615,13 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
               <Input value={personDraft?.email || ''} onChange={(event) => setPersonDraft((prev) => (prev ? { ...prev, email: event.target.value } : prev))} className={INPUT_CLASS} placeholder="选填" />
             </label>
           </div>
+          {personDraft?.wecomUserid ? (
+            <div className="rounded-[10px] bg-[#fafbfc] px-3 py-2 text-[12px] text-[#464c5e]">
+              企微 userid
+              <div className="mt-1 font-medium text-[#18181a]" data-i18n-ignore>{personDraft.wecomUserid}</div>
+              <p className="m-0 mt-1 text-[11px] text-[#858b9c]">仅用于核对，保存人员档案时不会写入。</p>
+            </div>
+          ) : null}
           <label className="flex flex-col gap-[4px] text-[12px] text-[#464c5e]">
             关联登录账号（可选）
             <select className="h-8 rounded-[10px] border border-input bg-transparent px-2.5 text-[12px]" value={personDraft?.primaryUserId || ''} onChange={(event) => setPersonDraft((prev) => (prev ? { ...prev, primaryUserId: event.target.value } : prev))}>
