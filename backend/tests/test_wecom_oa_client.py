@@ -119,6 +119,89 @@ def test_gettoken_and_applyevent_happy_path():
         assert any("applyevent" in c[1] for c in calls)
 
 
+def test_applyevent_custom_approver_when_not_using_template():
+    captured: dict = {}
+
+    def handler(method, url, params=None, json=None):
+        if "gettoken" in url:
+            return _FakeResponse(
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200}
+            )
+        captured["body"] = json
+        return _FakeResponse({"errcode": 0, "sp_no": "SP-CUSTOM"})
+
+    engine = _engine()
+    with Session(engine) as db:
+        cred = store_oa_credential(db, tenant_id="t1", corp_id="ww", secret="s1")
+        client = WecomOaClient(cred, client_factory=lambda: _FakeClient(handler))
+        result = client.apply_event(
+            creator_userid="zhangsan",
+            template_id="tpl_1",
+            apply_data={"contents": []},
+            use_template_approver=0,
+            approver=[{"attr": 1, "userid": ["zhangsan"]}],
+            notifyer=["lisi"],
+            notify_type=1,
+        )
+        assert result["sp_no"] == "SP-CUSTOM"
+        body = captured["body"]
+        assert body["use_template_approver"] == 0
+        assert body["approver"] == [{"attr": 1, "userid": ["zhangsan"]}]
+        assert body["notifyer"] == ["lisi"]
+        assert body["notify_type"] == 1
+
+
+def test_applyevent_omits_approver_fields_when_using_template():
+    captured: dict = {}
+
+    def handler(method, url, params=None, json=None):
+        if "gettoken" in url:
+            return _FakeResponse(
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200}
+            )
+        captured["body"] = json
+        return _FakeResponse({"errcode": 0, "sp_no": "SP-TPL"})
+
+    engine = _engine()
+    with Session(engine) as db:
+        cred = store_oa_credential(db, tenant_id="t1", corp_id="ww", secret="s1")
+        client = WecomOaClient(cred, client_factory=lambda: _FakeClient(handler))
+        client.apply_event(
+            creator_userid="zhangsan",
+            template_id="tpl_1",
+            apply_data={"contents": []},
+            approver=[{"attr": 1, "userid": ["zhangsan"]}],
+            notifyer=["lisi"],
+            notify_type=1,
+        )
+        body = captured["body"]
+        assert body["use_template_approver"] == 1
+        assert "approver" not in body
+        assert "notifyer" not in body
+        assert "notify_type" not in body
+
+
+def test_applyevent_custom_mode_requires_approver():
+    def handler(method, url, params=None, json=None):
+        if "gettoken" in url:
+            return _FakeResponse(
+                {"errcode": 0, "access_token": "tok", "expires_in": 7200}
+            )
+        raise AssertionError("must not call applyevent")
+
+    engine = _engine()
+    with Session(engine) as db:
+        cred = store_oa_credential(db, tenant_id="t1", corp_id="ww", secret="s1")
+        client = WecomOaClient(cred, client_factory=lambda: _FakeClient(handler))
+        with pytest.raises(WecomOaApiError, match="approver"):
+            client.apply_event(
+                creator_userid="zhangsan",
+                template_id="tpl_1",
+                apply_data={"contents": []},
+                use_template_approver=0,
+            )
+
+
 def test_applyevent_errcode_raises_mapped_error():
     def handler(method, url, params=None, json=None):
         if "gettoken" in url:

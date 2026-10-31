@@ -452,6 +452,24 @@ def preview_approval(
     }
 
 
+def _template_approval_flow_missing(exc: WecomOaApiError) -> bool:
+    """模板没配审批流程时，企微返回 301025，errmsg 恰好是空的 get approval param error。
+
+    缺控件也是 301025，但冒号后会带 item-XXXX is required。那种错误不能改走申请人自审。
+    """
+    if exc.errcode != 301025:
+        return False
+    message = str(exc.errmsg or "").strip().lower().rstrip(":")
+    return message == "get approval param error"
+
+
+def _fail_apply(db: Session, intent: WecomApprovalIntent, exc: WecomOaApiError) -> dict[str, Any]:
+    reason = f"企微提交失败：{exc}"
+    intent = mark_failed(db, intent, reason=reason)
+    _write_failure(db, intent, reason)
+    return _err(exc.code, reason, intent=intent)
+
+
 def submit_approval(
     db: Session,
     *,
@@ -594,6 +612,7 @@ def submit_approval(
 
     intent = mark_submitting(db, intent)
     client = _oa_client(cred, client_factory)
+    approver_source = "template"
     try:
         result = client.apply_event(
             creator_userid=creator_userid,
@@ -602,10 +621,24 @@ def submit_approval(
             use_template_approver=1,
         )
     except WecomOaApiError as exc:
-        reason = f"企微提交失败：{exc}"
-        intent = mark_failed(db, intent, reason=reason)
-        _write_failure(db, intent, reason)
-        return _err(exc.code, reason, intent=intent)
+        if not _template_approval_flow_missing(exc):
+            return _fail_apply(db, intent, exc)
+        logger.info(
+            "wecom_oa template has no approval flow; retry with applicant approver "
+            "template_id=%s",
+            intent.template_id,
+        )
+        approver_source = "applicant_fallback"
+        try:
+            result = client.apply_event(
+                creator_userid=creator_userid,
+                template_id=intent.template_id,
+                apply_data=apply_data,
+                use_template_approver=0,
+                approver=[{"attr": 1, "userid": [creator_userid]}],
+            )
+        except WecomOaApiError as retry_exc:
+            return _fail_apply(db, intent, retry_exc)
 
     sp_no = str(result.get("sp_no") or "")
     audit = {
@@ -615,19 +648,29 @@ def submit_approval(
         "agent_id": agent_id,
         "applicant_mode": mode,
         "identity_source": intent.identity_source,
+        "approver_source": approver_source,
     }
     intent = mark_submitted(db, intent, sp_no=sp_no, audit=audit)
+    if approver_source == "applicant_fallback":
+        submitted_text = (
+            f"企微审批已提交，单号 {sp_no}。"
+            f"该模板未配置审批流程，已改由申请人 {creator_userid} 本人审批。"
+            "将继续同步审批进度。"
+        )
+    else:
+        submitted_text = f"企微审批已提交，单号 {sp_no}。将继续同步审批进度。"
     db.add(
         Message(
             tenant_id=tenant_id,
             session_id=session_id,
             role="assistant",
-            content=f"企微审批已提交，单号 {sp_no}。将继续同步审批进度。",
+            content=submitted_text,
             metadata_json={
                 "wecom_oa_approval_submitted": {
                     "intent_id": intent.id,
                     "sp_no": sp_no,
                     "creator_userid": creator_userid,
+                    "approver_source": approver_source,
                 }
             },
         )

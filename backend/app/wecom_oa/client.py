@@ -127,6 +127,9 @@ class WecomOaClient:
         apply_data: dict[str, Any],
         use_template_approver: int = 1,
         summary_list: list[dict[str, Any]] | None = None,
+        approver: list[dict[str, Any]] | None = None,
+        notifyer: list[str] | None = None,
+        notify_type: int | None = None,
     ) -> dict[str, Any]:
         creator_userid = str(creator_userid or "").strip()
         template_id = str(template_id or "").strip()
@@ -135,14 +138,29 @@ class WecomOaClient:
                 "applyevent 缺少 creator_userid 或 template_id",
                 code="WECOM_OA_INVALID_ARGS",
             )
+        use_template = int(use_template_approver)
         body: dict[str, Any] = {
             "creator_userid": creator_userid,
             "template_id": template_id,
-            "use_template_approver": int(use_template_approver),
+            "use_template_approver": use_template,
             "apply_data": apply_data,
         }
         if summary_list:
             body["summary_list"] = summary_list
+        # 自选审批人时才提交 approver / notifyer / notify_type。
+        if use_template == 0:
+            if not approver:
+                raise WecomOaApiError(
+                    "use_template_approver=0 时必须提供 approver",
+                    code="WECOM_OA_INVALID_ARGS",
+                )
+            body["approver"] = approver
+            if notifyer:
+                notified = [str(item).strip() for item in notifyer if str(item).strip()]
+                if notified:
+                    body["notifyer"] = notified
+            if notify_type is not None:
+                body["notify_type"] = int(notify_type)
         data = self._post_with_token_retry("/oa/applyevent", body)
         sp_no = str(data.get("sp_no") or "").strip()
         if not sp_no:
