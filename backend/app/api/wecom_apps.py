@@ -32,6 +32,11 @@ from app.wecom_oa.callback_ingress import (
     verify_app_callback_url,
 )
 from app.wecom_oa.credentials import WecomOaCredentialError
+from app.wecom_oa.directory import (
+    WecomDirectoryError,
+    load_department_tree,
+    load_department_users,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,32 @@ class WecomAppPatch(BaseModel):
     callback_aes_key: str | None = None
 
 
+class WecomDirectoryDepartment(BaseModel):
+    id: int
+    name: str
+    parent_id: int
+    order: int
+
+
+class WecomDirectoryDepartmentsResponse(BaseModel):
+    app_id: str
+    app_name: str
+    corp_id: str
+    departments: list[WecomDirectoryDepartment]
+
+
+class WecomDirectoryUser(BaseModel):
+    userid: str
+    name: str
+    email: str
+    department_ids: list[int]
+
+
+class WecomDirectoryUsersResponse(BaseModel):
+    department_id: int
+    users: list[WecomDirectoryUser]
+
+
 def _require_admin(tenant_id: str, user: User) -> None:
     ensure_current_user_tenant(tenant_id, user)
     if not is_admin_user(user):
@@ -65,6 +96,22 @@ def _require_admin(tenant_id: str, user: User) -> None:
 
 
 def _raise_app_error(exc: WecomAppError) -> NoReturn:
+    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+
+
+def _require_directory_admin(tenant_id: str, user: User) -> None:
+    ensure_current_user_tenant(tenant_id, user)
+    if not is_admin_user(user):
+        raise HTTPException(status_code=403, detail="仅企业管理员可读取企微通讯录")
+
+
+def _raise_directory_error(exc: WecomDirectoryError) -> NoReturn:
+    logger.warning(
+        "wecom directory rejected code=%s status=%s errcode=%s",
+        exc.code,
+        exc.status_code,
+        exc.errcode,
+    )
     raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
 
 
@@ -81,6 +128,42 @@ def list_apps(
     _require_admin(tenant_id, current_user)
     rows = list_wecom_apps(db, tenant_id=tenant_id)
     return {"apps": [app_public_view(row) for row in rows]}
+
+
+@router.get("/directory/departments", response_model=WecomDirectoryDepartmentsResponse)
+def get_directory_departments(
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_directory_admin(tenant_id, current_user)
+    try:
+        return load_department_tree(db, tenant_id=tenant_id)
+    except WecomDirectoryError as exc:
+        _raise_directory_error(exc)
+
+
+@router.get(
+    "/directory/departments/{department_id}/users",
+    response_model=WecomDirectoryUsersResponse,
+)
+def get_directory_users(
+    department_id: int,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_directory_admin(tenant_id, current_user)
+    if department_id <= 0:
+        raise HTTPException(status_code=400, detail="部门编号无效")
+    try:
+        return load_department_users(
+            db,
+            tenant_id=tenant_id,
+            department_id=department_id,
+        )
+    except WecomDirectoryError as exc:
+        _raise_directory_error(exc)
 
 
 @router.post("")

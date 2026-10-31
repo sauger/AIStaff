@@ -5,6 +5,7 @@ import { Button as UIButton } from '@/components/ui/button';
 import { notify } from '@/components/ui/app-toast';
 
 import { api, TENANT_ID } from '../../api/client';
+import WecomDirectoryPicker, { type WecomDirectoryUser } from '../company/WecomDirectoryPicker';
 
 const PRIMARY_BUTTON_CLASS =
   'h-8 gap-1 rounded-[10px] bg-[#18181a] px-5 text-[12px] font-normal text-white hover:bg-[#303030]';
@@ -14,6 +15,7 @@ type ApprovalConfig = {
   scenario_key: string;
   applicant_mode: string;
   mode_a_userid?: string | null;
+  mode_a_display_name?: string | null;
   field_mappings: Array<Record<string, unknown>>;
   compliance_enabled?: boolean;
   compliance_policy_ref?: string | null;
@@ -29,6 +31,7 @@ const EMPTY: ApprovalConfig = {
   scenario_key: 'default',
   applicant_mode: 'fixed',
   mode_a_userid: '',
+  mode_a_display_name: '',
   field_mappings: [],
   compliance_enabled: false,
   compliance_policy_ref: '',
@@ -95,6 +98,7 @@ export default function WecomOaAgentConfigPanel({ agentId }: Props) {
           scenario_key: form.scenario_key.trim() || 'default',
           applicant_mode: form.applicant_mode,
           mode_a_userid: String(form.mode_a_userid || '').trim() || null,
+          mode_a_display_name: String(form.mode_a_display_name || '').trim() || null,
           field_mappings: fieldMappings,
           compliance_enabled: Boolean(form.compliance_enabled),
           compliance_policy_ref: String(form.compliance_policy_ref || '').trim() || null,
@@ -110,6 +114,46 @@ export default function WecomOaAgentConfigPanel({ agentId }: Props) {
     }
   }
 
+  async function bindApplicant(users: WecomDirectoryUser[]) {
+    const person = users[0];
+    if (!person) throw new Error('请先选择成员');
+    const scenarioKey = form.scenario_key.trim() || 'default';
+    await api.put(
+      `/api/enterprise/wecom-oa/agents/${encodeURIComponent(agentId)}/wecom-applicant`
+      + `?tenant_id=${encodeURIComponent(TENANT_ID)}`,
+      {
+        scenario_key: scenarioKey,
+        wecom_userid: person.userid,
+        display_name: person.name,
+      },
+    );
+    setForm((prev) => ({
+      ...prev,
+      applicant_mode: 'fixed',
+      scenario_key: scenarioKey,
+      mode_a_userid: person.userid,
+      mode_a_display_name: person.name,
+    }));
+    notify.success('已绑定企微审批身份');
+  }
+
+  async function clearApplicant() {
+    const scenarioKey = form.scenario_key.trim() || 'default';
+    await api.delete(
+      `/api/enterprise/wecom-oa/agents/${encodeURIComponent(agentId)}/wecom-applicant`
+      + `?tenant_id=${encodeURIComponent(TENANT_ID)}&scenario_key=${encodeURIComponent(scenarioKey)}`,
+    );
+    setForm((prev) => ({
+      ...prev,
+      mode_a_userid: '',
+      mode_a_display_name: '',
+    }));
+    notify.success('已清空企微审批身份');
+  }
+
+  const boundUserid = String(form.mode_a_userid || '').trim();
+  const boundName = String(form.mode_a_display_name || '').trim();
+
   return (
     <div
       className="mt-[16px] flex flex-col gap-[12px] rounded-[10px] border border-[#eef0f4] bg-[#fafbfc] p-[16px]"
@@ -120,6 +164,46 @@ export default function WecomOaAgentConfigPanel({ agentId }: Props) {
         <p className="m-0 mt-[4px] text-[12px] text-[#858b9c]">
           绑定模板 ID、申请人模式与字段映射；确认摘要后才会向企微提交。
         </p>
+      </div>
+      <div className="flex flex-col gap-[8px] rounded-[10px] border border-[#e3e7f1] bg-white p-[12px]" data-testid="wecom-agent-applicant">
+        <div className="text-[12px] font-medium text-[#18181a]">审批身份</div>
+        <p className="m-0 text-[12px] leading-[1.6] text-[#858b9c]">
+          从默认企微应用的可见通讯录里单选一人。确认后写入该员工的固定申请人（mode_a_userid），发起审批时使用这个 userid。这与成员页的多选回填不同：那里只用于核对账号和权限，不会成为审批身份。
+        </p>
+        {boundUserid ? (
+          <p className="m-0 text-[12px] text-[#18181a]" data-testid="wecom-agent-applicant-current">
+            当前绑定：
+            {boundName ? <span data-i18n-ignore>{boundName}</span> : null}
+            {boundName ? ' · ' : null}
+            <span data-i18n-ignore>{boundUserid}</span>
+          </p>
+        ) : (
+          <p className="m-0 text-[12px] text-[#858b9c]">尚未绑定企微用户。</p>
+        )}
+        <div className="flex flex-wrap gap-[8px]">
+          <WecomDirectoryPicker
+            mode="single"
+            buttonLabel="选择绑定用户"
+            title="选择绑定的企微用户"
+            description="只能选择一人。确认后保存为该数字员工的审批身份，并把申请人模式设为固定员工身份。"
+            confirmLabel="保存绑定"
+            disabled={loading}
+            onConfirm={bindApplicant}
+          />
+          {boundUserid ? (
+            <UIButton
+              type="button"
+              variant="outline"
+              className="h-8 rounded-[10px] border-[#e3e7f1] px-3 text-[12px] text-[#464c5e]"
+              disabled={loading}
+              onClick={() => void clearApplicant().catch((error: unknown) => {
+                notify.error(error instanceof Error ? error.message : '清空企微审批身份失败');
+              })}
+            >
+              清空绑定
+            </UIButton>
+          ) : null}
+        </div>
       </div>
       <label className="flex flex-col gap-[6px] text-[12px] text-[#464c5e]">
         显示名（可选）
@@ -165,7 +249,11 @@ export default function WecomOaAgentConfigPanel({ agentId }: Props) {
           Mode A 固定 userid
           <Input
             value={form.mode_a_userid || ''}
-            onChange={(e) => setForm((p) => ({ ...p, mode_a_userid: e.target.value }))}
+            onChange={(e) => setForm((p) => ({
+              ...p,
+              mode_a_userid: e.target.value,
+              mode_a_display_name: e.target.value.trim() === boundUserid ? p.mode_a_display_name : '',
+            }))}
             className="h-8 rounded-[10px] text-[12px]"
             disabled={loading}
           />

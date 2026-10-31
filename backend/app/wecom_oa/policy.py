@@ -60,6 +60,7 @@ def validate_approval_config(config: dict[str, Any]) -> dict[str, Any]:
     if mode not in {"fixed", "chat_partner"}:
         raise WecomOaConfigError("applicant_mode 必须是 fixed 或 chat_partner")
     mode_a_userid = str(config.get("mode_a_userid") or "").strip() or None
+    mode_a_display_name = str(config.get("mode_a_display_name") or "").strip()[:128] or None
     if mode == "fixed" and not mode_a_userid:
         raise WecomOaConfigError("Mode A（fixed）必须配置 mode_a_userid")
     field_mappings = config.get("field_mappings") or []
@@ -97,6 +98,7 @@ def validate_approval_config(config: dict[str, Any]) -> dict[str, Any]:
         "scenario_key": scenario_key,
         "applicant_mode": mode,
         "mode_a_userid": mode_a_userid if mode == "fixed" else None,
+        "mode_a_display_name": mode_a_display_name if mode == "fixed" else None,
         "field_mappings": normalized_fields,
         "compliance_enabled": compliance_enabled,
         "compliance_policy_ref": compliance_policy_ref,
