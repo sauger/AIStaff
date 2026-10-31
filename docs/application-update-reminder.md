@@ -43,6 +43,29 @@ STAFFDECK_UPDATE_CHECK=false
 
 `STAFFDECK_VERSION` overrides the current version for development and deployment testing.
 
+## Git build stamps
+
+Production deploys stamp the running build as `<release>-<shortsha>`, for example
+`0.1.15-769ecd2`. That value is what check-update shows as the current version. It comes from
+`STAFFDECK_VERSION` when set, otherwise from the bundled `staffdeck-version.txt` written at
+package time, otherwise `0.1.0`.
+
+`packaging/ultrarag.spec` writes the `VERSION` given to the platform build (the release tag, or
+the workflow-dispatch input) into `staffdeck-version.txt`. A web deploy that is already on a
+commit sets `STAFFDECK_VERSION` to `0.1.15-` plus that commit's short sha.
+
+The suffix is a git build id. It is not a PEP 440 pre-release, and `packaging.version.Version`
+rejects `0.1.15-769ecd2`. The checker therefore parses `x.y.z` plus a 7–40 character hex build id
+itself. Two stamps are the same release when the release numbers match and the build ids match,
+ignoring a leading `v` and hex case. The same stamp does not report an update.
+
+Plain GitHub tags such as `v0.5.6` and `v1.0.0-preview` are a different release line. They are not
+offered as updates for a git-stamped build, including when the feed contains no stamp newer than
+the one that is running. A higher `x.y.z-<shortsha>` tag is an update. A different build id of the
+same `x.y.z` is an update only when the running sha is in the feed and the other tag was published
+at a strictly later instant. Hex order and equal timestamps do not count. Plain semver builds
+ignore git-stamped tags and keep the previous GitHub release comparison.
+
 ## Build version
 
 `packaging/ultrarag.spec` reads `VERSION`, validates it, and writes
