@@ -4,10 +4,11 @@ from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.db.models import ChatSession, Skill
 from app.session.session_schema import PlannedTaskFrame
+from app.text import single_line
 
 CapabilityKind = Literal[
     "general_skill",
@@ -73,12 +74,20 @@ class TaskRequirement(BaseModel):
     required_knowledge_base_ids: list[str] = Field(default_factory=list)
     allowed_transitions: list[dict[str, Any]] = Field(default_factory=list)
     memory_projection: list[dict[str, str]] = Field(default_factory=list)
-    # 本轮已解析的说话人。空则不进入模型 payload。不含姓名、部门或渠道外部 id。
+    # 本轮已解析的说话人。空则不进入模型 payload。
+    # 可含花名册 name / department；不含手机号、工号或渠道外部 id。
     current_speaker: dict[str, str] | None = None
     prior_task_results: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     published_deliverables: list[dict[str, Any]] = Field(default_factory=list)
     capability_manifest: CapabilityManifest = Field(default_factory=CapabilityManifest)
+
+    @field_validator("current_speaker", mode="before")
+    @classmethod
+    def _clean_current_speaker(cls, value: object) -> dict[str, str] | None:
+        if not isinstance(value, dict):
+            return None
+        return _sanitize_current_speaker(value)
 
 
 class TaskExecutionResult(BaseModel):
@@ -202,7 +211,17 @@ class TaskRequestCompiler:
         )
 
 
-_CURRENT_SPEAKER_KEYS = ("status", "user_id", "channel", "source", "reason")
+_CURRENT_SPEAKER_KEYS = (
+    "status",
+    "user_id",
+    "channel",
+    "source",
+    "reason",
+    "roster_status",
+    "name",
+    "department",
+)
+_SPEAKER_IDENTITY_KEYS = ("user_id", "roster_status", "name", "department")
 
 
 def dump_task_requirement(requirement: TaskRequirement) -> dict[str, Any]:
@@ -217,13 +236,27 @@ def dump_task_requirement(requirement: TaskRequirement) -> dict[str, Any]:
 def _sanitize_current_speaker(value: dict[str, str] | None) -> dict[str, str] | None:
     if not isinstance(value, dict):
         return None
-    cleaned = {
-        key: str(value.get(key) or "").strip()
-        for key in _CURRENT_SPEAKER_KEYS
-        if str(value.get(key) or "").strip()
-    }
+    cleaned: dict[str, str] = {}
+    for key in _CURRENT_SPEAKER_KEYS:
+        text = (
+            single_line(value.get(key))
+            if key in {"name", "department"}
+            else str(value.get(key) or "").strip()
+        )
+        if text:
+            cleaned[key] = text
     if cleaned.get("status") != "resolved":
-        cleaned.pop("user_id", None)
+        for key in _SPEAKER_IDENTITY_KEYS:
+            cleaned.pop(key, None)
+        return cleaned or None
+    if cleaned.get("roster_status") == "matched" and cleaned.get("name"):
+        return cleaned
+    cleaned.pop("name", None)
+    cleaned.pop("department", None)
+    if cleaned.get("roster_status") == "matched":
+        cleaned["roster_status"] = "unmatched"
+    elif cleaned.get("roster_status") != "unmatched":
+        cleaned.pop("roster_status", None)
     return cleaned or None
 
 

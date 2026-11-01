@@ -1953,6 +1953,7 @@ def process_inbound(
             turn_user_id = user_id
             if binding.channel == "wecom":
                 # 群聊第一期不把群桶 User 当成说话人。私聊 peer 只用 ChannelIdentity 的 User.id。
+                # 花名册姓名在回合开始时按这个 User.id 注入；群聊未解析，不会查。
                 speaker = resolve_wecom_bot_speaker(
                     user_id=None if inbound.is_group else user_id,
                     is_group=inbound.is_group,

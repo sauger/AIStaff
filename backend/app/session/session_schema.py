@@ -213,13 +213,20 @@ class SessionPublic(BaseModel):
 
 
 class TurnSpeaker(BaseModel):
-    """本轮对话用户。peer 与会话归属只用 user_id，不用渠道外部 id。"""
+    """本轮对话用户。peer 与会话归属只用 user_id，不用渠道外部 id。
+
+    roster_* 只在本轮已解析、并查过企业花名册之后填写。姓名进模型上下文，
+    不进消息 metadata，也不携带手机号或企微 userid。
+    """
 
     status: Literal["resolved", "unresolved"]
     user_id: Optional[str] = None
     channel: str = "web"
     source: Literal["web_login", "channel_identity", "session_user", "unresolved"] = "unresolved"
     reason: Optional[str] = None
+    roster_status: Optional[Literal["matched", "unmatched"]] = None
+    roster_name: Optional[str] = None
+    roster_department: Optional[str] = None
 
 
 class ChatTurnRequest(BaseModel):
