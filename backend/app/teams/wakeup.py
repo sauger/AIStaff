@@ -35,6 +35,7 @@ from app.session.session_schema import (
     TeamPlannerContext,
     TeamPlannerMember,
 )
+from app.session.turn_speaker import resolve_known_user_speaker
 from app.teams.service import (
     BID_HP_INITIAL,
     BID_SCORE_FALLBACK,
@@ -749,6 +750,7 @@ def run_agent_turn(
         agent_id=agent.id,
         client_turn_id=turn_id,
         user_id=team.owner_user_id,
+        speaker=resolve_known_user_speaker(team.owner_user_id, channel="team"),
         message=message,
         channel="team",
         interaction_mode=interaction_mode,

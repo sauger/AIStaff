@@ -937,6 +937,7 @@ def _default_skill_runner(
 ) -> None:
     from app.core.agent_loop import AgentLoop
     from app.session.session_schema import ChatTurnRequest
+    from app.session.turn_speaker import resolve_known_user_speaker
 
     owner_id = str((agent.metadata_json or {}).get("owner_user_id") or "").strip() or None
     session = ChatSession(
@@ -979,6 +980,7 @@ def _default_skill_runner(
             session_id=session.id,
             agent_id=agent.id,
             user_id=owner_id,
+            speaker=resolve_known_user_speaker(owner_id, channel="mail_inbound"),
             message=query,
             channel="mail_inbound",
             message_visibility="internal",

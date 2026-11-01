@@ -73,6 +73,8 @@ class TaskRequirement(BaseModel):
     required_knowledge_base_ids: list[str] = Field(default_factory=list)
     allowed_transitions: list[dict[str, Any]] = Field(default_factory=list)
     memory_projection: list[dict[str, str]] = Field(default_factory=list)
+    # 本轮已解析的说话人。空则不进入模型 payload。不含姓名、部门或渠道外部 id。
+    current_speaker: dict[str, str] | None = None
     prior_task_results: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     published_deliverables: list[dict[str, Any]] = Field(default_factory=list)
@@ -120,6 +122,7 @@ class TaskRequestCompiler:
         source_user_message: str | None = None,
         out_of_scope_task_intents: list[str] | None = None,
         client_timezone: str | None = None,
+        current_speaker: dict[str, str] | None = None,
     ) -> TaskRequirement:
         current_node = _current_node(skill, frame.target_step_id or session.active_step_id)
         expected_fields = _text_list((current_node or {}).get("expected_user_info"))
@@ -191,11 +194,37 @@ class TaskRequestCompiler:
             required_knowledge_base_ids=required_knowledge_base_ids,
             allowed_transitions=_transitions(skill, current_node),
             memory_projection=_memory_projection(memory_context),
+            current_speaker=_sanitize_current_speaker(current_speaker),
             prior_task_results=list(prior_task_results or []),
             attachments=list(attachments or []),
             published_deliverables=list(published_deliverables or []),
             capability_manifest=manifest,
         )
+
+
+_CURRENT_SPEAKER_KEYS = ("status", "user_id", "channel", "source", "reason")
+
+
+def dump_task_requirement(requirement: TaskRequirement) -> dict[str, Any]:
+    """Model payload. An empty speaker is omitted so older tasks stay unchanged."""
+
+    payload = requirement.model_dump(mode="json")
+    if not payload.get("current_speaker"):
+        payload.pop("current_speaker", None)
+    return payload
+
+
+def _sanitize_current_speaker(value: dict[str, str] | None) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    cleaned = {
+        key: str(value.get(key) or "").strip()
+        for key in _CURRENT_SPEAKER_KEYS
+        if str(value.get(key) or "").strip()
+    }
+    if cleaned.get("status") != "resolved":
+        cleaned.pop("user_id", None)
+    return cleaned or None
 
 
 def _current_time_text(client_timezone: str | None = None) -> str:

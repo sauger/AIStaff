@@ -42,6 +42,7 @@ from app.scheduled_tasks.schema import (
     ScheduledTaskUpdateRequest,
 )
 from app.session.session_schema import ChatTurnRequest, ChatTurnResponse
+from app.session.turn_speaker import resolve_known_user_speaker
 from app.security.permissions import agent_owned_by_user as _agent_owned_by_user
 from app.security.permissions import is_admin_user as _is_admin_user
 from app.security.tenant import ensure_tenant
@@ -537,6 +538,10 @@ def _execute_prepared_scheduled_task(
             agent_id=task.agent_id,
             client_turn_id=run.id,
             user_id=task.created_by_user_id,
+            speaker=resolve_known_user_speaker(
+                task.created_by_user_id,
+                channel="scheduled_task",
+            ),
             message=automatic_task_message(task),
             channel="scheduled_task",
             interaction_mode="scheduled_task",

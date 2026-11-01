@@ -62,6 +62,10 @@ def compact_conversation_context(
         effective_budget,
     )
     compacted[TURN_STAGE_MESSAGES_KEY] = turn_messages
+    speaker = metadata.get("speaker") if isinstance(metadata, dict) else None
+    compacted_metadata = compacted.get("metadata")
+    if speaker is not None and isinstance(compacted_metadata, dict):
+        compacted_metadata["speaker"] = speaker
     return compacted
 
 

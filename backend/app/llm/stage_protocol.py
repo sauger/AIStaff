@@ -6,7 +6,6 @@ from typing import Any
 
 from app import paths
 
-
 UNIFIED_PROMPT_PATH = (
     paths.resource_dir() / "app" / "llm" / "prompts" / "unified_agent_prompt.md"
 )
@@ -130,6 +129,22 @@ def unified_system_prompt() -> str:
     return UNIFIED_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
+def speaker_prompt_text(speaker: object) -> str | None:
+    """Model-visible identity. Names and departments stay out of this layer."""
+
+    if not isinstance(speaker, dict) or "status" not in speaker:
+        return None
+    if speaker.get("status") == "resolved":
+        user_id = str(speaker.get("user_id") or "").strip()
+        if user_id:
+            channel = str(speaker.get("channel") or "").strip()
+            lines = [f"user_id={user_id}"]
+            if channel:
+                lines.append(f"channel={channel}")
+            return "\n".join(lines)
+    return "未确定"
+
+
 def stage_payload(
     *,
     phase: str,
@@ -146,6 +161,9 @@ def stage_payload(
         else {}
     )
     turn_time = metadata.get("current_turn_time") if isinstance(metadata, dict) else None
+    speaker_text = (
+        speaker_prompt_text(metadata.get("speaker")) if isinstance(metadata, dict) else None
+    )
     memory_text = ""
     if phase in {"Router", "TurnPlanner", "Response Generator"}:
         memory_text = (
@@ -153,14 +171,17 @@ def stage_payload(
             if isinstance(memory_context, list)
             else str(memory_context or "").strip()
         )
+    stage: dict[str, Any] = {
+        "phase": phase,
+        "instructions": instructions.strip(),
+        "output_contract": output_contract,
+        "memory": memory_text,
+        "turn_time": str(turn_time or "未提供"),
+    }
+    if speaker_text is not None:
+        stage["speaker"] = speaker_text
     return {
-        STAGE_PROTOCOL_KEY: {
-            "phase": phase,
-            "instructions": instructions.strip(),
-            "output_contract": output_contract,
-            "memory": memory_text,
-            "turn_time": str(turn_time or "未提供"),
-        },
+        STAGE_PROTOCOL_KEY: stage,
         "user_message": user_message,
         "conversation_context": (
             conversation_context if isinstance(conversation_context, dict) else {}
@@ -194,9 +215,11 @@ def render_stage_user_message(
             [
                 f"用户记忆：\n{stage.get('memory') or '无'}",
                 f"本轮时间：\n{stage.get('turn_time') or '未提供'}",
-                f"本轮用户输入：\n{user_message or '（空）'}",
             ]
         )
+        if "speaker" in stage:
+            sections.append(f"当前对话用户：\n{stage.get('speaker') or '未确定'}")
+        sections.append(f"本轮用户输入：\n{user_message or '（空）'}")
     sections.extend(
         [
             f"当前阶段：\n{stage.get('phase') or '未指定'}",

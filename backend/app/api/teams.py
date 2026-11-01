@@ -36,6 +36,7 @@ from app.security.tenant import ensure_tenant
 from app.session.message_visibility import visible_message_content, visible_message_rows
 from app.session.message_read import message_read
 from app.session.session_schema import ChatTurnRequest
+from app.session.turn_speaker import resolve_known_user_speaker
 from app.teams import service as team_service
 from app.teams.schema import (
     AwardOverrideRequest,
@@ -413,6 +414,7 @@ def tl_chat_endpoint(
         agent_id=tl_agent.id,
         client_turn_id=new_id("teamturn"),
         user_id=current_user.id,
+        speaker=resolve_known_user_speaker(current_user.id, channel="team"),
         message=request.message,
         context_injection=build_tl_chat_context(db, team, request.message),
         channel="team",

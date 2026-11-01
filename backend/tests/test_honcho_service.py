@@ -13,7 +13,7 @@ from app.honcho.service import (
     inject_honcho_representation,
     schedule_honcho_message,
 )
-from app.session.session_schema import ChatTurnRequest
+from app.session.session_schema import ChatTurnRequest, TurnSpeaker
 
 
 class FakeHoncho:
@@ -101,7 +101,21 @@ def _request(**overrides) -> ChatTurnRequest:
         "channel_external_account_scope": "corp_a",
     }
     payload.update(overrides)
-    return ChatTurnRequest(**payload)
+    request = ChatTurnRequest(**payload)
+    if "speaker" not in overrides:
+        user_id = str(request.user_id or "").strip()
+        request = request.model_copy(
+            update={
+                "speaker": TurnSpeaker(
+                    status="resolved" if user_id else "unresolved",
+                    user_id=user_id or None,
+                    channel=request.channel,
+                    source="channel_identity" if request.channel == "wecom" else "session_user",
+                    reason=None if user_id else "missing_session_user",
+                )
+            }
+        )
+    return request
 
 
 def _settings(**overrides) -> Settings:
@@ -209,6 +223,37 @@ def test_group_chat_skips_write_and_inject() -> None:
         session,
         role="user",
         content="群里说",
+        settings=_settings(),
+        enqueue=queued.append,
+    )
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [{"kind": "fact", "content": "本地事实"}],
+        settings=_settings(),
+        client=client,
+    )
+
+    assert queued == []
+    assert client.calls == []
+    assert memories == [{"kind": "fact", "content": "本地事实"}]
+    db.close()
+
+
+def test_external_userid_is_not_used_as_honcho_peer() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    client = FakeHoncho()
+    queued: list[dict] = []
+    request = _request(user_id="zhangsan")
+
+    schedule_honcho_message(
+        db,
+        request,
+        session,
+        role="user",
+        content="你好",
         settings=_settings(),
         enqueue=queued.append,
     )

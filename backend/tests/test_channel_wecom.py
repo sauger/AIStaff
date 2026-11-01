@@ -25,6 +25,8 @@ from app.channels.service_durable_inbox import StageDisposition, StageResult
 from app.channels.service_identity import channel_username
 from app.channels.service_intake import process_inbound
 from app.channels.service_wecom_inbox import stage_wecom_inbound
+from app.honcho.service import schedule_honcho_message
+from app.session.turn_speaker import portrait_user_id
 from app.db.models import (
     AgentProfile,
     ChannelBinding,
@@ -35,6 +37,7 @@ from app.db.models import (
     User,
     utc_now,
 )
+from tests.test_honcho_service import _settings
 
 
 def _test_engine():
@@ -1249,11 +1252,19 @@ def test_wecom_p2p_inbound_full_chain() -> None:
     request = RecordingAgentLoop.calls[0]
     assert request.channel == "wecom"
     assert request.client_turn_id == "msg_p1"
+    assert request.user_id
+    assert request.user_id != "zhangsan"
+    assert request.speaker is not None
+    assert request.speaker.status == "resolved"
+    assert request.speaker.user_id == request.user_id
+    assert request.speaker.source == "channel_identity"
+    assert request.channel_external_user_id == "zhangsan"
 
     with Session(engine) as db:
         chat_session = db.get(ChatSession, request.session_id)
         assert chat_session.external_conv_id == "wecom_aib_bot1_p2p_zhangsan"
         assert chat_session.channel_binding_id == binding_id
+        assert chat_session.user_id == request.user_id
         user = db.get(User, chat_session.user_id)
         assert user.username == channel_username("tenant_demo", "wecom", "zhangsan", "aib_bot1")
         assert user.display_name == "企业微信用户 zhangsan"
@@ -1277,6 +1288,10 @@ def test_wecom_group_inbound_uses_sender_name_prefix() -> None:
     assert process_inbound(binding, inbound, db_engine=engine) is True
     request = RecordingAgentLoop.calls[0]
     assert request.message.startswith("[发送者: 张三]\n")
+    assert request.speaker is not None
+    assert request.speaker.status == "unresolved"
+    assert request.speaker.reason == "group_chat"
+    assert request.speaker.user_id is None
 
     with Session(engine) as db:
         chat_session = db.get(ChatSession, request.session_id)
@@ -1287,6 +1302,63 @@ def test_wecom_group_inbound_uses_sender_name_prefix() -> None:
         assert group_user.username == channel_username(
             "tenant_demo", "wecom", "group:wr_group1", "aib_bot1"
         )
+        assert portrait_user_id(request) == ""
+        queued: list[dict] = []
+        schedule_honcho_message(
+            db,
+            request,
+            chat_session,
+            role="user",
+            content=request.message,
+            settings=_settings(),
+            enqueue=queued.append,
+        )
+        assert queued == []
+
+
+def test_wecom_p2p_reuses_bound_staffdeck_user() -> None:
+    engine = _test_engine()
+    binding_id = _seed_wecom_binding(engine)
+    with Session(engine) as db:
+        db.add(
+            User(
+                id="user_web",
+                tenant_id="tenant_demo",
+                username="web_zhang",
+                display_name="张三",
+                password_hash="x",
+                source="web",
+            )
+        )
+        db.add(
+            ChannelIdentity(
+                tenant_id="tenant_demo",
+                channel="wecom",
+                external_account_scope="aib_bot1",
+                external_user_id="zhangsan",
+                staffdeck_user_id="user_web",
+                display_name="张三",
+            )
+        )
+        db.commit()
+    binding = _load_binding(engine, binding_id)
+
+    inbound = normalize_wecom_frame(_text_frame(msgid="msg_bound"))
+    assert process_inbound(binding, inbound, db_engine=engine) is True
+    request = RecordingAgentLoop.calls[0]
+    assert request.user_id == "user_web"
+    assert request.speaker is not None
+    assert request.speaker.user_id == "user_web"
+    assert request.channel_external_user_id == "zhangsan"
+    with Session(engine) as db:
+        chat_session = db.get(ChatSession, request.session_id)
+        assert chat_session.user_id == "user_web"
+
+
+def test_wecom_frame_without_userid_does_not_start_a_turn() -> None:
+    frame = _text_frame(msgid="msg_nobody")
+    frame["body"]["from"] = {}
+    assert normalize_wecom_frame(frame) is None
 
 
 def test_wecom_switch_command_routes_agents() -> None:

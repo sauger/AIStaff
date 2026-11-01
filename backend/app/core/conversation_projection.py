@@ -11,6 +11,7 @@ from app.session.attachments import (
     message_images_from_metadata,
 )
 from app.session.session_schema import ChatTurnRequest, RouterDecision, StepAgentResult
+from app.session.turn_speaker import speaker_message_metadata
 
 
 class ConversationProjection:
@@ -103,6 +104,7 @@ class ConversationProjection:
             metadata["model_config_id"] = request.model_config_id
         if request.attachments:
             metadata["attachments"] = [item.model_dump(mode="json") for item in request.attachments]
+        metadata.update(speaker_message_metadata(request.speaker))
         return metadata
 
     @staticmethod
