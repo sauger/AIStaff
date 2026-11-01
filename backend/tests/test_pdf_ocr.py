@@ -82,6 +82,20 @@ def _text_pdf(text: str) -> bytes:
     return payload
 
 
+def _mixed_pdf() -> bytes:
+    import pymupdf
+
+    document = pymupdf.open()
+    first = document.new_page()
+    first.insert_text((72, 72), "Employee handbook leave policy")
+    document.new_page()
+    third = document.new_page()
+    third.insert_text((72, 72), "Third page approval steps")
+    payload = document.tobytes()
+    document.close()
+    return payload
+
+
 def _prepare_db(tmp_path: Path, monkeypatch, *, with_ocr: bool) -> Session:
     engine = create_engine(f"sqlite:///{tmp_path / 'ocr.db'}")
     SQLModel.metadata.create_all(engine)
@@ -187,6 +201,51 @@ def test_textual_pdf_does_not_call_ocr(tmp_path: Path, monkeypatch) -> None:
     assert file_type == "pdf"
     assert "Employee handbook leave policy" in text
     assert text.startswith("# PDF 文档")
+
+
+def test_mixed_pdf_keeps_text_pages_and_ocrs_blank_pages_in_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    RecordingOcrClient.calls = []
+    monkeypatch.setattr("app.knowledge.pdf_ocr.LLMClient", RecordingOcrClient)
+    db = _prepare_db(tmp_path, monkeypatch, with_ocr=True)
+    try:
+        text, file_type = extract_text(
+            "mixed.pdf",
+            _mixed_pdf(),
+            tenant_id="tenant_demo",
+            db=db,
+        )
+    finally:
+        db.close()
+
+    assert file_type == "pdf"
+    assert "Employee handbook leave policy" in text
+    assert "第二页签章" in text
+    assert "Third page approval steps" in text
+    assert text.index("Employee handbook leave policy") < text.index("第二页签章")
+    assert text.index("第二页签章") < text.index("Third page approval steps")
+    assert len(RecordingOcrClient.calls) == 1
+    assert "第 2 页" in str(RecordingOcrClient.calls[0]["payload"])
+    assert RecordingOcrClient.calls[0]["model"] == "glm-4v-plus"
+
+
+def test_mixed_pdf_without_ocr_model_does_not_return_partial_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "app.knowledge.pdf_ocr.LLMClient",
+        lambda _config: (_ for _ in ()).throw(AssertionError("OCR client should not be created")),
+    )
+    db = _prepare_db(tmp_path, monkeypatch, with_ocr=False)
+    try:
+        with pytest.raises(KnowledgeParseError) as exc_info:
+            extract_text("mixed.pdf", _mixed_pdf(), tenant_id="tenant_demo", db=db)
+    finally:
+        db.close()
+
+    assert "扫描件" in str(exc_info.value)
+    assert "OCR" in str(exc_info.value)
 
 
 def test_effectively_empty_pdf_text_uses_ocr(tmp_path: Path, monkeypatch) -> None:
@@ -325,6 +384,32 @@ def test_ocr_timeout_budget_fails_clearly(tmp_path: Path, monkeypatch) -> None:
 
     assert "超时" in str(exc_info.value)
     assert RecordingOcrClient.calls == []
+
+
+def test_ocr_unique_index_is_partial_on_sqlite_and_postgres() -> None:
+    from sqlalchemy.dialects import postgresql, sqlite
+    from sqlalchemy.schema import CreateIndex
+
+    from app.db.models import ModelConfig
+
+    index = next(
+        item
+        for item in ModelConfig.__table__.indexes
+        if item.name == "uq_model_configs_tenant_ocr"
+    )
+    sqlite_sql = " ".join(
+        str(CreateIndex(index).compile(dialect=sqlite.dialect())).upper().split()
+    )
+    postgres_sql = " ".join(
+        str(CreateIndex(index).compile(dialect=postgresql.dialect())).upper().split()
+    )
+
+    assert "UNIQUE" in sqlite_sql
+    assert "WHERE IS_OCR = 1" in sqlite_sql
+    assert "UNIQUE" in postgres_sql
+    assert "WHERE" in postgres_sql
+    assert "IS_OCR" in postgres_sql
+    assert "WHERE IS_OCR" in postgres_sql
 
 
 def test_migrate_model_ocr_role_adds_column_and_unique_index(tmp_path: Path) -> None:

@@ -299,14 +299,20 @@ def test_pdf_pages_receive_stable_section_labels(monkeypatch) -> None:
     class FakeReader:
         pages = [FakePage("First page policy"), FakePage(""), FakePage("Third page process")]
 
+    def ocr_blank_page(_content, *, tenant_id=None, db=None, page_numbers=None):
+        assert page_numbers == [2]
+        return ["Scanned middle clause"]
+
     monkeypatch.setattr("pypdf.PdfReader", lambda _stream: FakeReader())
+    monkeypatch.setattr("app.knowledge.pdf_ocr.ocr_scanned_pdf", ocr_blank_page)
 
     text, file_type = extract_text("policy.pdf", b"fake-pdf")
     sections = _build_section_nodes(text)
 
     assert file_type == "pdf"
     assert text.startswith("# PDF 文档\n\n## 第 1 页")
-    assert [section["title"] for section in sections] == ["PDF 文档", "第 1 页", "第 3 页"]
+    assert "Scanned middle clause" in text
+    assert [section["title"] for section in sections] == ["PDF 文档", "第 1 页", "第 2 页", "第 3 页"]
     assert sections[-1]["path"] == "PDF 文档 / 第 3 页"
 
 

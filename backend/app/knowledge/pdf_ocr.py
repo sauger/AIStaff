@@ -1,8 +1,8 @@
-"""OCR fallback for scanned PDFs.
+"""OCR fallback for scanned PDF pages.
 
-Textual PDFs never reach this module. Callers keep using ``extract_text``;
-when pypdf finds no meaningful characters, pages are rendered and sent to the
-tenant's dedicated OCR/vision model through ``LLMClient`` image inputs.
+Callers keep using ``extract_text``. Pages that pypdf already read stay as
+text. Empty or scanned pages are rendered and sent to the tenant's dedicated
+OCR/vision model through ``LLMClient`` image inputs.
 """
 
 from __future__ import annotations
@@ -51,7 +51,10 @@ def ocr_scanned_pdf(
     *,
     tenant_id: str | None,
     db: Any | None = None,
+    page_numbers: list[int] | None = None,
 ) -> list[str]:
+    """Recognize ``page_numbers`` (1-based). Omit them to OCR every page."""
+
     if not tenant_id:
         raise KnowledgeParseError(SCANNED_PDF_NEEDS_OCR_MODEL)
     config = _resolve_ocr_config(tenant_id, db if isinstance(db, Session) else None)
@@ -72,20 +75,25 @@ def ocr_scanned_pdf(
         page_total = document.page_count
         if page_total <= 0:
             raise KnowledgeParseError("PDF 没有可读取的页面。")
+        targets = list(range(1, page_total + 1)) if page_numbers is None else list(page_numbers)
+        if not targets:
+            return []
+        if any(index < 1 or index > page_total for index in targets):
+            raise KnowledgeParseError("扫描件 OCR 的页码超出 PDF 页数。")
         logger.info(
             "scanned pdf ocr start tenant=%s pages=%s model=%s",
             tenant_id,
-            page_total,
+            targets,
             config.model,
         )
-        for index, page in enumerate(document, start=1):
+        for index in targets:
             if monotonic() - started > OCR_TOTAL_BUDGET_SECONDS:
                 raise KnowledgeParseError(
                     f"扫描件 OCR 超时，已停止在第 {index} 页（共 {page_total} 页）。"
                     "请拆分 PDF 后重试，或检查 OCR/视觉模型的响应速度。"
                 )
             try:
-                image = _render_page(page)
+                image = _render_page(document[index - 1])
             except KnowledgeParseError:
                 raise
             except Exception as exc:
@@ -93,8 +101,6 @@ def ocr_scanned_pdf(
             page_texts.append(_recognize_page(client, index, image))
     finally:
         document.close()
-    if not any(text.strip() for text in page_texts):
-        raise KnowledgeParseError(OCR_EMPTY_RESULT)
     return page_texts
 
 

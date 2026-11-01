@@ -82,17 +82,29 @@ def _extract_pdf(
         raise KnowledgeParseError(f"无法解析 PDF：{exc}") from exc
     if not page_texts:
         raise KnowledgeParseError("PDF 没有可读取的页面。")
-    # Textual PDFs stay on this fast path. OCR runs only when pypdf found no
-    # letters, digits, or CJK characters (a scanned or otherwise empty text layer).
-    if _MEANINGFUL_PDF_TEXT.search("".join(page_texts)):
+    # Pages that already contain letters, digits, or CJK stay on pypdf.
+    # Empty or scanned pages are filled by OCR and merged back in page order.
+    ocr_pages = [
+        index
+        for index, page_text in enumerate(page_texts, start=1)
+        if _MEANINGFUL_PDF_TEXT.search(page_text) is None
+    ]
+    if not ocr_pages:
         return _format_pdf_pages(page_texts)
-    from app.knowledge.pdf_ocr import ocr_scanned_pdf
+    from app.knowledge.pdf_ocr import OCR_EMPTY_RESULT, ocr_scanned_pdf
 
-    recognized = ocr_scanned_pdf(content, tenant_id=tenant_id, db=db)
-    text = _format_pdf_pages(recognized)
+    recognized = ocr_scanned_pdf(
+        content,
+        tenant_id=tenant_id,
+        db=db,
+        page_numbers=ocr_pages,
+    )
+    if len(recognized) != len(ocr_pages):
+        raise KnowledgeParseError("扫描件 OCR 返回的页数与待识别页不一致。")
+    for page_number, page_text in zip(ocr_pages, recognized, strict=True):
+        page_texts[page_number - 1] = page_text
+    text = _format_pdf_pages(page_texts)
     if not text.strip():
-        from app.knowledge.pdf_ocr import OCR_EMPTY_RESULT
-
         raise KnowledgeParseError(OCR_EMPTY_RESULT)
     return text
 

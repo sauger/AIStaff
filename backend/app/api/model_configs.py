@@ -227,6 +227,7 @@ def update_model_config(
         row.verified_fingerprint = None
         row.enabled = False
         row.is_default = False
+        row.is_ocr = False
     if verify_before_save and request.enabled is True:
         try:
             _verify_candidate_for_save(row)

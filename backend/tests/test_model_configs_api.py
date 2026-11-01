@@ -881,6 +881,93 @@ def test_reverify_keeps_chat_default_when_ocr_model_exists(tmp_path, monkeypatch
         assert vision is not None and vision.is_ocr is True and vision.is_default is False
 
 
+def test_security_change_clears_ocr_slot(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.add_all(
+            [
+                ModelConfig(
+                    id="model_ocr",
+                    tenant_id="tenant_a",
+                    name="GLM-4V",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="glm-4v-plus",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                    is_ocr=True,
+                ),
+                ModelConfig(
+                    id="model_backup",
+                    tenant_id="tenant_a",
+                    name="备用视觉",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="glm-4v-flash",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                    is_ocr=False,
+                ),
+            ]
+        )
+        db.commit()
+
+        updated = update_model_config(
+            "model_ocr",
+            ModelConfigUpdateRequest(
+                tenant_id="tenant_a",
+                api_key="rotated-secret",
+            ),
+            db=db,
+            current_user=_admin(),
+        )
+        selected = set_ocr_model_config("model_backup", tenant_id="tenant_a", db=db)
+
+        previous = db.get(ModelConfig, "model_ocr")
+        assert updated.enabled is False
+        assert updated.is_default is False
+        assert updated.is_ocr is False
+        assert previous is not None and previous.is_ocr is False
+        assert selected.is_ocr is True
+        assert selected.is_default is False
+        assert selected.id == "model_backup"
+
+
+def test_reverify_after_key_rotation_keeps_requested_ocr_slot(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_ocr",
+                tenant_id="tenant_a",
+                name="GLM-4V",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="glm-4v-plus",
+                trust_status="legacy_trusted",
+                enabled=True,
+                is_default=False,
+                is_ocr=True,
+            )
+        )
+        db.commit()
+
+        updated = update_model_config(
+            "model_ocr",
+            ModelConfigUpdateRequest(
+                tenant_id="tenant_a",
+                api_key="rotated-secret",
+                enabled=True,
+                is_ocr=True,
+            ),
+            verify_before_save=True,
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert updated.enabled is True
+        assert updated.is_ocr is True
+        assert updated.is_default is False
+
+
 def test_disabled_ocr_create_does_not_unset_the_active_ocr_model(tmp_path) -> None:
     with _db(tmp_path) as db:
         db.add(

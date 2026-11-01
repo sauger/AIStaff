@@ -711,6 +711,7 @@ class ModelConfig(SQLModel, table=True):
             "tenant_id",
             unique=True,
             sqlite_where=text("is_ocr = 1"),
+            postgresql_where=text("is_ocr"),
         ),
     )
 
