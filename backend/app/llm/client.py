@@ -177,6 +177,8 @@ class LLMClient:
         user_payload: dict[str, Any] | str,
         response_format: dict[str, str] | None = None,
         cancellation: CancellationToken | None = None,
+        *,
+        vision_image_data_urls: list[str] | None = None,
     ) -> str:
         operation = current_llm_operation()
         max_output_tokens = operation_output_tokens(operation, self.max_output_tokens)
@@ -188,6 +190,13 @@ class LLMClient:
         if response_format and response_format.get("type") == "json_object":
             request_messages = _with_json_mode_instruction(request_messages)
         request_messages = _fit_request_messages(request_messages)
+        vision_urls = [
+            url.strip()
+            for url in (vision_image_data_urls or [])
+            if isinstance(url, str) and url.strip()
+        ]
+        if vision_urls:
+            request_messages = _append_vision_images(request_messages, vision_urls)
         if isinstance(user_payload, dict) and isinstance(
             user_payload.get(STAGE_PROTOCOL_KEY), dict
         ):
@@ -250,8 +259,10 @@ class LLMClient:
                         response_text="",
                         **_completion_span_metrics(None),
                     )
-                    if _image_parameter_unsupported(exc) and _messages_have_images(
-                        request_messages
+                    if (
+                        not vision_urls
+                        and _image_parameter_unsupported(exc)
+                        and _messages_have_images(request_messages)
                     ):
                         request_messages = _without_image_parts(request_messages)
                         request["messages"] = request_messages
@@ -1021,6 +1032,38 @@ def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
             else []
         )
     )
+
+
+def _append_vision_images(
+    messages: list[dict[str, Any]], data_urls: list[str]
+) -> list[dict[str, Any]]:
+    """Attach images to the last user turn so OCR does not drop them as history."""
+
+    projected = copy.deepcopy(messages)
+    image_parts = [
+        {"type": "image_url", "image_url": {"url": url, "detail": "auto"}}
+        for url in data_urls
+    ]
+    for index in range(len(projected) - 1, -1, -1):
+        if projected[index].get("role") != "user":
+            continue
+        content = projected[index].get("content")
+        text = content if isinstance(content, str) else _content_text(content)
+        projected[index]["content"] = [
+            {"type": "text", "text": text or "请识别图片中的文字。"},
+            *image_parts,
+        ]
+        return projected
+    projected.append(
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "请识别图片中的文字。"},
+                *image_parts,
+            ],
+        }
+    )
+    return projected
 
 
 def _without_image_parts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

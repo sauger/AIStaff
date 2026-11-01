@@ -524,7 +524,11 @@ def extract_document_text(
         raise _io_error("Document could not be read.", exc) from exc
 
     try:
-        text, document_format = extract_text(source.name, source_bytes)
+        text, document_format = extract_text(
+            source.name,
+            source_bytes,
+            tenant_id=context.tenant_id,
+        )
     except KnowledgeParseError as exc:
         raise HarnessExecutionError(
             "DOCUMENT_EXTRACTION_FAILED",

@@ -311,7 +311,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     api
       .get<ModelConfigRead[]>(`/api/enterprise/model-configs?tenant_id=${TENANT_ID}`)
       .then((items) => {
-        const enabled = items.filter((item) => item.enabled);
+        const enabled = items.filter((item) => item.enabled && !item.is_ocr);
         setModelConfigs(enabled);
         setSelectedSearchModelId((current) => {
           if (current && enabled.some((item) => item.id === current)) return current;

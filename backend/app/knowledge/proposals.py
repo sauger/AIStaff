@@ -412,7 +412,12 @@ def create_knowledge_update_proposal(
     if attachment.sha256 and attachment.sha256.lower() != source_sha256:
         raise KnowledgeProposalError("ATTACHMENT_CHANGED", "附件内容已变化，请重新上传。")
     try:
-        text, file_type = extract_text(attachment.filename, data)
+        text, file_type = extract_text(
+            attachment.filename,
+            data,
+            tenant_id=chat_session.tenant_id,
+            db=db,
+        )
     except KnowledgeParseError as exc:
         raise KnowledgeProposalError("PARSE_FAILED", str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface a stable user-facing parse error.

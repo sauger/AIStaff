@@ -155,6 +155,10 @@ const SCHEDULE_WEEKDAY_LABELS = ['周一', '周二', '周三', '周四', '周五
 const ENTERPRISE_SIDEBAR_STORAGE_KEY = 'ultrarag_enterprise_sidebar_expanded';
 const MISSING_MODEL_CONFIG_PATTERN = /missing_model_config|missing model config|没有默认模型配置|没有可用模型|模型配置不存在|模型未配置/i;
 const MODEL_CONFIGS_UPDATED_EVENT = 'ultrarag-enterprise-model-configs-updated';
+
+function selectableChatModels(models: ModelConfigRead[]): ModelConfigRead[] {
+  return models.filter((item) => item.enabled && !item.is_ocr);
+}
 const ONBOARDING_SEEN_KEY = 'staffdeck_onboarding_guide_seen';
 const QUICK_START_SEEN_KEY = 'staffdeck_quick_start_guide_seen';
 
@@ -600,7 +604,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       ? sessions
       : sessions.filter((session) => !session.team_id && session.agent_id === sessionAgentFilter);
   }, [sessionAgentFilter, sessions]);
-  const enabledModelConfigs = useMemo(() => modelConfigs.filter((item) => item.enabled), [modelConfigs]);
+  const enabledModelConfigs = useMemo(() => selectableChatModels(modelConfigs), [modelConfigs]);
   const selectedModelConfig = (
     enabledModelConfigs.find((item) => item.id === selectedModelConfigId)
     || enabledModelConfigs.find((item) => item.is_default)
@@ -829,7 +833,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       .then((rows) => {
         setModelConfigs(rows);
         setSelectedModelConfigId((current) => {
-          const enabledRows = rows.filter((item) => item.enabled);
+          const enabledRows = selectableChatModels(rows);
           const stored = window.localStorage.getItem(modelStorageKey(tenantId)) || '';
           if (current && enabledRows.some((item) => item.id === current)) return current;
           if (stored && enabledRows.some((item) => item.id === stored)) return stored;
@@ -858,7 +862,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       setModelConfigsLoadError('');
       setModelConfigsLoading(false);
       setSelectedModelConfigId((current) => {
-        const enabledRows = rows.filter((item) => item.enabled);
+        const enabledRows = selectableChatModels(rows);
         if (current && enabledRows.some((item) => item.id === current)) return current;
         const next = enabledRows.find((item) => item.is_default)?.id || enabledRows[0]?.id || '';
         if (next) {

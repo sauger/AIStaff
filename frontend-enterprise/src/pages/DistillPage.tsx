@@ -911,7 +911,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     api
       .get<ModelConfigRead[]>(`/api/enterprise/model-configs?tenant_id=${TENANT_ID}`)
       .then((rows) => {
-        const enabled = rows.filter((item) => item.enabled);
+        const enabled = rows.filter((item) => item.enabled && !item.is_ocr);
         setModelConfigs(enabled);
         setSelectedRewriteModelId((current) => {
           if (current && enabled.some((item) => item.id === current)) return current;

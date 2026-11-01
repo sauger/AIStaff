@@ -49,7 +49,7 @@ hiddenimports = (
         # 顶层单文件模块：uvicorn 用字符串 "single_port_app:app" 运行时动态 import
         "single_port_app",
         "feishu_connector_worker",
-        "cryptography", "certifi", "python_multipart", "docx", "pypdf", "bs4", "openai",
+        "cryptography", "certifi", "python_multipart", "docx", "pypdf", "pymupdf", "fitz", "bs4", "openai",
         "anthropic",
         # 动态导入补充：pydantic/starlette/anyio 等
         "pydantic", "pydantic_settings", "pydantic.deprecated.decorator",

@@ -18,6 +18,7 @@ class ModelConfigCreateRequest(BaseModel):
     extra_body: dict[str, Any] = Field(default_factory=dict)
     protocol_options: Optional[dict[str, Any]] = None
     is_default: bool = False
+    is_ocr: bool = False
     enabled: bool = True
 
 
@@ -34,6 +35,7 @@ class ModelConfigUpdateRequest(BaseModel):
     extra_body: Optional[dict[str, Any]] = None
     protocol_options: Optional[dict[str, Any]] = None
     is_default: Optional[bool] = None
+    is_ocr: Optional[bool] = None
     enabled: Optional[bool] = None
 
 
@@ -56,6 +58,7 @@ class ModelConfigRead(BaseModel):
     config_revision: int
     security_revision: int
     is_default: bool
+    is_ocr: bool = False
     enabled: bool
     created_at: str
     updated_at: str

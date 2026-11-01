@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import JSON, Column, Index, Integer, UniqueConstraint
+from sqlalchemy import JSON, Column, Index, Integer, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 
@@ -705,6 +705,14 @@ class KnowledgeUpdateProposal(SQLModel, table=True):
 
 class ModelConfig(SQLModel, table=True):
     __tablename__ = "model_configs"
+    __table_args__ = (
+        Index(
+            "uq_model_configs_tenant_ocr",
+            "tenant_id",
+            unique=True,
+            sqlite_where=text("is_ocr = 1"),
+        ),
+    )
 
     id: str = Field(default_factory=lambda: new_id("model"), primary_key=True)
     tenant_id: str = Field(index=True)
@@ -732,6 +740,8 @@ class ModelConfig(SQLModel, table=True):
     security_revision: int = 1
     key_revision: int = 1
     is_default: bool = False
+    # Dedicated scanned-PDF OCR/vision model. Never implied by is_default.
+    is_ocr: bool = False
     enabled: bool = True
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
