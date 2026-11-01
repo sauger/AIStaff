@@ -45,7 +45,11 @@ from app.org.schema import (
     OrgTreeResponse,
     TenureUpdateRequest,
 )
-from app.org.wecom_link import resolve_wecom_person_link
+from app.org.wecom_link import (
+    choose_roster_primary,
+    claim_speaker_if_selected,
+    resolve_wecom_person_link,
+)
 
 _NAME_LIMIT = 80
 _ENTERPRISE_NAME_LIMIT = 120
@@ -174,14 +178,12 @@ def create_person(
     _require_tenant(db, tenant_id)
     name = _require_person_name(request.name)
     status = _require_person_status(request.status)
-    link = resolve_wecom_person_link(
+    primary_user_id, wecom_userid, notice = _roster_account(
         db,
-        tenant_id=tenant_id,
+        tenant_id,
         person_name=name,
         wecom_userid=request.wecom_userid,
-    )
-    primary_user_id = link.speaker_user_id or _optional_user_link(
-        db, tenant_id, request.primary_user_id
+        requested_primary_user_id=request.primary_user_id,
     )
     row = EnterprisePerson(
         tenant_id=tenant_id,
@@ -191,12 +193,12 @@ def create_person(
         email=_optional_text(request.email, 120),
         status=status,
         primary_user_id=primary_user_id,
-        wecom_userid=link.wecom_userid,
+        wecom_userid=wecom_userid,
     )
     db.add(row)
     _commit(db)
     db.refresh(row)
-    return _people_reads(db, tenant_id, [row])[0]
+    return _with_wecom_notice(_people_reads(db, tenant_id, [row])[0], notice)
 
 
 def update_person(
@@ -207,11 +209,14 @@ def update_person(
 ) -> EnterprisePersonRead:
     row = _require_person(db, tenant_id, person_id)
     name = _require_person_name(request.name)
-    link = resolve_wecom_person_link(
+    primary_user_id, wecom_userid, notice = _roster_account(
         db,
-        tenant_id=tenant_id,
+        tenant_id,
         person_name=name,
         wecom_userid=request.wecom_userid,
+        requested_primary_user_id=request.primary_user_id,
+        existing_primary_user_id=row.primary_user_id,
+        existing_wecom_userid=row.wecom_userid,
         exclude_person_id=row.id,
     )
     row.name = name
@@ -219,15 +224,13 @@ def update_person(
     row.phone = _optional_text(request.phone, 120)
     row.email = _optional_text(request.email, 120)
     row.status = _require_person_status(request.status)
-    row.primary_user_id = link.speaker_user_id or _optional_user_link(
-        db, tenant_id, request.primary_user_id, exclude_id=row.id
-    )
-    row.wecom_userid = link.wecom_userid
+    row.primary_user_id = primary_user_id
+    row.wecom_userid = wecom_userid
     row.updated_at = utc_now()
     db.add(row)
     _commit(db)
     db.refresh(row)
-    return _people_reads(db, tenant_id, [row])[0]
+    return _with_wecom_notice(_people_reads(db, tenant_id, [row])[0], notice)
 
 
 def delete_person(db: Session, tenant_id: str, person_id: str) -> None:
@@ -1116,6 +1119,76 @@ def _require_company_agent(db: Session, tenant_id: str, agent_id: str) -> AgentP
     if _agent_hidden(row):
         raise OrgError("ORG_AGENT_NOT_FOUND", "数字员工不存在。", status_code=404)
     return row
+
+
+def _roster_account(
+    db: Session,
+    tenant_id: str,
+    *,
+    person_name: str,
+    wecom_userid: str | None,
+    requested_primary_user_id: str | None,
+    existing_primary_user_id: str | None = None,
+    existing_wecom_userid: str | None = None,
+    exclude_person_id: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    """返回 (primary_user_id, wecom_userid, notice)。"""
+
+    link = resolve_wecom_person_link(
+        db,
+        tenant_id=tenant_id,
+        wecom_userid=wecom_userid,
+        exclude_person_id=exclude_person_id,
+    )
+    requested = _requested_primary(
+        db,
+        tenant_id,
+        requested_primary_user_id,
+        existing_primary_user_id,
+        exclude_person_id,
+    )
+    primary, notice = choose_roster_primary(
+        existing_primary_user_id=existing_primary_user_id,
+        requested_primary_user_id=requested,
+        existing_wecom_userid=existing_wecom_userid,
+        speaker_user_id=link.speaker_user_id,
+        stored_wecom_userid=link.wecom_userid,
+    )
+    claim_speaker_if_selected(
+        db,
+        tenant_id=tenant_id,
+        person_name=person_name,
+        speaker_user_id=link.speaker_user_id,
+        primary_user_id=primary,
+        wecom_userid=link.wecom_userid,
+        exclude_person_id=exclude_person_id,
+    )
+    return primary, link.wecom_userid, notice
+
+
+def _requested_primary(
+    db: Session,
+    tenant_id: str,
+    user_id: str | None,
+    existing_primary_user_id: str | None,
+    exclude_id: str | None,
+) -> str | None:
+    text = str(user_id or "").strip()
+    if not text:
+        return None
+    # 表单会把已挂上的影子账号原样送回。只允许保留当前这一条，不能新指定渠道账号。
+    if existing_primary_user_id and text == existing_primary_user_id:
+        user = db.get(User, text)
+        if user is None or user.tenant_id != tenant_id:
+            raise OrgError("ORG_USER_NOT_FOUND", "登录账号不存在。", status_code=404)
+        return text
+    return _optional_user_link(db, tenant_id, text, exclude_id=exclude_id)
+
+
+def _with_wecom_notice(person: EnterprisePersonRead, notice: str | None) -> EnterprisePersonRead:
+    if not notice:
+        return person
+    return person.model_copy(update={"wecom_link_notice": notice})
 
 
 def _optional_user_link(

@@ -6,11 +6,15 @@
 网页登录账号的路径。
 
 写入规则：
-- 本租户里这个 userid 恰好对应一个说话人：``primary_user_id`` 改为该用户。
-  影子账号可以，已经绑过网页账号的身份也可以。
-- 还没有 ChannelIdentity：只记下 userid。登录账号字段照常保存。
-  之后对方第一次私聊时，若人员还没有主账号，再补上影子用户。
+- 主账号为空，或已经就是该说话人：才把 ``primary_user_id`` 设为说话人。
+  影子账号可以。已经绑过网页账号、且 ChannelIdentity 也指向该网页账号时，保持不动。
+- 已经有另一个主账号（例如网页 admin）：只记下 userid，不改挂，并返回提示。
+  操作者要让私聊认人，需先清空主账号再保存。
+- 清除 userid 时，已有的主账号保留，避免花名册掉线。
+- 还没有 ChannelIdentity：只记下 userid。之后对方第一次私聊时，
+  若人员还没有主账号，再补上影子用户。
 - 同一 userid 在不同企业/应用范围指向不同用户：拒绝，不猜。
+- 不改 ``ChannelIdentity.staffdeck_user_id``。绑定码仍负责改挂渠道身份。
 """
 
 from __future__ import annotations
@@ -29,12 +33,16 @@ logger = logging.getLogger(__name__)
 
 _WECOM_USERID_LIMIT = 128
 _PLACEHOLDER_PREFIXES = ("企业微信用户 ", "企业微信群聊 ")
+KEEP_WEB_PRIMARY_NOTICE = (
+    "未改挂花名册主账号，因已有网页账号关联。"
+    "清空关联登录账号后再保存，才会改挂到企微会话账号。"
+)
 
 
 @dataclass(frozen=True)
 class WecomPersonLink:
     wecom_userid: str | None = None
-    # 已有会话账号时才有值。调用方用它覆盖本次请求里的登录账号。
+    # 本租户里这个 userid 唯一对应的说话人。没有身份、或范围冲突时为空。
     speaker_user_id: str | None = None
 
 
@@ -42,7 +50,6 @@ def resolve_wecom_person_link(
     db: Session,
     *,
     tenant_id: str,
-    person_name: str,
     wecom_userid: str | None,
     exclude_person_id: str | None = None,
 ) -> WecomPersonLink:
@@ -53,9 +60,56 @@ def resolve_wecom_person_link(
     speaker = _find_speaker_user(db, tenant_id, userid)
     if speaker is None:
         return WecomPersonLink(wecom_userid=userid)
-    _require_speaker_free(db, tenant_id, speaker.id, exclude_person_id)
-    _adopt_display_name(db, tenant_id, speaker, person_name, userid)
     return WecomPersonLink(wecom_userid=userid, speaker_user_id=speaker.id)
+
+
+def choose_roster_primary(
+    *,
+    existing_primary_user_id: str | None,
+    requested_primary_user_id: str | None,
+    existing_wecom_userid: str | None,
+    speaker_user_id: str | None,
+    stored_wecom_userid: str | None,
+) -> tuple[str | None, str | None]:
+    """决定花名册主账号，以及要不要提示「未改挂」。
+
+    返回 ``(primary_user_id, notice)``。notice 只在保住了另一个网页账号时出现。
+    """
+
+    clearing_wecom = bool(existing_wecom_userid) and not stored_wecom_userid
+    if clearing_wecom and existing_primary_user_id:
+        if (
+            requested_primary_user_id
+            and requested_primary_user_id != existing_primary_user_id
+        ):
+            return requested_primary_user_id, None
+        return existing_primary_user_id, None
+    if speaker_user_id and requested_primary_user_id in {None, speaker_user_id}:
+        return speaker_user_id, None
+    if speaker_user_id and requested_primary_user_id not in {None, speaker_user_id}:
+        return requested_primary_user_id, KEEP_WEB_PRIMARY_NOTICE
+    return requested_primary_user_id, None
+
+
+def claim_speaker_if_selected(
+    db: Session,
+    *,
+    tenant_id: str,
+    person_name: str,
+    speaker_user_id: str | None,
+    primary_user_id: str | None,
+    wecom_userid: str | None,
+    exclude_person_id: str | None = None,
+) -> None:
+    """主账号确实改为该说话人时，占用检查并替换占位显示名。"""
+
+    if not speaker_user_id or primary_user_id != speaker_user_id or not wecom_userid:
+        return
+    _require_speaker_free(db, tenant_id, speaker_user_id, exclude_person_id)
+    speaker = db.get(User, speaker_user_id)
+    if speaker is None or speaker.tenant_id != tenant_id:
+        return
+    _adopt_display_name(db, tenant_id, speaker, person_name, wecom_userid)
 
 
 def attach_pending_wecom_person(
@@ -67,7 +121,7 @@ def attach_pending_wecom_person(
 ) -> None:
     """会话账号刚出现时，补上还没有主账号的企业人员。
 
-    不覆盖已经写上的登录账号：那一次改挂只发生在成员表单的保存里。
+    不覆盖已经写上的主账号。改挂只在保存时、且主账号为空或已是该说话人时发生。
     影子用户若已属于另一名人员，跳过，避免入站把花名册抢过来。
     """
 

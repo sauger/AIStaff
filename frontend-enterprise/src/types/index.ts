@@ -1549,6 +1549,7 @@ export type EnterprisePersonRead = {
   source: string;
   external_id?: string | null;
   wecom_userid?: string | null;
+  wecom_link_notice?: string | null;
   created_at: string;
   updated_at: string;
 };

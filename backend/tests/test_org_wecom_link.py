@@ -154,14 +154,14 @@ def test_create_links_existing_wecom_shadow_and_roster_matches() -> None:
         assert db.get(User, shadow.id).display_name == "陈龙"
 
 
-def test_update_replaces_web_login_with_wecom_shadow() -> None:
+def test_update_keeps_web_primary_when_wecom_speaker_differs() -> None:
     engine = _engine()
     with Session(engine) as db:
         owner, admin = _seed(db)
         created = post_person(_person(primary_user_id=owner.id), db=db, current_user=admin)
         owner_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id)
         assert owner_roster.status == "matched"
-        shadow = _shadow(db, display_name="药李子")
+        shadow = _shadow(db, display_name="企业微信用户 77898")
 
         updated = patch_person(
             created.id,
@@ -169,13 +169,27 @@ def test_update_replaces_web_login_with_wecom_shadow() -> None:
             db=db,
             current_user=admin,
         )
-        assert updated.primary_user_id == shadow.id
+        assert updated.primary_user_id == owner.id
         assert updated.wecom_userid == "18016077898"
+        assert updated.wecom_link_notice
+        assert updated.wecom_link_notice.startswith("未改挂花名册主账号")
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).name == "陈龙"
+        shadow_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id)
+        assert shadow_roster.status == "unmatched"
+        assert db.get(User, shadow.id).display_name == "企业微信用户 77898"
+        assert _identity(db, shadow.id).staffdeck_user_id == shadow.id
+
+        hung = patch_person(
+            created.id,
+            _person(primary_user_id=None, wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert hung.primary_user_id == shadow.id
+        assert hung.wecom_link_notice is None
         assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id).name == "陈龙"
-        owner_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id)
-        assert owner_roster.status == "unmatched"
-        # 已有真实显示名时不覆盖；渠道身份仍指向影子用户，而不是网页账号。
-        assert db.get(User, shadow.id).display_name == "药李子"
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).status == "unmatched"
+        assert db.get(User, shadow.id).display_name == "陈龙"
         assert _identity(db, shadow.id).staffdeck_user_id == shadow.id
 
 
@@ -229,10 +243,10 @@ def test_pending_link_does_not_replace_an_existing_login_or_other_tenant() -> No
         assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).name == "陈龙"
 
         cleared = patch_person(created.id, _person(), db=db, current_user=admin)
-        assert cleared.primary_user_id is None
+        assert cleared.primary_user_id == owner.id
         assert cleared.wecom_userid is None
-        owner_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id)
-        assert owner_roster.status == "unmatched"
+        assert cleared.wecom_link_notice is None
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).name == "陈龙"
         shadow_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id)
         assert shadow_roster.status == "unmatched"
 
@@ -320,6 +334,76 @@ def test_same_user_in_two_scopes_links_once_and_group_userid_is_rejected() -> No
         assert error.value.detail["code"] == "ORG_WECOM_USERID_INVALID"
 
 
+def test_clearing_wecom_userid_keeps_shadow_primary() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _owner, admin = _seed(db)
+        shadow = _shadow(db)
+        created = post_person(_person(wecom_userid="18016077898"), db=db, current_user=admin)
+        assert created.primary_user_id == shadow.id
+
+        cleared = patch_person(
+            created.id,
+            _person(primary_user_id=None, wecom_userid=None),
+            db=db,
+            current_user=admin,
+        )
+        assert cleared.wecom_userid is None
+        assert cleared.primary_user_id == shadow.id
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id).name == "陈龙"
+
+        kept = patch_person(
+            created.id,
+            _person(primary_user_id=shadow.id, wecom_userid=None),
+            db=db,
+            current_user=admin,
+        )
+        assert kept.primary_user_id == shadow.id
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id).name == "陈龙"
+
+
+def test_bound_web_identity_stays_web_primary() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        owner, admin = _seed(db)
+        db.add(
+            ChannelIdentity(
+                id="chident_bound_web",
+                tenant_id="tenant_demo",
+                channel="wecom",
+                external_account_scope="ww_demo",
+                external_user_id="18016077898",
+                staffdeck_user_id=owner.id,
+                display_name="Owner",
+            )
+        )
+        db.commit()
+        created = post_person(
+            _person(primary_user_id=owner.id, wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert created.primary_user_id == owner.id
+        assert created.wecom_userid == "18016077898"
+        assert created.wecom_link_notice is None
+        identity = db.get(ChannelIdentity, "chident_bound_web")
+        assert identity is not None
+        assert identity.staffdeck_user_id == owner.id
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).name == "陈龙"
+
+        updated = patch_person(
+            created.id,
+            _person(primary_user_id=owner.id, wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert updated.primary_user_id == owner.id
+        assert updated.wecom_link_notice is None
+        identity = db.get(ChannelIdentity, "chident_bound_web")
+        assert identity is not None
+        assert identity.staffdeck_user_id == owner.id
+
+
 def test_member_directory_hides_wecom_userid() -> None:
     engine = _engine()
     with Session(engine) as db:
@@ -327,6 +411,8 @@ def test_member_directory_hides_wecom_userid() -> None:
         post_person(_person(wecom_userid="18016077898"), db=db, current_user=admin)
         visible = get_people(tenant_id="tenant_demo", db=db, current_user=owner)
         assert visible.people[0].name == "陈龙"
-        assert "wecom_userid" not in visible.people[0].model_dump()
+        dumped = visible.people[0].model_dump()
+        assert "wecom_userid" not in dumped
+        assert "wecom_link_notice" not in dumped
         admin_rows = get_people(tenant_id="tenant_demo", db=db, current_user=admin)
         assert admin_rows.people[0].wecom_userid == "18016077898"

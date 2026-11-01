@@ -431,7 +431,13 @@ def test_member_directory_hides_agents_history_and_account_links(org_db) -> None
     dumped = zhang.model_dump()
     assert dumped["phone"] == "13800000000"
     assert dumped["email"] == "zhangsan@example.com"
-    for field in ("primary_user_id", "primary_user_name", "primary_username", "wecom_userid"):
+    for field in (
+        "primary_user_id",
+        "primary_user_name",
+        "primary_username",
+        "wecom_userid",
+        "wecom_link_notice",
+    ):
         assert field not in dumped
 
     admin_people = get_people(tenant_id="tenant_demo", db=db, current_user=admin)
@@ -516,7 +522,13 @@ def test_member_directory_http_payload_omits_admin_fields(org_db) -> None:
     assert [item["name"] for item in member_body["people"]] == ["张三"]
     member_row = member_body["people"][0]
     assert member_row["phone"] == "13800000000"
-    for field in ("primary_user_id", "primary_user_name", "primary_username", "wecom_userid"):
+    for field in (
+        "primary_user_id",
+        "primary_user_name",
+        "primary_username",
+        "wecom_userid",
+        "wecom_link_notice",
+    ):
         assert field not in member_row
 
     member_tree = client.get("/api/enterprise/org/tree", params={"tenant_id": "tenant_demo"}).json()

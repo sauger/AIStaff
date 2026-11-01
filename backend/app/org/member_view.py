@@ -26,6 +26,7 @@ _ACCOUNT_LINK_FIELDS = {
     "primary_user_name",
     "primary_username",
     "wecom_userid",
+    "wecom_link_notice",
 }
 
 

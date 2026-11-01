@@ -242,12 +242,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
   }
 
   function openPersonEdit(person: EnterprisePersonRead) {
-    const draft = draftFromPerson(person);
-    const webLinked = users.some((user) => user.id === person.primary_user_id);
-    setPersonDraft({
-      ...draft,
-      primaryUserId: webLinked ? person.primary_user_id || '' : '',
-    });
+    setPersonDraft(draftFromPerson(person));
   }
 
   async function savePerson() {
@@ -265,17 +260,19 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
         phone: personDraft.phone.trim() || null,
         email: personDraft.email.trim() || null,
         status: personDraft.status,
-        primary_user_id: users.some((user) => user.id === personDraft.primaryUserId)
-          ? personDraft.primaryUserId
-          : null,
+        primary_user_id: personDraft.primaryUserId || null,
         wecom_userid: personDraft.wecomUserid.trim() || null,
       };
-      if (personDraft.id) {
-        await api.patch(`/api/enterprise/org/people/${encodeURIComponent(personDraft.id)}`, payload);
-        notify.success('企业人员已更新');
+      const saved = personDraft.id
+        ? await api.patch<EnterprisePersonRead>(
+          `/api/enterprise/org/people/${encodeURIComponent(personDraft.id)}`,
+          payload,
+        )
+        : await api.post<EnterprisePersonRead>('/api/enterprise/org/people', payload);
+      if (saved.wecom_link_notice) {
+        notify.warning(saved.wecom_link_notice);
       } else {
-        await api.post('/api/enterprise/org/people', payload);
-        notify.success('企业人员已创建');
+        notify.success(personDraft.id ? '企业人员已更新' : '企业人员已创建');
       }
       setPersonDraft(null);
       await load();
@@ -401,7 +398,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <div>
               <h3 className="m-0 text-[13px] font-semibold text-[#18181a]">{`已从企微选择 ${wecomSelection.length} 人`}</h3>
               <p className="m-0 mt-1 text-[12px] leading-[1.6] text-[#858b9c]">
-                保存人员时会写入企微 userid。若该 userid 已有企业微信会话账号，私聊会显示这名人员的姓名。一次只能填入一位成员。
+                保存人员时会写入企微 userid。尚未关联登录账号时，已有的企业微信会话账号会挂到花名册，私聊即可显示姓名。一次只能填入一位成员。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -643,11 +640,11 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             />
           </label>
           <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
-            保存后，若本租户已有该 userid 的企业微信会话账号，会关联到该账号，私聊即可显示此姓名。这不会把渠道身份改绑到网页登录账号。
+            尚未关联登录账号时，保存会把已有的企业微信会话账号挂到花名册。已有网页账号时不会改挂，也不会把渠道身份改绑到该网页账号。
           </p>
           {personDraft?.wecomUserid.trim() ? (
             <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
-              已填写企微 userid，且已有会话账号时，以该账号作为花名册关联，不再同时使用另一个登录账号。
+              已关联网页账号时，保存企微 userid 不会改挂花名册主账号。若要让企微私聊显示此姓名，请先把关联登录账号改成「不关联」后再保存。
             </p>
           ) : null}
           {personDraft?.linkedAccountLabel ? (
