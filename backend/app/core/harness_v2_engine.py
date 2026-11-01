@@ -73,6 +73,10 @@ from app.session.session_schema import (
     StepAgentResult,
     TurnPlan,
 )
+from app.session.turn_speaker import (
+    current_speaker_for_requirement,
+    stamp_conversation_speaker,
+)
 from app.skills.nesting import discoverable_sops, expand_visible_sops
 from app.tools.external_tasks import update_external_task_checkpoint
 
@@ -330,8 +334,9 @@ class HarnessV2Engine:
             session,
             memory_context,
         )
-        conversation_context = self.owner._conversation_context(
-            session, model_config=model_config
+        conversation_context = stamp_conversation_speaker(
+            self.owner._conversation_context(session, model_config=model_config),
+            request.speaker,
         )
 
         self._renew_session_lease()
@@ -933,6 +938,7 @@ class HarnessV2Engine:
                 ),
                 out_of_scope_task_intents=_sibling_task_intents(self.db, row),
                 client_timezone=request.client_timezone,
+                current_speaker=current_speaker_for_requirement(request.speaker),
             )
             if (
                 self.slash_command

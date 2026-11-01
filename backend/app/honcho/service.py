@@ -12,6 +12,7 @@ from app.honcho.client import HonchoClient
 from app.honcho.ids import HonchoIdError, build_honcho_identity
 from app.honcho.runtime import apply_honcho_ui_config
 from app.session.session_schema import ChatTurnRequest
+from app.session.turn_speaker import portrait_user_id, stable_portrait_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def schedule_honcho_message(
         settings = _effective_settings(db, request.tenant_id, settings or get_settings())
         if request.message_visibility != "visible":
             return
-        user_id = str(request.user_id or "").strip()
+        user_id = portrait_user_id(request)
         agent_id = str(getattr(session, "agent_id", "") or "").strip()
         session_id = str(getattr(session, "id", "") or "").strip()
         if not user_id or not agent_id or not session_id:
@@ -91,7 +92,7 @@ def inject_honcho_representation(
     memories = list(memory_context or [])
     try:
         settings = _effective_settings(db, request.tenant_id, settings or get_settings())
-        user_id = str(request.user_id or "").strip()
+        user_id = portrait_user_id(request)
         agent_id = str(getattr(session, "agent_id", "") or "").strip()
         session_id = str(getattr(session, "id", "") or "").strip()
         if not user_id or not agent_id or not session_id:
@@ -140,10 +141,17 @@ def dual_write_message(
     role = str(payload.get("role") or "")
     if role not in {"user", "assistant"} or not content:
         return
+    user_id = stable_portrait_user_id(
+        str(payload.get("user_id") or ""),
+        _optional_str(payload.get("external_user_id")),
+    )
+    if not user_id:
+        logger.warning("honcho dual-write skipped because the user peer is not a stable User.id")
+        return
     try:
         identity = build_honcho_identity(
             tenant_id=str(payload.get("tenant_id") or ""),
-            user_id=str(payload.get("user_id") or ""),
+            user_id=user_id,
             agent_id=str(payload.get("agent_id") or ""),
             session_id=str(payload.get("session_id") or ""),
             workspace_prefix=settings.honcho_workspace_prefix,

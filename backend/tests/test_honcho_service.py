@@ -227,6 +227,37 @@ def test_group_chat_skips_write_and_inject() -> None:
     db.close()
 
 
+def test_external_userid_is_not_used_as_honcho_peer() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    client = FakeHoncho()
+    queued: list[dict] = []
+    request = _request(user_id="zhangsan")
+
+    schedule_honcho_message(
+        db,
+        request,
+        session,
+        role="user",
+        content="你好",
+        settings=_settings(),
+        enqueue=queued.append,
+    )
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [{"kind": "fact", "content": "本地事实"}],
+        settings=_settings(),
+        client=client,
+    )
+
+    assert queued == []
+    assert client.calls == []
+    assert memories == [{"kind": "fact", "content": "本地事实"}]
+    db.close()
+
+
 def test_enabled_private_chat_queues_user_and_agent_peers() -> None:
     db = _db()
     session = _seed(db, honcho_enabled=True)

@@ -72,6 +72,7 @@ from app.db.models import (
 )
 from app.observability.spans import bind_span_sink
 from app.session.session_schema import ChatAttachmentRead, ChatTurnRequest
+from app.session.turn_speaker import resolve_wecom_bot_speaker
 
 logger = logging.getLogger(__name__)
 
@@ -1948,11 +1949,23 @@ def process_inbound(
 
                 context_injection = build_tl_chat_context(db, team, user_message)
                 interaction_mode = "team_tl"
+            speaker = None
+            turn_user_id = user_id
+            if binding.channel == "wecom":
+                # 群聊第一期不把群桶 User 当成说话人。私聊 peer 只用 ChannelIdentity 的 User.id。
+                speaker = resolve_wecom_bot_speaker(
+                    user_id=None if inbound.is_group else user_id,
+                    is_group=inbound.is_group,
+                    external_user_id=inbound.from_user_id,
+                )
+                if speaker.status == "resolved" and speaker.user_id:
+                    turn_user_id = speaker.user_id
             request = ChatTurnRequest(
                 tenant_id=binding.tenant_id,
                 session_id=session_id,
                 agent_id=current_agent_id,
-                user_id=user_id,
+                user_id=turn_user_id,
+                speaker=speaker,
                 message=user_message,
                 context_injection=context_injection,
                 channel=binding.channel,

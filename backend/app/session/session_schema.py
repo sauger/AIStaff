@@ -212,6 +212,16 @@ class SessionPublic(BaseModel):
     status: str = "active"
 
 
+class TurnSpeaker(BaseModel):
+    """本轮对话用户。peer 与会话归属只用 user_id，不用渠道外部 id。"""
+
+    status: Literal["resolved", "unresolved"]
+    user_id: Optional[str] = None
+    channel: str = "web"
+    source: Literal["web_login", "channel_identity", "unresolved"] = "unresolved"
+    reason: Optional[str] = None
+
+
 class ChatTurnRequest(BaseModel):
     tenant_id: str
     session_id: Optional[str] = None
@@ -219,6 +229,8 @@ class ChatTurnRequest(BaseModel):
     model_config_id: Optional[str] = None
     client_turn_id: Optional[str] = None
     user_id: Optional[str] = None
+    # 入口解析结果。客户端可以带上，但网页与企微 bot 会在服务端覆盖。
+    speaker: Optional[TurnSpeaker] = Field(default=None, exclude=True)
     message: str
     attachments: list["ChatAttachmentRead"] = Field(default_factory=list)
     channel: str = "web"

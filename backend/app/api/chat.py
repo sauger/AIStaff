@@ -89,6 +89,7 @@ from app.session.session_schema import (
     MessageFeedbackRequest,
     MessageRead,
 )
+from app.session.turn_speaker import resolve_web_speaker
 from app.skills.nesting import discoverable_sops
 from app.teams.service import get_team_leader
 from app.teams.wakeup import build_tl_chat_context, process_tl_reply
@@ -1116,21 +1117,31 @@ async def upload_chat_attachments(
 
 
 @router.post("/turn", response_model=ChatTurnResponse)
-def chat_turn(
-    request: ChatTurnRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> ChatTurnResponse:
-    _ensure_request_tenant(request.tenant_id, current_user)
-    request = request.model_copy(
+def _bind_web_dialog_speaker(request: ChatTurnRequest, current_user: User) -> ChatTurnRequest:
+    """网页对话框只认登录用户。客户端传来的 user_id / speaker 一律覆盖。"""
+
+    speaker = resolve_web_speaker(current_user, channel=request.channel or "web")
+    if speaker.status != "resolved" or not speaker.user_id:
+        raise HTTPException(status_code=401, detail="Current user is not resolved")
+    return request.model_copy(
         update={
-            "user_id": current_user.id,
+            "user_id": speaker.user_id,
+            "speaker": speaker,
             "context_injection": None,
             "message_visibility": "visible",
             "inbound_mail_auto_complete": False,
             "inbound_mail_message_id": None,
         }
     )
+
+
+def chat_turn(
+    request: ChatTurnRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> ChatTurnResponse:
+    _ensure_request_tenant(request.tenant_id, current_user)
+    request = _bind_web_dialog_speaker(request, current_user)
     request = _validate_chat_turn_attachments(request)
     team_tl_team: Team | None = None
     if request.session_id:
@@ -1208,15 +1219,7 @@ def chat_stream(
     db: Session = Depends(get_session),
 ) -> StreamingResponse:
     _ensure_request_tenant(request.tenant_id, current_user)
-    request = request.model_copy(
-        update={
-            "user_id": current_user.id,
-            "context_injection": None,
-            "message_visibility": "visible",
-            "inbound_mail_auto_complete": False,
-            "inbound_mail_message_id": None,
-        }
-    )
+    request = _bind_web_dialog_speaker(request, current_user)
     request = _validate_chat_turn_attachments(request)
     ensure_tenant(db, request.tenant_id)
     team_tl_team_id: str | None = None

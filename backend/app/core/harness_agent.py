@@ -18,6 +18,7 @@ from app.core.task_request_compiler import (
     CapabilityDescriptor,
     TaskExecutionResult,
     TaskRequirement,
+    dump_task_requirement,
 )
 from app.core.user_visible_reply import ACTION_BUDGET_SENTENCE, ensure_user_visible_reply
 from app.db.models import ModelConfig
@@ -176,7 +177,7 @@ class HarnessTaskAgent:
                     artifacts=artifacts,
                     trace_sink=trace_sink,
                 ))
-            requirement_payload = requirement.model_dump(mode="json")
+            requirement_payload = dump_task_requirement(requirement)
             attachment_descriptors, attachment_context = isolated_attachment_context(
                 requirement.attachments,
                 image_payloads,
