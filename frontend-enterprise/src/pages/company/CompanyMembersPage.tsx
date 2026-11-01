@@ -114,6 +114,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentSearch, setAgentSearch] = useState('');
   const [wecomSelection, setWecomSelection] = useState<WecomDirectoryUser[]>([]);
+  const [wecomPickerOpen, setWecomPickerOpen] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -225,6 +226,28 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
       name: person.name,
       email: person.email,
       wecomUserid: person.userid,
+    });
+  }
+
+  function applySelectedWecomUser(person: WecomDirectoryUser) {
+    setPersonDraft((current) => {
+      if (current?.id) {
+        return { ...current, wecomUserid: person.userid };
+      }
+      if (!current) {
+        return {
+          ...EMPTY_PERSON,
+          name: person.name,
+          email: person.email,
+          wecomUserid: person.userid,
+        };
+      }
+      return {
+        ...current,
+        name: current.name.trim() ? current.name : person.name,
+        email: current.email.trim() ? current.email : person.email,
+        wecomUserid: person.userid,
+      };
     });
   }
 
@@ -374,9 +397,12 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <WecomDirectoryPicker
               buttonLabel="从企微选择"
               title="从企微通讯录选择"
-              description="可多选。确认后可把一位成员填入企业人员；保存时写入企微 userid，并关联已有的企业微信会话账号。"
+              description="可多选。选择一人并确认后，会自动打开人员表单并填入企微 userid。"
               buttonClassName="h-8 rounded-[10px] px-3 text-[12px]"
-              onConfirm={(users) => setWecomSelection(users)}
+              onConfirm={(users) => {
+                setWecomSelection(users);
+                if (users.length === 1 && users[0]) applySelectedWecomUser(users[0]);
+              }}
             />
           ) : null}
           <UIButton
@@ -394,7 +420,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <div>
               <h3 className="m-0 text-[13px] font-semibold text-[#18181a]">{`已从企微选择 ${wecomSelection.length} 人`}</h3>
               <p className="m-0 mt-1 text-[12px] leading-[1.6] text-[#858b9c]">
-                保存人员时会写入企微 userid。若已有唯一的企业微信会话账号，花名册主账号会改挂到该账号，私聊即可显示姓名。一次只能填入一位成员。
+                选择一人并确认后，企微 userid 会自动填入人员表单。多人时再点「填入新建人员」。保存时若已有唯一会话账号，花名册主账号会改挂到该账号。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -590,8 +616,24 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
         企业人员的部门任职、岗位和负责人由「组织架构」维护；数字员工负责人不在此页修改。
       </p>
 
-      <Dialog open={Boolean(personDraft)} onOpenChange={(open) => !open && setPersonDraft(null)}>
-        <DialogContent className="flex w-[calc(100%-2rem)] flex-col gap-[14px] sm:max-w-[480px]">
+      <Dialog
+        open={Boolean(personDraft)}
+        onOpenChange={(open) => {
+          if (!open && !wecomPickerOpen) setPersonDraft(null);
+        }}
+      >
+        <DialogContent
+          className="flex w-[calc(100%-2rem)] flex-col gap-[14px] sm:max-w-[480px]"
+          onPointerDownOutside={(event) => {
+            if (wecomPickerOpen) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (wecomPickerOpen) event.preventDefault();
+          }}
+          onFocusOutside={(event) => {
+            if (wecomPickerOpen) event.preventDefault();
+          }}
+        >
           <DialogTitle className="text-[14px] font-normal text-[#757f9c]">
             {personDraft?.id ? '编辑企业人员' : '新建企业人员'}
           </DialogTitle>
@@ -625,16 +667,33 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
               <Input value={personDraft?.email || ''} onChange={(event) => setPersonDraft((prev) => (prev ? { ...prev, email: event.target.value } : prev))} className={INPUT_CLASS} placeholder="选填" />
             </label>
           </div>
-          <label className="flex flex-col gap-[4px] text-[12px] text-[#464c5e]">
-            企微 userid
-            <Input
-              value={personDraft?.wecomUserid || ''}
-              onChange={(event) => setPersonDraft((prev) => (prev ? { ...prev, wecomUserid: event.target.value } : prev))}
-              className={INPUT_CLASS}
-              placeholder="选填，通讯录成员详情里的账号"
-              aria-label="企微 userid"
-            />
-          </label>
+          <div className="flex items-end gap-[8px]">
+            <label className="flex min-w-0 flex-1 flex-col gap-[4px] text-[12px] text-[#464c5e]">
+              企微 userid
+              <Input
+                value={personDraft?.wecomUserid || ''}
+                onChange={(event) => setPersonDraft((prev) => (prev ? { ...prev, wecomUserid: event.target.value } : prev))}
+                className={INPUT_CLASS}
+                placeholder="选填，或从企微选择后自动填入"
+                aria-label="企微 userid"
+              />
+            </label>
+            {canPickWecom ? (
+              <WecomDirectoryPicker
+                mode="single"
+                buttonLabel="选择企微用户"
+                title="选择企微用户"
+                description="选择一人后，企微 userid 会自动填入。保存时若已有唯一会话账号，花名册主账号会改挂到该账号。"
+                confirmLabel="填入 userid"
+                buttonClassName="h-8 shrink-0 rounded-[10px] px-3 text-[12px]"
+                onOpenChange={setWecomPickerOpen}
+                onConfirm={(users) => {
+                  const person = users[0];
+                  if (person) applySelectedWecomUser(person);
+                }}
+              />
+            ) : null}
+          </div>
           <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
             若本租户已有该 userid 的唯一企业微信会话账号，保存会把花名册主账号改挂到该账号，包括已经关联的网页账号。不会改绑渠道身份。
           </p>

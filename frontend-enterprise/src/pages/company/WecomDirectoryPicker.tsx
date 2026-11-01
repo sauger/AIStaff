@@ -45,6 +45,7 @@ type Props = {
   confirmLabel?: string;
   buttonClassName?: string;
   disabled?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onConfirm: (users: WecomDirectoryUser[]) => void | Promise<void>;
 };
 
@@ -87,6 +88,7 @@ export default function WecomDirectoryPicker({
   confirmLabel = '确认选择',
   buttonClassName,
   disabled = false,
+  onOpenChange,
   onConfirm,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -159,6 +161,11 @@ export default function WecomDirectoryPicker({
       .some((value) => value.toLowerCase().includes(text)));
   }, [keyword, users]);
 
+  function setPickerOpen(next: boolean) {
+    setOpen(next);
+    onOpenChange?.(next);
+  }
+
   function toggleUser(user: WecomDirectoryUser) {
     setSelected((current) => {
       if (mode === 'single') {
@@ -180,7 +187,7 @@ export default function WecomDirectoryPicker({
     setConfirming(true);
     try {
       await onConfirm(usersToSave);
-      setOpen(false);
+      setPickerOpen(false);
     } catch (cause: unknown) {
       notify.error(cause instanceof Error ? cause.message : '保存企微选择失败');
     } finally {
@@ -195,11 +202,11 @@ export default function WecomDirectoryPicker({
         variant="outline"
         className={buttonClassName || 'h-8 rounded-[10px] px-3 text-[12px]'}
         disabled={disabled}
-        onClick={() => setOpen(true)}
+        onClick={() => setPickerOpen(true)}
       >
         {buttonLabel}
       </UIButton>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={setPickerOpen}>
         <DialogContent className="flex max-h-[min(680px,calc(100%-2rem))] w-[calc(100%-2rem)] flex-col gap-3 overflow-hidden sm:max-w-[760px]">
           <DialogTitle className="text-[14px] font-normal text-[#757f9c]">{title}</DialogTitle>
           <p className="m-0 text-[12px] leading-[1.6] text-[#858b9c]">{description}</p>
@@ -268,7 +275,7 @@ export default function WecomDirectoryPicker({
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-[#858b9c]">{`已选 ${selected.size} 人`}</span>
             <div className="flex gap-2">
-              <UIButton type="button" variant="outline" className="h-8 rounded-[10px] px-3 text-[12px]" onClick={() => setOpen(false)}>
+              <UIButton type="button" variant="outline" className="h-8 rounded-[10px] px-3 text-[12px]" onClick={() => setPickerOpen(false)}>
                 取消
               </UIButton>
               <UIButton
