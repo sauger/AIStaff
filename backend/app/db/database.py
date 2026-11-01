@@ -589,6 +589,7 @@ def _migrate_sqlite_skill_schema() -> None:
     legacy_id_prefix = f"{legacy_key}_"
     with _sqlite_immediate_connection() as conn:
         _migrate_model_api_protocols(conn, tables)
+        _migrate_model_ocr_role(conn, tables)
         _migrate_default_model_output_limit(conn, tables)
         _migrate_channel_binding_agents_backfill(conn, tables)
         _migrate_channel_scope_rebuild(conn, inspector, tables)
@@ -2366,6 +2367,28 @@ def _migrate_model_api_protocols(conn, tables: set[str]) -> None:
     _normalize_model_default_rows(conn)
     if repairing_applied_migration:
         return
+
+
+def _migrate_model_ocr_role(conn, tables: set[str]) -> None:
+    """Add the dedicated scanned-PDF OCR flag without touching chat defaults."""
+
+    if "model_configs" not in tables:
+        return
+    columns = {
+        str(row[1]) for row in conn.execute(text("PRAGMA table_info(model_configs)")).all()
+    }
+    if "is_ocr" not in columns:
+        conn.execute(
+            text("ALTER TABLE model_configs ADD COLUMN is_ocr BOOLEAN NOT NULL DEFAULT 0")
+        )
+    conn.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_model_configs_tenant_ocr
+            ON model_configs(tenant_id) WHERE is_ocr = 1
+            """
+        )
+    )
 
 
 def _normalize_model_default_rows(conn) -> None:

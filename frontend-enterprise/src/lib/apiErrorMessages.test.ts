@@ -7,6 +7,9 @@ describe('apiErrorMessage', () => {
     expect(apiErrorMessage('MODEL_PROTOCOL_OPTIONS_INVALID', '保存失败')).toBe(
       '模型协议选项无效，请检查 API 协议与协议参数',
     );
+    expect(apiErrorMessage('MODEL_OCR_CANNOT_BE_DEFAULT', '保存失败')).toBe(
+      '扫描件 OCR 模型不能设为默认对话模型，请另建一个视觉模型',
+    );
   });
 
   it('wraps an unknown stable error code without rewriting normal diagnostics', () => {

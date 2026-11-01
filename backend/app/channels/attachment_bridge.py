@@ -67,6 +67,7 @@ def inbound_attachments_to_chat(
                 descriptor.filename or descriptor.media_id,
                 descriptor.content_type or None,
                 data,
+                tenant_id=tenant_id,
             )
             results.append(
                 stage_chat_attachment(parsed, data, tenant_id=tenant_id, user_id=user_id)

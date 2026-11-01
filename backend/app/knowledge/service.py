@@ -531,7 +531,12 @@ class KnowledgeService:
             metadata = job.metadata_json or {}
             content = base64.b64decode(str(metadata.get("content_base64") or ""))
             source_sha256 = hashlib.sha256(content).hexdigest()
-            text, file_type = extract_text(job.filename, content)
+            text, file_type = extract_text(
+                job.filename,
+                content,
+                tenant_id=job.tenant_id,
+                db=self.db,
+            )
             self._raise_if_ingest_cancelled(job)
             self._update_ingest_stage(
                 job,

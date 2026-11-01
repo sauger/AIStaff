@@ -198,7 +198,12 @@ def test_bridge_downloads_and_stages_attachments() -> None:
         assert len(fake_adapter.download_calls) == 1
         assert fake_adapter.download_calls[0][1].media_id == "img_v3_001"
         # parse_chat_attachment 收到原始字节和文件名
-        mock_parse.assert_called_once_with("img_v3_001.png", "image/png", image)
+        mock_parse.assert_called_once_with(
+            "img_v3_001.png",
+            "image/png",
+            image,
+            tenant_id="tenant_a",
+        )
         # stage_chat_attachment 收到 attachment + 字节 + tenant/user
         mock_stage.assert_called_once()
         stage_kwargs = mock_stage.call_args.kwargs
@@ -311,10 +316,11 @@ def test_bridge_passes_empty_content_type_as_none() -> None:
                 _binding(), inbound, db_engine=None, tenant_id="t", user_id="u"
             )
         # content_type="" -> extension-based MIME inference
-        args, _kwargs = mock_parse.call_args
+        args, kwargs = mock_parse.call_args
         assert args[0] == "report.pdf"
         assert args[1] == "application/pdf"
         assert args[2] == b"some bytes"
+        assert kwargs["tenant_id"] == "t"
     finally:
         register_channel_adapter("feishu", previous)
 

@@ -4,6 +4,7 @@ import re
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from zipfile import ZipFile
 
 
@@ -14,7 +15,13 @@ class KnowledgeParseError(ValueError):
     pass
 
 
-def extract_text(filename: str, content: bytes) -> tuple[str, str]:
+def extract_text(
+    filename: str,
+    content: bytes,
+    *,
+    tenant_id: str | None = None,
+    db: Any | None = None,
+) -> tuple[str, str]:
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
         raise KnowledgeParseError(f"暂不支持 {suffix or 'unknown'} 文件格式。")
@@ -25,7 +32,7 @@ def extract_text(filename: str, content: bytes) -> tuple[str, str]:
     if suffix in {".html", ".htm"}:
         return _extract_html(content), "html"
     if suffix == ".pdf":
-        return _extract_pdf(content), "pdf"
+        return _extract_pdf(content, tenant_id=tenant_id, db=db), "pdf"
     if suffix == ".docx":
         return _extract_docx(content), "docx"
     raise KnowledgeParseError(f"暂不支持 {suffix} 文件格式。")
@@ -55,20 +62,62 @@ def _extract_html(content: bytes) -> str:
         return parser.text
 
 
-def _extract_pdf(content: bytes) -> str:
+_MEANINGFUL_PDF_TEXT = re.compile(r"[A-Za-z0-9\u4e00-\u9fff]")
+
+
+def _extract_pdf(
+    content: bytes,
+    *,
+    tenant_id: str | None = None,
+    db: Any | None = None,
+) -> str:
     try:
         from pypdf import PdfReader
     except Exception as exc:  # pragma: no cover - dependency availability differs by env.
         raise KnowledgeParseError("缺少 pypdf，无法解析 PDF。") from exc
-    reader = PdfReader(BytesIO(content))
-    pages: list[str] = []
-    for index, page in enumerate(reader.pages):
-        page_text = page.extract_text() or ""
-        if page_text.strip():
-            pages.append(f"## 第 {index + 1} 页\n\n{page_text}")
-    if not pages:
+    try:
+        reader = PdfReader(BytesIO(content))
+        page_texts = [page.extract_text() or "" for page in reader.pages]
+    except Exception as exc:
+        raise KnowledgeParseError(f"无法解析 PDF：{exc}") from exc
+    if not page_texts:
+        raise KnowledgeParseError("PDF 没有可读取的页面。")
+    # Pages that already contain letters, digits, or CJK stay on pypdf.
+    # Empty or scanned pages are filled by OCR and merged back in page order.
+    ocr_pages = [
+        index
+        for index, page_text in enumerate(page_texts, start=1)
+        if _MEANINGFUL_PDF_TEXT.search(page_text) is None
+    ]
+    if not ocr_pages:
+        return _format_pdf_pages(page_texts)
+    from app.knowledge.pdf_ocr import OCR_EMPTY_RESULT, ocr_scanned_pdf
+
+    recognized = ocr_scanned_pdf(
+        content,
+        tenant_id=tenant_id,
+        db=db,
+        page_numbers=ocr_pages,
+    )
+    if len(recognized) != len(ocr_pages):
+        raise KnowledgeParseError("扫描件 OCR 返回的页数与待识别页不一致。")
+    for page_number, page_text in zip(ocr_pages, recognized, strict=True):
+        page_texts[page_number - 1] = page_text
+    text = _format_pdf_pages(page_texts)
+    if not text.strip():
+        raise KnowledgeParseError(OCR_EMPTY_RESULT)
+    return text
+
+
+def _format_pdf_pages(page_texts: list[str]) -> str:
+    blocks: list[str] = []
+    for index, page_text in enumerate(page_texts, start=1):
+        stripped = page_text.strip()
+        if stripped:
+            blocks.append(f"## 第 {index} 页\n\n{stripped}")
+    if not blocks:
         return ""
-    return "# PDF 文档\n\n" + "\n\n".join(pages)
+    return "# PDF 文档\n\n" + "\n\n".join(blocks)
 
 
 def _extract_docx(content: bytes) -> str:

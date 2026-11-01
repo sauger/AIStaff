@@ -346,6 +346,7 @@ export type ModelConfigRead = {
   config_revision: number;
   security_revision: number;
   is_default: boolean;
+  is_ocr: boolean;
   enabled: boolean;
   updated_at: string;
 };

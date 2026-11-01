@@ -12,6 +12,7 @@ from app.api.model_configs import (
     create_model_config,
     delete_model_config,
     set_default_model_config,
+    set_ocr_model_config,
     update_model_config,
 )
 from app.api.model_configs import (
@@ -721,6 +722,330 @@ def test_concurrent_initial_verification_activates_only_one_default(tmp_path, mo
         assert sum(bool(row and row.enabled) for row in rows) == 1
         assert sum(bool(row and row.is_default) for row in rows) == 1
     assert sorted(result.activated for result in results) == [False, True]
+
+
+def test_set_ocr_keeps_the_chat_default(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.add_all(
+            [
+                ModelConfig(
+                    id="model_chat",
+                    tenant_id="tenant_a",
+                    name="DeepSeek",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="deepseek-chat",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=True,
+                ),
+                ModelConfig(
+                    id="model_ocr",
+                    tenant_id="tenant_a",
+                    name="GLM-4V",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="glm-4v-plus",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                ),
+            ]
+        )
+        db.commit()
+
+        selected = set_ocr_model_config("model_ocr", tenant_id="tenant_a", db=db)
+
+        chat = db.get(ModelConfig, "model_chat")
+        vision = db.get(ModelConfig, "model_ocr")
+        assert selected.is_ocr is True
+        assert selected.is_default is False
+        assert chat is not None and chat.is_default is True and chat.is_ocr is False
+        assert vision is not None and vision.is_ocr is True and vision.is_default is False
+        with pytest.raises(HTTPException) as default_exc:
+            set_default_model_config("model_ocr", tenant_id="tenant_a", db=db)
+        with pytest.raises(HTTPException) as ocr_exc:
+            set_ocr_model_config("model_chat", tenant_id="tenant_a", db=db)
+        assert chat is not None and chat.is_default is True
+
+    assert default_exc.value.detail == "MODEL_OCR_CANNOT_BE_DEFAULT"
+    assert ocr_exc.value.detail == "MODEL_OCR_CANNOT_BE_DEFAULT"
+
+
+def test_verified_ocr_model_is_not_promoted_to_default(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_chat",
+                tenant_id="tenant_a",
+                name="DeepSeek",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="deepseek-chat",
+                trust_status="legacy_trusted",
+                enabled=True,
+                is_default=True,
+            )
+        )
+        db.commit()
+
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="GLM-4V",
+                api_protocol="openai_chat_completions",
+                base_url="https://open.bigmodel.cn/api/paas/v4/",
+                api_key="ocr-secret",
+                model="glm-4v-plus",
+                enabled=True,
+                is_default=False,
+                is_ocr=True,
+            ),
+            verify_before_save=True,
+            db=db,
+            current_user=_admin(),
+        )
+
+        chat = db.get(ModelConfig, "model_chat")
+        assert created.is_ocr is True
+        assert created.is_default is False
+        assert created.enabled is True
+        assert chat is not None and chat.is_default is True and chat.model == "deepseek-chat"
+
+
+def test_only_ocr_model_stays_out_of_the_default_slot(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="GLM-4V",
+                api_key="ocr-secret",
+                model="glm-4v-plus",
+                enabled=True,
+                is_ocr=True,
+            ),
+            verify_before_save=True,
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert created.enabled is True
+        assert created.is_ocr is True
+        assert created.is_default is False
+
+
+def test_reverify_keeps_chat_default_when_ocr_model_exists(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add_all(
+            [
+                ModelConfig(
+                    id="model_chat",
+                    tenant_id="tenant_a",
+                    name="DeepSeek",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="deepseek-chat",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=True,
+                ),
+                ModelConfig(
+                    id="model_ocr",
+                    tenant_id="tenant_a",
+                    name="GLM-4V",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="glm-4v-plus",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                    is_ocr=True,
+                ),
+            ]
+        )
+        db.commit()
+
+        updated = update_model_config(
+            "model_chat",
+            ModelConfigUpdateRequest(
+                tenant_id="tenant_a",
+                api_key="rotated-secret",
+                enabled=True,
+            ),
+            verify_before_save=True,
+            db=db,
+            current_user=_admin(),
+        )
+
+        vision = db.get(ModelConfig, "model_ocr")
+        assert updated.is_default is True
+        assert updated.is_ocr is False
+        assert vision is not None and vision.is_ocr is True and vision.is_default is False
+
+
+def test_security_change_clears_ocr_slot(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.add_all(
+            [
+                ModelConfig(
+                    id="model_ocr",
+                    tenant_id="tenant_a",
+                    name="GLM-4V",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="glm-4v-plus",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                    is_ocr=True,
+                ),
+                ModelConfig(
+                    id="model_backup",
+                    tenant_id="tenant_a",
+                    name="备用视觉",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="glm-4v-flash",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                    is_ocr=False,
+                ),
+            ]
+        )
+        db.commit()
+
+        updated = update_model_config(
+            "model_ocr",
+            ModelConfigUpdateRequest(
+                tenant_id="tenant_a",
+                api_key="rotated-secret",
+            ),
+            db=db,
+            current_user=_admin(),
+        )
+        selected = set_ocr_model_config("model_backup", tenant_id="tenant_a", db=db)
+
+        previous = db.get(ModelConfig, "model_ocr")
+        assert updated.enabled is False
+        assert updated.is_default is False
+        assert updated.is_ocr is False
+        assert previous is not None and previous.is_ocr is False
+        assert selected.is_ocr is True
+        assert selected.is_default is False
+        assert selected.id == "model_backup"
+
+
+def test_reverify_after_key_rotation_keeps_requested_ocr_slot(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_ocr",
+                tenant_id="tenant_a",
+                name="GLM-4V",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="glm-4v-plus",
+                trust_status="legacy_trusted",
+                enabled=True,
+                is_default=False,
+                is_ocr=True,
+            )
+        )
+        db.commit()
+
+        updated = update_model_config(
+            "model_ocr",
+            ModelConfigUpdateRequest(
+                tenant_id="tenant_a",
+                api_key="rotated-secret",
+                enabled=True,
+                is_ocr=True,
+            ),
+            verify_before_save=True,
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert updated.enabled is True
+        assert updated.is_ocr is True
+        assert updated.is_default is False
+
+
+def test_disabled_ocr_create_does_not_unset_the_active_ocr_model(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_ocr",
+                tenant_id="tenant_a",
+                name="GLM-4V",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="glm-4v-plus",
+                trust_status="legacy_trusted",
+                enabled=True,
+                is_default=False,
+                is_ocr=True,
+            )
+        )
+        db.commit()
+
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="备用视觉",
+                api_key="ocr-secret",
+                model="glm-4v-flash",
+                enabled=False,
+                is_ocr=True,
+            ),
+            db=db,
+            current_user=_admin(),
+        )
+
+        active = db.get(ModelConfig, "model_ocr")
+        assert created.enabled is False
+        assert created.is_ocr is False
+        assert active is not None and active.is_ocr is True and active.enabled is True
+
+
+def test_first_chat_model_becomes_default_beside_an_ocr_model(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add_all(
+            [
+                ModelConfig(
+                    id="model_ocr",
+                    tenant_id="tenant_a",
+                    name="GLM-4V",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="glm-4v-plus",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                    is_ocr=True,
+                ),
+                ModelConfig(
+                    id="model_chat",
+                    tenant_id="tenant_a",
+                    name="DeepSeek",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="deepseek-chat",
+                    trust_status="unverified",
+                    enabled=False,
+                    is_default=False,
+                ),
+            ]
+        )
+        db.commit()
+
+        result = run_model_config_test(
+            "model_chat",
+            tenant_id="tenant_a",
+            activate_if_initial=True,
+            db=db,
+        )
+
+        chat = db.get(ModelConfig, "model_chat")
+        vision = db.get(ModelConfig, "model_ocr")
+        assert result.activated is True
+        assert chat is not None and chat.enabled is True and chat.is_default is True
+        assert vision is not None and vision.is_ocr is True and vision.is_default is False
 
 
 def _install_passing_verification_client(monkeypatch) -> None:

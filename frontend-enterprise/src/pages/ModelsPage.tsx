@@ -55,6 +55,7 @@ type ModelForm = {
   max_output_tokens: string;
   extra_body: string;
   is_default: boolean;
+  is_ocr: boolean;
   enabled: boolean;
 };
 
@@ -87,6 +88,7 @@ const BLANK_MODEL_FORM: ModelForm = {
   max_output_tokens: '8192',
   extra_body: '{}',
   is_default: false,
+  is_ocr: false,
   enabled: true,
 };
 
@@ -190,6 +192,7 @@ export default function ModelsPage({
 
   const enabledCount = rows.filter((item) => item.enabled).length;
   const defaultRow = rows.find((item) => item.is_default);
+  const ocrRow = rows.find((item) => item.is_ocr);
   const providerCount = new Set(rows.map((item) => item.api_protocol).filter(Boolean)).size;
 
   function edit(row: ModelConfigRead) {
@@ -204,6 +207,7 @@ export default function ModelsPage({
       max_output_tokens: String(row.max_output_tokens),
       extra_body: JSON.stringify(row.extra_body || {}, null, 2),
       is_default: row.is_default,
+      is_ocr: row.is_ocr,
       enabled: row.enabled,
     });
     setEditorOpen(true);
@@ -254,7 +258,8 @@ export default function ModelsPage({
       temperature,
       max_output_tokens: maxOutputTokens,
       extra_body: extraBody,
-      is_default: form.enabled && form.is_default,
+      is_default: form.enabled && form.is_default && !form.is_ocr,
+      is_ocr: form.enabled && form.is_ocr,
       enabled: form.enabled,
       api_key: form.api_key || undefined,
     };
@@ -271,7 +276,13 @@ export default function ModelsPage({
         await api.post<ModelConfigRead>(`/api/enterprise/model-configs${verifyQuery}`, payload);
       }
       if (form.enabled) {
-        notify.success(form.is_default ? '测试通过，已启用并设为默认模型' : '测试通过，已启用');
+        notify.success(
+          form.is_ocr
+            ? '测试通过，已启用为扫描件 OCR 模型'
+            : form.is_default
+              ? '测试通过，已启用并设为默认模型'
+              : '测试通过，已启用',
+        );
       } else {
         notify.success('已保存');
       }
@@ -310,6 +321,16 @@ export default function ModelsPage({
       await load();
     } catch (error) {
       notify.error(modelActionError(error, '设为默认失败'));
+    }
+  }
+
+  async function setOcr(row: ModelConfigRead) {
+    try {
+      await api.post(`/api/enterprise/model-configs/${row.id}/set-ocr?tenant_id=${TENANT_ID}`);
+      notify.success('已设为扫描件 OCR 模型，默认对话模型保持不变');
+      await load();
+    } catch (error) {
+      notify.error(modelActionError(error, '设为扫描件 OCR 失败'));
     }
   }
 
@@ -366,11 +387,19 @@ export default function ModelsPage({
           </DropdownMenuItem>
           <DropdownMenuItem
             className={MENU_ITEM_CLASS}
-            disabled={isTesting || row.is_default}
+            disabled={isTesting || row.is_default || row.is_ocr}
             onSelect={() => void setDefault(row)}
           >
             <Check />
             {row.is_default ? '已默认' : '设为默认'}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className={MENU_ITEM_CLASS}
+            disabled={isTesting || row.is_ocr || row.is_default || !row.enabled}
+            onSelect={() => void setOcr(row)}
+          >
+            <Check />
+            {row.is_ocr ? '已是扫描件 OCR' : '设为扫描件 OCR'}
           </DropdownMenuItem>
           <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={isTesting} onSelect={() => void test(row)}>
             {isTesting ? <LoaderCircle className="animate-spin" /> : <FlaskConical />}
@@ -401,6 +430,7 @@ export default function ModelsPage({
           <span className="flex min-w-0 items-center gap-[6px]">
             <span className="truncate font-medium leading-[18px] text-[#18181a]">{row.name}</span>
             {row.is_default && <StatusBadge tone="green">默认</StatusBadge>}
+            {row.is_ocr && <StatusBadge tone="blue">扫描件 OCR</StatusBadge>}
           </span>
           <span className="truncate text-[#858b9c]">
             {row.enabled ? '已启用' : '已停用'} · {row.api_protocol}
@@ -440,6 +470,7 @@ export default function ModelsPage({
           <span className="flex min-w-0 items-center gap-[6px]">
             <strong className="truncate text-[14px] font-semibold text-[#18181a]">{row.name}</strong>
             {row.is_default && <StatusBadge tone="green">默认</StatusBadge>}
+            {row.is_ocr && <StatusBadge tone="blue">扫描件 OCR</StatusBadge>}
           </span>
           <span className="mt-[2px] block truncate text-[12px] text-[#858b9c]">
             {row.enabled ? '已启用' : '已停用'} · {row.api_protocol}
@@ -483,6 +514,7 @@ export default function ModelsPage({
           <StatCard label="模型" value={rows.length} />
           <StatCard label="已启用" value={enabledCount} tone="green" />
           <StatCard label="默认模型" value={defaultRow?.name || '-'} valueClassName="text-[18px] leading-[26px]" />
+          <StatCard label="扫描件 OCR" value={ocrRow?.name || '-'} valueClassName="text-[18px] leading-[26px]" />
           <StatCard label="API 协议" value={providerCount} />
         </div>
 
@@ -639,15 +671,46 @@ export default function ModelsPage({
                 </LabeledField>
               </div>}
             </div>
-            <div className="mt-[16px] flex flex-wrap items-center gap-[24px]">
-              <label className="flex cursor-pointer items-center gap-[8px]">
-                <Switch checked={form.is_default} onCheckedChange={(next) => updateForm('is_default', next)} />
-                <span className="text-[12px] font-medium text-[#464c5e]">设为默认</span>
-              </label>
-              <label className="flex cursor-pointer items-center gap-[8px]">
-                <Switch checked={form.enabled} onCheckedChange={(next) => updateForm('enabled', next)} />
-                <span className="text-[12px] font-medium text-[#464c5e]">启用</span>
-              </label>
+            <div className="mt-[16px] flex flex-col gap-[10px]">
+              <div className="flex flex-wrap items-center gap-[24px]">
+                <label className="flex cursor-pointer items-center gap-[8px]">
+                  <Switch
+                    checked={form.is_default}
+                    disabled={form.is_ocr}
+                    onCheckedChange={(next) => {
+                      updateForm('is_default', next);
+                      if (next) updateForm('is_ocr', false);
+                    }}
+                  />
+                  <span className="text-[12px] font-medium text-[#464c5e]">设为默认对话模型</span>
+                </label>
+                <label className="flex cursor-pointer items-center gap-[8px]">
+                  <Switch
+                    checked={form.is_ocr}
+                    disabled={!form.enabled || form.is_default || Boolean(selected?.is_default)}
+                    onCheckedChange={(next) => {
+                      updateForm('is_ocr', next);
+                      if (next) updateForm('is_default', false);
+                    }}
+                  />
+                  <span className="text-[12px] font-medium text-[#464c5e]">扫描件 OCR</span>
+                </label>
+                <label className="flex cursor-pointer items-center gap-[8px]">
+                  <Switch
+                    checked={form.enabled}
+                    onCheckedChange={(next) => {
+                      updateForm('enabled', next);
+                      if (!next) updateForm('is_ocr', false);
+                    }}
+                  />
+                  <span className="text-[12px] font-medium text-[#464c5e]">启用</span>
+                </label>
+              </div>
+              <p className="text-[12px] leading-[18px] text-[#858b9c]">
+                扫描件 OCR 只用于识别没有文本层的 PDF（聊天附件和知识库共用），不会替换默认对话模型。
+                智谱 GLM-4V 示例：协议 OpenAI Chat Completions，Base URL
+                {' '}https://open.bigmodel.cn/api/paas/v4/ ，Model 填 glm-4v-plus。
+              </p>
             </div>
           </div>
 

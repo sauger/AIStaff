@@ -51,6 +51,7 @@ def parse_chat_attachment(
     data: bytes,
     *,
     extract_text: bool = True,
+    tenant_id: str | None = None,
 ) -> ChatAttachmentRead:
     safe_name = _safe_filename(filename)
     detected_type = content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
@@ -61,7 +62,7 @@ def parse_chat_attachment(
     if lower_name.endswith(".pdf") or detected_type == "application/pdf":
         if not extract_text:
             return _path_only_attachment(safe_name, detected_type, data, kind="pdf")
-        return _pdf_attachment(safe_name, detected_type, data)
+        return _pdf_attachment(safe_name, detected_type, data, tenant_id=tenant_id)
     if _is_text_file(lower_name, detected_type):
         if not extract_text:
             return _path_only_attachment(safe_name, detected_type, data, kind="text")
@@ -310,19 +311,22 @@ def _path_only_attachment(
     )
 
 
-def _pdf_attachment(filename: str, content_type: str, data: bytes) -> ChatAttachmentRead:
+def _pdf_attachment(
+    filename: str,
+    content_type: str,
+    data: bytes,
+    *,
+    tenant_id: str | None = None,
+) -> ChatAttachmentRead:
     text = ""
     error: str | None = None
     try:
-        from pypdf import PdfReader
+        from app.knowledge.parser import KnowledgeParseError
+        from app.knowledge.parser import extract_text as extract_document_bytes
 
-        reader = PdfReader(io.BytesIO(data))
-        pages = []
-        for page in reader.pages[:30]:
-            pages.append(page.extract_text() or "")
-        text = "\n\n".join(page.strip() for page in pages if page.strip())
-        if len(reader.pages) > 30:
-            text += f"\n\n... PDF 共 {len(reader.pages)} 页，仅提取前 30 页。"
+        text, _file_type = extract_document_bytes(filename, data, tenant_id=tenant_id)
+    except KnowledgeParseError as exc:
+        error = str(exc)
     except Exception as exc:  # noqa: BLE001 - return readable parse error to caller.
         error = f"PDF 解析失败：{exc}"
     trimmed = _trim_text(text, MAX_EXTRACTED_TEXT_CHARS)

@@ -86,6 +86,7 @@ def model_config_read(row: ModelConfig) -> ModelConfigRead:
         config_revision=row.config_revision,
         security_revision=row.security_revision,
         is_default=row.is_default,
+        is_ocr=bool(row.is_ocr),
         enabled=row.enabled,
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
@@ -112,6 +113,8 @@ def create_model_config(
 ) -> ModelConfigRead:
     ensure_tenant_admin(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
+    if request.is_ocr and request.is_default:
+        raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
     protocol = resolve_api_protocol(request.api_protocol, request.provider)
     if not request.api_key:
         raise HTTPException(status_code=422, detail="MODEL_API_KEY_REQUIRED")
@@ -132,17 +135,22 @@ def create_model_config(
         extra_body_json=extra_body,
         protocol_options_json={protocol.value: options},
         is_default=False,
+        is_ocr=False,
         enabled=False,
         trust_status="unverified",
     )
     if verify_before_save and request.enabled:
         _verify_candidate_for_save(row)
         row.enabled = True
-        if request.is_default or not _has_available_model(db, request.tenant_id):
+        if request.is_ocr:
+            _clear_ocr(db, request.tenant_id)
+            row.is_ocr = True
+            row.is_default = False
+        elif request.is_default or not _has_available_chat_model(db, request.tenant_id):
             _clear_default(db, request.tenant_id)
             row.is_default = True
     db.add(row)
-    _commit_or_conflict(db)
+    _commit_or_conflict(db, detail=_role_conflict_detail(row))
     db.refresh(row)
     return model_config_read(row)
 
@@ -157,7 +165,10 @@ def update_model_config(
 ) -> ModelConfigRead:
     ensure_tenant_admin(request.tenant_id, current_user)
     row = _get_model_config(db, request.tenant_id, config_id)
-    has_other_available_model = _has_available_model(
+    was_default = row.is_default
+    if request.is_ocr is True and request.is_default is True:
+        raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
+    has_other_chat_model = _has_available_chat_model(
         db, request.tenant_id, exclude_config_id=config_id
     )
     protocol = (
@@ -216,6 +227,7 @@ def update_model_config(
         row.verified_fingerprint = None
         row.enabled = False
         row.is_default = False
+        row.is_ocr = False
     if verify_before_save and request.enabled is True:
         try:
             _verify_candidate_for_save(row)
@@ -223,12 +235,35 @@ def update_model_config(
             db.rollback()
             raise
         row.enabled = True
-        if request.is_default is True or not has_other_available_model:
+        wants_ocr = request.is_ocr if request.is_ocr is not None else bool(row.is_ocr)
+        if wants_ocr:
+            if request.is_default is True or was_default:
+                raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
+            _clear_ocr(db, request.tenant_id, keep_id=row.id)
+            row.is_ocr = True
+            row.is_default = False
+        elif request.is_default is True or not has_other_chat_model:
+            if request.is_ocr is False:
+                row.is_ocr = False
+            if row.is_ocr:
+                raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
             _clear_default(db, request.tenant_id)
             row.is_default = True
         elif request.is_default is False:
             row.is_default = False
+            if request.is_ocr is False:
+                row.is_ocr = False
     elif not security_changed:
+        if request.is_ocr is True:
+            if was_default or request.is_default is True:
+                raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
+            _require_trusted(row)
+            if request.enabled is False or (request.enabled is None and not row.enabled):
+                raise HTTPException(status_code=409, detail="MODEL_CONFIG_DISABLED")
+            _clear_ocr(db, request.tenant_id, keep_id=row.id)
+            row.is_ocr = True
+        elif request.is_ocr is False:
+            row.is_ocr = False
         if request.enabled is False:
             row.enabled = False
             row.is_default = False
@@ -237,6 +272,8 @@ def update_model_config(
             row.enabled = True
         if request.is_default is True:
             _require_trusted(row)
+            if row.is_ocr:
+                raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
             if not row.enabled:
                 raise HTTPException(status_code=409, detail="MODEL_CONFIG_DISABLED")
             _clear_default(db, request.tenant_id)
@@ -245,7 +282,7 @@ def update_model_config(
             row.is_default = False
     row.updated_at = utc_now()
     db.add(row)
-    _commit_or_conflict(db)
+    _commit_or_conflict(db, detail=_role_conflict_detail(row))
     db.refresh(row)
     return model_config_read(row)
 
@@ -284,11 +321,13 @@ def set_default_model_config(
     _require_trusted(row)
     if not row.enabled:
         raise HTTPException(status_code=409, detail="MODEL_CONFIG_DISABLED")
+    if row.is_ocr:
+        raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
     _clear_default(db, tenant_id)
     row.is_default = True
     row.updated_at = utc_now()
     db.add(row)
-    _commit_or_conflict(db)
+    _commit_or_conflict(db, detail="MODEL_DEFAULT_CONFLICT")
     db.refresh(row)
     return model_config_read(row)
 
@@ -308,7 +347,7 @@ def test_model_config(
     initial_activation_candidate = (
         activate_if_initial
         and row.trust_status == "unverified"
-        and not _has_available_model(db, tenant_id)
+        and not _has_available_chat_model(db, tenant_id)
     )
     attempt_id = uuid4().hex
     started_security_revision = row.security_revision
@@ -343,9 +382,10 @@ def test_model_config(
         row.verified_at = utc_now()
         row.verified_fingerprint = _fingerprint(row)
         row.verification_attempt_status = "succeeded"
-        if initial_activation_candidate and not _has_available_model(db, tenant_id):
+        if initial_activation_candidate and not _has_available_chat_model(db, tenant_id):
             row.enabled = True
-            row.is_default = True
+            if not row.is_ocr:
+                row.is_default = True
             activated = True
         db.add(row)
         try:
@@ -516,11 +556,52 @@ def _get_model_config(db: Session, tenant_id: str, config_id: str) -> ModelConfi
     return row
 
 
+@router.post(
+    "/{config_id}/set-ocr",
+    response_model=ModelConfigRead,
+    dependencies=[Depends(require_tenant_admin)],
+)
+def set_ocr_model_config(
+    config_id: str, tenant_id: str = Query(...), db: Session = Depends(get_session)
+) -> ModelConfigRead:
+    """Select the scanned-PDF OCR model without changing the chat default."""
+
+    row = _get_model_config(db, tenant_id, config_id)
+    _require_trusted(row)
+    if not row.enabled:
+        raise HTTPException(status_code=409, detail="MODEL_CONFIG_DISABLED")
+    if row.is_default:
+        raise HTTPException(status_code=409, detail="MODEL_OCR_CANNOT_BE_DEFAULT")
+    _clear_ocr(db, tenant_id, keep_id=row.id)
+    row.is_ocr = True
+    row.is_default = False
+    row.updated_at = utc_now()
+    db.add(row)
+    _commit_or_conflict(db, detail="MODEL_OCR_CONFLICT")
+    db.refresh(row)
+    return model_config_read(row)
+
+
 def _has_available_model(
     db: Session, tenant_id: str, *, exclude_config_id: str | None = None
 ) -> bool:
     statement = select(ModelConfig).where(
         ModelConfig.tenant_id == tenant_id,
+        (ModelConfig.enabled == True) | (ModelConfig.is_default == True),  # noqa: E712
+    )
+    if exclude_config_id:
+        statement = statement.where(ModelConfig.id != exclude_config_id)
+    return db.exec(statement).first() is not None
+
+
+def _has_available_chat_model(
+    db: Session, tenant_id: str, *, exclude_config_id: str | None = None
+) -> bool:
+    """Chat/analysis models exclude the dedicated OCR config."""
+
+    statement = select(ModelConfig).where(
+        ModelConfig.tenant_id == tenant_id,
+        ModelConfig.is_ocr == False,  # noqa: E712
         (ModelConfig.enabled == True) | (ModelConfig.is_default == True),  # noqa: E712
     )
     if exclude_config_id:
@@ -537,6 +618,16 @@ def _clear_default(db: Session, tenant_id: str) -> None:
         )
         .values(is_default=False, updated_at=utc_now())
     )
+
+
+def _clear_ocr(db: Session, tenant_id: str, *, keep_id: str | None = None) -> None:
+    statement = update(ModelConfig).where(
+        ModelConfig.tenant_id == tenant_id,
+        ModelConfig.is_ocr == True,  # noqa: E712 - SQLModel expression.
+    )
+    if keep_id:
+        statement = statement.where(ModelConfig.id != keep_id)
+    db.exec(statement.values(is_ocr=False, updated_at=utc_now()))
 
 
 def _request_protocol_options(
@@ -590,9 +681,17 @@ def _fingerprint(row: ModelConfig) -> str:
     )
 
 
-def _commit_or_conflict(db: Session) -> None:
+def _role_conflict_detail(row: ModelConfig) -> str:
+    if row.is_ocr and not row.is_default:
+        return "MODEL_OCR_CONFLICT"
+    return "MODEL_DEFAULT_CONFLICT"
+
+
+def _commit_or_conflict(
+    db: Session, *, detail: str = "MODEL_DEFAULT_CONFLICT"
+) -> None:
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="MODEL_DEFAULT_CONFLICT") from exc
+        raise HTTPException(status_code=409, detail=detail) from exc
