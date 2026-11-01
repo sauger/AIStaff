@@ -130,19 +130,40 @@ def unified_system_prompt() -> str:
 
 
 def speaker_prompt_text(speaker: object) -> str | None:
-    """Model-visible identity. Names and departments stay out of this layer."""
+    """模型可见的当前说话人。姓名只来自已挂上的花名册字段，这里不查库。"""
 
     if not isinstance(speaker, dict) or "status" not in speaker:
         return None
-    if speaker.get("status") == "resolved":
-        user_id = str(speaker.get("user_id") or "").strip()
-        if user_id:
-            channel = str(speaker.get("channel") or "").strip()
-            lines = [f"user_id={user_id}"]
-            if channel:
-                lines.append(f"channel={channel}")
-            return "\n".join(lines)
-    return "未确定"
+    if speaker.get("status") != "resolved":
+        return "未确定"
+    user_id = str(speaker.get("user_id") or "").strip()
+    if not user_id:
+        return "未确定"
+    channel = str(speaker.get("channel") or "").strip()
+    lines = [f"user_id={user_id}"]
+    if channel:
+        lines.append(f"channel={channel}")
+    roster_status = str(speaker.get("roster_status") or "").strip()
+    name = _single_line(speaker.get("name"))
+    department = _single_line(speaker.get("department"))
+    if roster_status == "matched" and name:
+        lines.append("roster_status=matched")
+        lines.append(f"name={name}")
+        if department:
+            lines.append(f"department={department}")
+        lines.append(
+            "name 是企业花名册上的姓名。用户询问自己是谁时直接用 name 回答，"
+            "不要说没有身份信息，也不要念出 user_id。"
+            "没有 department 时不要编造部门。"
+        )
+    elif roster_status in {"matched", "unmatched"}:
+        lines.append("roster_status=unmatched")
+        lines.append("企业花名册没有这条账号的记录。不要编造姓名或部门。")
+    return "\n".join(lines)
+
+
+def _single_line(value: object, limit: int = 80) -> str:
+    return " ".join(str(value or "").split())[:limit]
 
 
 def stage_payload(

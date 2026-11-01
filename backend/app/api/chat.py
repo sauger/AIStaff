@@ -1123,7 +1123,10 @@ async def upload_chat_attachments(
 
 @router.post("/turn", response_model=ChatTurnResponse)
 def _bind_web_dialog_speaker(request: ChatTurnRequest, current_user: User) -> ChatTurnRequest:
-    """网页对话框只认登录用户。客户端传来的 user_id / speaker 一律覆盖。"""
+    """网页对话框只认登录用户。客户端传来的 user_id / speaker 一律覆盖。
+
+    花名册姓名不在这里查。Harness 回合开始时按 speaker.user_id 注入。
+    """
 
     speaker = resolve_web_speaker(current_user, channel=request.channel or "web")
     if speaker.status != "resolved" or not speaker.user_id:

@@ -4,13 +4,30 @@ Web dialogs use the logged-in user. WeCom bot private chats use the
 ChannelIdentity mapping (``resolve_or_provision_user``). Group chats stay
 unresolved: the session may still belong to a group bucket, but that bucket
 is not a person and must not become a Honcho peer.
+
+Enterprise roster names are not part of identity resolution.
+``attach_speaker_roster`` reads EnterprisePerson by this User.id at the
+start of the turn and copies the display name into the model context.
 """
 
 from __future__ import annotations
 
+from sqlmodel import Session
+
+from app.org.speaker_roster import lookup_speaker_roster
 from app.session.session_schema import ChatTurnRequest, TurnSpeaker
 
-_SPEAKER_KEYS = ("status", "user_id", "channel", "source", "reason")
+_SPEAKER_KEYS = (
+    "status",
+    "user_id",
+    "channel",
+    "source",
+    "reason",
+    "roster_status",
+    "name",
+    "department",
+)
+_ROSTER_KEYS = ("user_id", "roster_status", "name", "department")
 
 
 def stable_portrait_user_id(user_id: str | None, external_user_id: str | None = None) -> str:
@@ -128,13 +145,54 @@ def speaker_context_payload(speaker: TurnSpeaker | None) -> dict[str, str]:
         "channel": speaker.channel,
         "source": speaker.source,
     }
-    if speaker.status == "resolved":
-        user_id = str(speaker.user_id or "").strip()
-        if user_id:
-            payload["user_id"] = user_id
     if speaker.reason:
         payload["reason"] = speaker.reason
+    # 群聊和其他未解析说话人不能带花名册，即使调用方误填了姓名。
+    if speaker.status != "resolved":
+        return payload
+    user_id = str(speaker.user_id or "").strip()
+    if user_id:
+        payload["user_id"] = user_id
+    name = _single_line(speaker.roster_name)
+    department = _single_line(speaker.roster_department)
+    if speaker.roster_status == "matched" and name:
+        payload["roster_status"] = "matched"
+        payload["name"] = name
+        if department:
+            payload["department"] = department
+    elif speaker.roster_status in {"matched", "unmatched"}:
+        payload["roster_status"] = "unmatched"
     return payload
+
+
+def attach_speaker_roster(db: Session, request: ChatTurnRequest) -> ChatTurnRequest:
+    """已解析说话人时，把花名册姓名挂到本轮 speaker。
+
+    只查 speaker.user_id。群聊的 request.user_id 可能是群桶账号，不能拿来查。
+    """
+
+    speaker = request.speaker
+    if speaker is None or speaker.status != "resolved":
+        return request
+    user_id = str(speaker.user_id or "").strip()
+    if not user_id:
+        return request
+    roster = lookup_speaker_roster(
+        db,
+        tenant_id=request.tenant_id,
+        user_id=user_id,
+    )
+    return request.model_copy(
+        update={
+            "speaker": speaker.model_copy(
+                update={
+                    "roster_status": roster.status,
+                    "roster_name": roster.name or None,
+                    "roster_department": roster.department or None,
+                }
+            )
+        }
+    )
 
 
 def speaker_message_metadata(speaker: TurnSpeaker | None) -> dict[str, str]:
@@ -177,5 +235,10 @@ def current_speaker_for_requirement(speaker: TurnSpeaker | None) -> dict[str, st
         if payload.get(key)
     }
     if cleaned.get("status") != "resolved":
-        cleaned.pop("user_id", None)
+        for key in _ROSTER_KEYS:
+            cleaned.pop(key, None)
     return cleaned or None
+
+
+def _single_line(value: object, limit: int = 80) -> str:
+    return " ".join(str(value or "").split())[:limit]
