@@ -204,7 +204,7 @@ def test_multiple_current_departments_omit_department() -> None:
 def test_ended_affiliation_does_not_keep_a_department() -> None:
     db = _db()
     user = _user(db)
-    person = _person(db, user.id, name="张三", status="left")
+    person = _person(db, user.id, name="张三")
     _department(db, person.id, "产品部", valid_to=date(2000, 1, 1))
     db.commit()
     speaker = _attach(db, resolve_web_speaker(user), user_id=user.id)
@@ -214,6 +214,49 @@ def test_ended_affiliation_does_not_keep_a_department() -> None:
     assert "name=张三" in rendered
     assert "department=" not in rendered
     assert "产品部" not in rendered
+
+
+def test_left_person_with_open_affiliation_is_unmatched() -> None:
+    db = _db()
+    user = _user(db)
+    person = _person(db, user.id, name="张三", status="left")
+    _department(db, person.id, "产品部")
+    db.commit()
+    speaker = _attach(db, resolve_web_speaker(user), user_id=user.id)
+    db.close()
+
+    assert speaker.roster_status == "unmatched"
+    assert speaker.roster_name is None
+    rendered = _render(speaker)
+    assert "roster_status=unmatched" in rendered
+    assert "不要编造姓名或部门" in rendered
+    assert "name=" not in rendered
+    assert "张三" not in rendered
+    assert "产品部" not in rendered
+    requirement = _requirement(speaker)
+    assert requirement["roster_status"] == "unmatched"
+    assert "name" not in requirement
+    assert "department" not in requirement
+
+
+def test_resolved_speaker_without_roster_lookup_does_not_invent_name() -> None:
+    text = speaker_prompt_text(
+        {
+            "status": "resolved",
+            "user_id": "user_web",
+            "channel": "web",
+            "name": "张三",
+            "department": "产品部",
+        }
+    )
+    assert text is not None
+    assert "user_id=user_web" in text
+    assert "channel=web" in text
+    assert "不要编造姓名或部门" in text
+    assert "name=" not in text
+    assert "张三" not in text
+    assert "产品部" not in text
+    assert "roster_status=" not in text
 
 
 def test_other_tenant_roster_does_not_match() -> None:

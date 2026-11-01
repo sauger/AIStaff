@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.db.models import ChatSession, Skill
 from app.session.session_schema import PlannedTaskFrame
+from app.text import single_line
 
 CapabilityKind = Literal[
     "general_skill",
@@ -238,7 +239,7 @@ def _sanitize_current_speaker(value: dict[str, str] | None) -> dict[str, str] | 
     cleaned: dict[str, str] = {}
     for key in _CURRENT_SPEAKER_KEYS:
         text = (
-            _single_line(value.get(key))
+            single_line(value.get(key))
             if key in {"name", "department"}
             else str(value.get(key) or "").strip()
         )
@@ -257,10 +258,6 @@ def _sanitize_current_speaker(value: dict[str, str] | None) -> dict[str, str] | 
     elif cleaned.get("roster_status") != "unmatched":
         cleaned.pop("roster_status", None)
     return cleaned or None
-
-
-def _single_line(value: object, limit: int = 80) -> str:
-    return " ".join(str(value or "").split())[:limit]
 
 
 def _current_time_text(client_timezone: str | None = None) -> str:

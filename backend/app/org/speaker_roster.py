@@ -5,8 +5,8 @@
 这里不再用企微 userid、ChannelIdentity.display_name 或员工通讯录 Contact
 去猜名字。Contact 挂在数字员工下，不参与企业组织。
 
-查不到、姓名为空、或说话人未解析时，调用方不得编造姓名。
-部门只在「今天恰好一个在职部门」时返回；多部门或已结束的任职不猜主部门。
+查不到、姓名为空、人员已离职，或说话人未解析时，调用方不得编造姓名。
+部门只在在职人员「今天恰好一个在职部门」时返回；多部门或已结束的任职不猜主部门。
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ from zoneinfo import ZoneInfo
 from sqlmodel import Session, select
 
 from app.db.models import EnterprisePerson, OrgAffiliation, OrgDepartment
+from app.text import single_line
 
 # 与组织任职同一日历。valid_from / valid_to 按上海日期闭区间判断。
 _ORG_CALENDAR = ZoneInfo("Asia/Shanghai")
-_LABEL_LIMIT = 80
 
 
 @dataclass(frozen=True)
@@ -43,11 +43,12 @@ def lookup_speaker_roster(db: Session, *, tenant_id: str, user_id: str) -> Speak
         select(EnterprisePerson).where(
             EnterprisePerson.tenant_id == tenant,
             EnterprisePerson.primary_user_id == user,
+            EnterprisePerson.status == "active",
         )
     ).first()
     if person is None:
         return SpeakerRoster(status="unmatched")
-    name = _label(person.name)
+    name = single_line(person.name)
     if not name:
         return SpeakerRoster(status="unmatched")
     return SpeakerRoster(
@@ -77,7 +78,7 @@ def _current_department_name(db: Session, tenant_id: str, person_id: str) -> str
     department = db.get(OrgDepartment, department_ids[0])
     if department is None or department.tenant_id != tenant_id:
         return ""
-    return _label(department.name)
+    return single_line(department.name)
 
 
 def _covers(
@@ -106,7 +107,3 @@ def _as_date(value: date | datetime | str | None) -> date | None:
         return date.fromisoformat(text[:10])
     except ValueError:
         return None
-
-
-def _label(value: object, limit: int = _LABEL_LIMIT) -> str:
-    return " ".join(str(value or "").split())[:limit]

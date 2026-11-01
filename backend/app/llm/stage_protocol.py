@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from app import paths
+from app.text import single_line
 
 UNIFIED_PROMPT_PATH = (
     paths.resource_dir() / "app" / "llm" / "prompts" / "unified_agent_prompt.md"
@@ -144,8 +145,8 @@ def speaker_prompt_text(speaker: object) -> str | None:
     if channel:
         lines.append(f"channel={channel}")
     roster_status = str(speaker.get("roster_status") or "").strip()
-    name = _single_line(speaker.get("name"))
-    department = _single_line(speaker.get("department"))
+    name = single_line(speaker.get("name"))
+    department = single_line(speaker.get("department"))
     if roster_status == "matched" and name:
         lines.append("roster_status=matched")
         lines.append(f"name={name}")
@@ -159,11 +160,10 @@ def speaker_prompt_text(speaker: object) -> str | None:
     elif roster_status in {"matched", "unmatched"}:
         lines.append("roster_status=unmatched")
         lines.append("企业花名册没有这条账号的记录。不要编造姓名或部门。")
+    else:
+        # 已解析但本轮没查花名册。只有 user_id，不能让模型把别的字段当成姓名。
+        lines.append("不要编造姓名或部门。")
     return "\n".join(lines)
-
-
-def _single_line(value: object, limit: int = 80) -> str:
-    return " ".join(str(value or "").split())[:limit]
 
 
 def stage_payload(

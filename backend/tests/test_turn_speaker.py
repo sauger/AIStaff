@@ -182,6 +182,7 @@ def test_speaker_is_stamped_into_model_context_without_external_id() -> None:
     )
     rendered = render_stage_user_message(payload)
     assert "当前对话用户：\nuser_id=user_abc\nchannel=wecom" in rendered
+    assert "不要编造姓名或部门" in rendered
     assert "zhangsan" not in rendered
     assert speaker_prompt_text({"status": "unresolved", "reason": "group_chat"}) == "未确定"
 

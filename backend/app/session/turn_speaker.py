@@ -16,6 +16,7 @@ from sqlmodel import Session
 
 from app.org.speaker_roster import lookup_speaker_roster
 from app.session.session_schema import ChatTurnRequest, TurnSpeaker
+from app.text import single_line
 
 _SPEAKER_KEYS = (
     "status",
@@ -153,8 +154,8 @@ def speaker_context_payload(speaker: TurnSpeaker | None) -> dict[str, str]:
     user_id = str(speaker.user_id or "").strip()
     if user_id:
         payload["user_id"] = user_id
-    name = _single_line(speaker.roster_name)
-    department = _single_line(speaker.roster_department)
+    name = single_line(speaker.roster_name)
+    department = single_line(speaker.roster_department)
     if speaker.roster_status == "matched" and name:
         payload["roster_status"] = "matched"
         payload["name"] = name
@@ -238,7 +239,3 @@ def current_speaker_for_requirement(speaker: TurnSpeaker | None) -> dict[str, st
         for key in _ROSTER_KEYS:
             cleaned.pop(key, None)
     return cleaned or None
-
-
-def _single_line(value: object, limit: int = 80) -> str:
-    return " ".join(str(value or "").split())[:limit]
