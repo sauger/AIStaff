@@ -269,11 +269,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
           payload,
         )
         : await api.post<EnterprisePersonRead>('/api/enterprise/org/people', payload);
-      if (saved.wecom_link_notice) {
-        notify.warning(saved.wecom_link_notice);
-      } else {
-        notify.success(personDraft.id ? '企业人员已更新' : '企业人员已创建');
-      }
+      notify.success(saved.wecom_link_notice || (personDraft.id ? '企业人员已更新' : '企业人员已创建'));
       setPersonDraft(null);
       await load();
     } catch (error) {
@@ -398,7 +394,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <div>
               <h3 className="m-0 text-[13px] font-semibold text-[#18181a]">{`已从企微选择 ${wecomSelection.length} 人`}</h3>
               <p className="m-0 mt-1 text-[12px] leading-[1.6] text-[#858b9c]">
-                保存人员时会写入企微 userid。尚未关联登录账号时，已有的企业微信会话账号会挂到花名册，私聊即可显示姓名。一次只能填入一位成员。
+                保存人员时会写入企微 userid。若已有唯一的企业微信会话账号，花名册主账号会改挂到该账号，私聊即可显示姓名。一次只能填入一位成员。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -640,13 +636,8 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             />
           </label>
           <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
-            尚未关联登录账号时，保存会把已有的企业微信会话账号挂到花名册。已有网页账号时不会改挂，也不会把渠道身份改绑到该网页账号。
+            若本租户已有该 userid 的唯一企业微信会话账号，保存会把花名册主账号改挂到该账号，包括已经关联的网页账号。不会改绑渠道身份。
           </p>
-          {personDraft?.wecomUserid.trim() ? (
-            <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
-              已关联网页账号时，保存企微 userid 不会改挂花名册主账号。若要让企微私聊显示此姓名，请先把关联登录账号改成「不关联」后再保存。
-            </p>
-          ) : null}
           {personDraft?.linkedAccountLabel ? (
             <p className="m-0 text-[11px] text-[#858b9c]">
               当前关联账号
