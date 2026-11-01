@@ -218,7 +218,7 @@ class TurnSpeaker(BaseModel):
     status: Literal["resolved", "unresolved"]
     user_id: Optional[str] = None
     channel: str = "web"
-    source: Literal["web_login", "channel_identity", "unresolved"] = "unresolved"
+    source: Literal["web_login", "channel_identity", "session_user", "unresolved"] = "unresolved"
     reason: Optional[str] = None
 
 
@@ -230,11 +230,15 @@ class ChatTurnRequest(BaseModel):
     client_turn_id: Optional[str] = None
     user_id: Optional[str] = None
     # 入口解析结果。客户端可以带上，但网页与企微 bot 会在服务端覆盖。
+    # speaker 与下面的 channel_* 都是 exclude=True：model_dump() 不会带上它们。
+    # 复制或重建必须用 model_copy，不要 ChatTurnRequest(**request.model_dump())，
+    # 否则说话人会丢。企微在 speaker 缺失时 Honcho 直接 fail closed。
     speaker: Optional[TurnSpeaker] = Field(default=None, exclude=True)
     message: str
     attachments: list["ChatAttachmentRead"] = Field(default_factory=list)
     channel: str = "web"
     # Server-only channel context for conversational knowledge proposals.
+    # 同样 exclude=True，见 speaker 上方的 model_copy 说明。
     channel_external_user_id: Optional[str] = Field(default=None, exclude=True)
     channel_external_account_scope: Optional[str] = Field(default=None, exclude=True)
     channel_target_json: Optional[dict[str, Any]] = Field(default=None, exclude=True)

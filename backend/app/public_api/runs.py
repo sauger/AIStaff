@@ -40,6 +40,7 @@ from app.public_api.jobs import stream_job_events
 from app.public_api.schemas import AgentRunCreate, PublicSessionCreate
 from app.public_api.sessions import create_public_session_row, ensure_public_agent, owned_public_session
 from app.session.session_schema import ChatAttachmentRead, ChatTurnRequest, ChatTurnResponse
+from app.session.turn_speaker import resolve_known_user_speaker
 
 
 router = APIRouter(tags=["runs"])
@@ -194,6 +195,7 @@ def execute_run(db: Session, job: APIJob) -> dict[str, Any]:
         agent_id=job.agent_id,
         client_turn_id=job.id,
         user_id=actor.id,
+        speaker=resolve_known_user_speaker(actor.id, channel="public_api"),
         message=str(payload.get("input") or ""),
         attachments=attachments,
         channel="public_api",

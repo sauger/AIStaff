@@ -774,6 +774,10 @@ def test_handoff_resume_worker_continues_original_session_once(monkeypatch):
     assert request.user_id == "user_demo"
     assert request.message == "人工答复：继续执行后续流程"
     assert request.channel == "human_handoff_resume"
+    assert request.speaker is not None
+    assert request.speaker.status == "resolved"
+    assert request.speaker.user_id == "user_demo"
+    assert request.speaker.source == "session_user"
 
     with Session(engine) as db:
         handoff = db.get(HumanHandoffRequest, "handoff_worker")

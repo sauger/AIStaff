@@ -76,6 +76,7 @@ from app.security.permissions import (
 )
 from app.security.tenant import ensure_tenant
 from app.session.session_schema import ChatTurnRequest, ChatTurnResponse
+from app.session.turn_speaker import resolve_known_user_speaker
 
 router = APIRouter(
     prefix="/api/enterprise/general-skills",
@@ -826,6 +827,10 @@ def run_general_skill_stream(
         model_config_id=request.model_config_id,
         client_turn_id=client_turn_id,
         user_id=current_user.id,
+        speaker=resolve_known_user_speaker(
+            current_user.id,
+            channel=GENERAL_SKILL_DEBUG_CHANNEL,
+        ),
         message=f"/skill {skill.slug} {request.query.strip()}",
         channel=GENERAL_SKILL_DEBUG_CHANNEL,
         message_visibility="internal",

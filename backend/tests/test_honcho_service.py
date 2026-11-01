@@ -13,7 +13,7 @@ from app.honcho.service import (
     inject_honcho_representation,
     schedule_honcho_message,
 )
-from app.session.session_schema import ChatTurnRequest
+from app.session.session_schema import ChatTurnRequest, TurnSpeaker
 
 
 class FakeHoncho:
@@ -101,7 +101,21 @@ def _request(**overrides) -> ChatTurnRequest:
         "channel_external_account_scope": "corp_a",
     }
     payload.update(overrides)
-    return ChatTurnRequest(**payload)
+    request = ChatTurnRequest(**payload)
+    if "speaker" not in overrides:
+        user_id = str(request.user_id or "").strip()
+        request = request.model_copy(
+            update={
+                "speaker": TurnSpeaker(
+                    status="resolved" if user_id else "unresolved",
+                    user_id=user_id or None,
+                    channel=request.channel,
+                    source="channel_identity" if request.channel == "wecom" else "session_user",
+                    reason=None if user_id else "missing_session_user",
+                )
+            }
+        )
+    return request
 
 
 def _settings(**overrides) -> Settings:

@@ -78,11 +78,41 @@ def resolve_wecom_bot_speaker(
     )
 
 
+def resolve_known_user_speaker(user_id: str | None, *, channel: str) -> TurnSpeaker:
+    """Stamp a User.id the server already chose. Not a channel external id."""
+
+    dialog_channel = str(channel or "").strip() or "internal"
+    resolved = str(user_id or "").strip()
+    if not resolved:
+        return TurnSpeaker(
+            status="unresolved",
+            channel=dialog_channel,
+            source="unresolved",
+            reason="missing_session_user",
+        )
+    return TurnSpeaker(
+        status="resolved",
+        user_id=resolved,
+        channel=dialog_channel,
+        source="session_user",
+    )
+
+
 def portrait_user_id(request: ChatTurnRequest) -> str:
-    """Honcho peer user. A present speaker wins; an external id never does."""
+    """Honcho peer user. A present speaker wins; an external id never does.
+
+    WeCom without ``speaker`` fails closed. ``speaker`` is exclude=True, so
+    ``ChatTurnRequest(**request.model_dump())`` drops it and must not fall
+    back to a raw or group-bucket id.
+
+    TODO: 飞书/钉钉入站还没有 stamp speaker，缺省时仍只靠 user_id 与 external
+    id 不相等。那两个入口不在这一层，不要把相等检查当成它们的身份层。
+    """
 
     external = request.channel_external_user_id
     speaker = request.speaker
+    if request.channel == "wecom" and speaker is None:
+        return ""
     if speaker is not None:
         if speaker.status != "resolved":
             return ""

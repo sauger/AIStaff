@@ -89,7 +89,7 @@ from app.session.session_schema import (
     MessageFeedbackRequest,
     MessageRead,
 )
-from app.session.turn_speaker import resolve_web_speaker
+from app.session.turn_speaker import resolve_known_user_speaker, resolve_web_speaker
 from app.skills.nesting import discoverable_sops
 from app.teams.service import get_team_leader
 from app.teams.wakeup import build_tl_chat_context, process_tl_reply
@@ -577,11 +577,16 @@ def _resume_human_handoff_worker(handoff_id: str) -> None:
             # 会话属主是恢复请求的权威 user:渠道身份重绑(懒建账号→web 账号)会迁移
             # session.user_id,而 handoff.requester_user_id 是创建时的快照,可能已过期;
             # 优先旧快照会触发 harness 的 session-user 围栏校验失败。
+            resume_user_id = chat_session.user_id or handoff.requester_user_id or None
             request = ChatTurnRequest(
                 tenant_id=handoff.tenant_id,
                 session_id=handoff.session_id,
                 agent_id=handoff.agent_id or chat_session.agent_id,
-                user_id=chat_session.user_id or handoff.requester_user_id or None,
+                user_id=resume_user_id,
+                speaker=resolve_known_user_speaker(
+                    resume_user_id,
+                    channel="human_handoff_resume",
+                ),
                 message=handoff.human_reply,
                 channel="human_handoff_resume",
                 debug=False,
@@ -1127,6 +1132,12 @@ def _bind_web_dialog_speaker(request: ChatTurnRequest, current_user: User) -> Ch
         update={
             "user_id": speaker.user_id,
             "speaker": speaker,
+            # 网页请求不能携带渠道身份。外部 id 若等于登录 User.id，
+            # stable_portrait_user_id 会把它当成渠道主键并让 Honcho 静默跳过。
+            "channel_external_user_id": None,
+            "channel_external_account_scope": None,
+            "channel_target_json": None,
+            "channel_is_group": False,
             "context_injection": None,
             "message_visibility": "visible",
             "inbound_mail_auto_complete": False,

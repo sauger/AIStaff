@@ -25,6 +25,8 @@ from app.channels.service_durable_inbox import StageDisposition, StageResult
 from app.channels.service_identity import channel_username
 from app.channels.service_intake import process_inbound
 from app.channels.service_wecom_inbox import stage_wecom_inbound
+from app.honcho.service import schedule_honcho_message
+from app.session.turn_speaker import portrait_user_id
 from app.db.models import (
     AgentProfile,
     ChannelBinding,
@@ -35,6 +37,7 @@ from app.db.models import (
     User,
     utc_now,
 )
+from tests.test_honcho_service import _settings
 
 
 def _test_engine():
@@ -1299,6 +1302,18 @@ def test_wecom_group_inbound_uses_sender_name_prefix() -> None:
         assert group_user.username == channel_username(
             "tenant_demo", "wecom", "group:wr_group1", "aib_bot1"
         )
+        assert portrait_user_id(request) == ""
+        queued: list[dict] = []
+        schedule_honcho_message(
+            db,
+            request,
+            chat_session,
+            role="user",
+            content=request.message,
+            settings=_settings(),
+            enqueue=queued.append,
+        )
+        assert queued == []
 
 
 def test_wecom_p2p_reuses_bound_staffdeck_user() -> None:
