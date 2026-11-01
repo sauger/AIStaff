@@ -65,6 +65,26 @@ class EnterprisePersonListResponse(BaseModel):
     people: list[EnterprisePersonRead] = Field(default_factory=list)
 
 
+class EnterprisePersonDirectoryRead(BaseModel):
+    """在职花名册。不含登录账号关联。"""
+
+    id: str
+    tenant_id: str
+    name: str
+    employee_no: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    status: str
+    source: str = "manual"
+    external_id: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class EnterprisePersonDirectoryListResponse(BaseModel):
+    people: list[EnterprisePersonDirectoryRead] = Field(default_factory=list)
+
+
 class AffiliationWriteRequest(BaseModel):
     tenant_id: str
     department_id: str
@@ -141,6 +161,28 @@ class DepartmentPeopleResponse(BaseModel):
     as_of: str
     people: list[OrgPersonRead] = Field(default_factory=list)
     affiliations: list[OrgPersonRead] = Field(default_factory=list)
+    heads: list[OrgHeadRead] = Field(default_factory=list)
+    current_head: OrgHeadRead | None = None
+    agents: list[OrgAgentMemberRead] = Field(default_factory=list)
+
+
+class OrgPersonDirectoryRead(BaseModel):
+    affiliation_id: str
+    person_id: str
+    person_name: str
+    department_id: str
+    position_title: str | None = None
+    valid_from: str
+    valid_to: str | None = None
+
+
+class DepartmentPeopleDirectoryResponse(BaseModel):
+    """成员可见的部门人员：当前在职任职，不含数字员工、负责人与历史履历。"""
+
+    department_id: str
+    as_of: str
+    people: list[OrgPersonDirectoryRead] = Field(default_factory=list)
+    affiliations: list[OrgPersonDirectoryRead] = Field(default_factory=list)
     heads: list[OrgHeadRead] = Field(default_factory=list)
     current_head: OrgHeadRead | None = None
     agents: list[OrgAgentMemberRead] = Field(default_factory=list)

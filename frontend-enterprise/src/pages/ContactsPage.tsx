@@ -125,6 +125,38 @@ function payloadFromDraft(draft: ContactDraft) {
   };
 }
 
+function withoutAccountLink(person: EnterprisePersonRead): EnterprisePersonRead {
+  return {
+    id: person.id,
+    tenant_id: person.tenant_id,
+    name: person.name,
+    employee_no: person.employee_no,
+    phone: person.phone,
+    email: person.email,
+    status: person.status,
+    source: person.source,
+    external_id: person.external_id,
+    created_at: person.created_at,
+    updated_at: person.updated_at,
+  };
+}
+
+function visibleRoster(people: EnterprisePersonListResponse | null | undefined): EnterprisePersonRead[] {
+  if (!people || !Array.isArray(people.people)) return [];
+  return people.people
+    .filter((person) => person.status !== 'left')
+    .map(withoutAccountLink);
+}
+
+function visibleTreePeople(
+  rows: OrgTreePersonRead[] | null | undefined,
+  roster: EnterprisePersonRead[],
+): OrgTreePersonRead[] {
+  if (!Array.isArray(rows)) return [];
+  const visibleIds = new Set(roster.map((person) => person.id));
+  return rows.filter((row) => visibleIds.has(row.person_id));
+}
+
 function normalizeDirectory(
   settings: OrgSettingsRead,
   tree: OrgTreeResponse,
@@ -133,11 +165,12 @@ function normalizeDirectory(
   const rawName = settings && typeof settings === 'object' && typeof settings.enterprise_name === 'string'
     ? settings.enterprise_name.trim()
     : '';
+  const roster = visibleRoster(people);
   return {
     name: rawName,
     departments: Array.isArray(tree?.departments) ? tree.departments : [],
-    people: Array.isArray(tree?.people) ? tree.people : [],
-    roster: Array.isArray(people?.people) ? people.people : [],
+    people: visibleTreePeople(tree?.people, roster),
+    roster,
   };
 }
 

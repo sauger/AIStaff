@@ -286,6 +286,100 @@ describe('ContactsPage', () => {
     expect(calls.some((call) => call.method === 'POST' && call.url.includes('/api/enterprise/org/'))).toBe(false);
   });
 
+  it('hides departed people and account links in the company directory', async () => {
+    const user = userEvent.setup();
+    const departed: EnterprisePersonRead = {
+      ...orgPerson,
+      id: 'person-left',
+      name: '离职甲',
+      phone: '13700000000',
+      email: 'left@example.com',
+      employee_no: 'E900',
+      status: 'left',
+      primary_user_id: 'user_left',
+      primary_user_name: '账号甲',
+      primary_username: 'left_account',
+    };
+    const linked: EnterprisePersonRead = {
+      ...orgPerson,
+      primary_user_id: 'user_wang',
+      primary_user_name: '账号王',
+      primary_username: 'wang_account',
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([ownedAgent]);
+      if (url.includes('/api/enterprise/org/settings')) {
+        return jsonResponse({ tenant_id: 'tenant_demo', enterprise_name: companyName });
+      }
+      if (url.includes('/api/enterprise/org/tree')) {
+        return jsonResponse({
+          departments: [rootDepartment],
+          people: [
+            treePerson,
+            {
+              affiliation_id: 'aff-left',
+              person_id: 'person-left',
+              name: '离职甲',
+              department_id: 'dept-1',
+              position_title: '顾问',
+              valid_from: '2026-01-01',
+              valid_to: null,
+            },
+          ],
+          agents: [{
+            agent_id: 'agent-hidden',
+            name: '不该出现的数字员工',
+            department_id: 'dept-1',
+            status: 'active',
+            is_primary: true,
+            assignment_role: 'owner_department',
+            primary_owner_name: '负责人甲',
+          }],
+        });
+      }
+      if (url.includes('/api/enterprise/org/people')) {
+        return jsonResponse({ people: [linked, departed] });
+      }
+      if (url.includes('/api/enterprise/contacts')) {
+        return jsonResponse({ agent_id: 'agent-1', can_write: true, contacts: [] });
+      }
+      return jsonResponse([]);
+    }));
+
+    renderContacts(ownerUser);
+
+    expect(await screen.findByRole('heading', { name: companyName })).toBeTruthy();
+    expect(within(detail()).getByText('- 1人 -')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '王五' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: '离职甲' })).toBeNull();
+    expect(screen.queryByText('不该出现的数字员工')).toBeNull();
+    expect(screen.queryByText('负责人甲')).toBeNull();
+    expect(screen.queryByText('账号甲')).toBeNull();
+    expect(screen.queryByText('账号王')).toBeNull();
+    expect(screen.queryByText('left_account')).toBeNull();
+    expect(screen.queryByText('wang_account')).toBeNull();
+    expect(screen.queryByText('user_left')).toBeNull();
+    expect(screen.queryByText('user_wang')).toBeNull();
+
+    await user.click(screen.getAllByRole('button', { name: '未来创研中心' })[0]);
+    expect(within(detail()).getByRole('button', { name: '王五' })).toBeTruthy();
+    expect(within(detail()).queryByRole('button', { name: '离职甲' })).toBeNull();
+
+    await user.click(screen.getAllByRole('button', { name: '王五' })[0]);
+    expect(within(detail()).getByRole('heading', { name: '王五' })).toBeTruthy();
+    expect(within(detail()).getByText('未来创研中心')).toBeTruthy();
+    expect(within(detail()).getByText('工程师')).toBeTruthy();
+    expect(within(detail()).getByText('13900000000')).toBeTruthy();
+    expect(within(detail()).getByText('wangwu@example.com')).toBeTruthy();
+    expect(within(detail()).getByText('E100')).toBeTruthy();
+    expect(within(detail()).getByText('在职')).toBeTruthy();
+    expect(within(detail()).queryByText('已离职')).toBeNull();
+    expect(within(detail()).queryByText('账号王')).toBeNull();
+    expect(within(detail()).queryByText('wang_account')).toBeNull();
+    expect(within(detail()).queryByText('user_wang')).toBeNull();
+  });
+
   it('hides personal write actions when an admin views another employee', async () => {
     const user = userEvent.setup();
     window.localStorage.setItem(ENTERPRISE_AGENT_STORAGE_KEY, 'agent-2');

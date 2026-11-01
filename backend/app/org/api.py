@@ -8,14 +8,21 @@ from sqlmodel import Session
 from app.db import get_session
 from app.db.models import User
 from app.org.errors import OrgError
+from app.org.member_view import (
+    project_department_people_for_member,
+    project_org_tree_for_member,
+    project_people_for_member,
+)
 from app.org.schema import (
     AffiliationMoveRequest,
     AffiliationWriteRequest,
     AgentDepartmentsUpdateRequest,
     DepartmentListResponse,
+    DepartmentPeopleDirectoryResponse,
     DepartmentPeopleResponse,
     DepartmentRead,
     DepartmentWriteRequest,
+    EnterprisePersonDirectoryListResponse,
     EnterprisePersonListResponse,
     EnterprisePersonRead,
     EnterprisePersonWriteRequest,
@@ -53,7 +60,7 @@ from app.org.service import (
     update_settings,
 )
 from app.security.auth import ensure_current_user_tenant, get_current_user
-from app.security.permissions import ensure_tenant_admin
+from app.security.permissions import ensure_tenant_admin, is_admin_user
 from app.security.tenant import ensure_tenant
 
 router = APIRouter(
@@ -176,40 +183,55 @@ def get_org_tree(
 ) -> OrgTreeResponse:
     _guard_member(db, tenant_id, current_user)
     try:
-        return org_tree(db, tenant_id)
+        tree = org_tree(db, tenant_id)
     except OrgError as error:
         _raise(error)
         raise
+    if is_admin_user(current_user):
+        return tree
+    return project_org_tree_for_member(tree)
 
 
-@router.get("/departments/{department_id}/people", response_model=DepartmentPeopleResponse)
+@router.get(
+    "/departments/{department_id}/people",
+    response_model=DepartmentPeopleResponse | DepartmentPeopleDirectoryResponse,
+)
 def get_department_people(
     department_id: str,
     db: SessionDep,
     current_user: CurrentUser,
     tenant_id: str = Query(...),
     as_of: str | None = Query(None),
-) -> DepartmentPeopleResponse:
+) -> DepartmentPeopleResponse | DepartmentPeopleDirectoryResponse:
     _guard_member(db, tenant_id, current_user)
     try:
-        return department_people(db, tenant_id, department_id, as_of)
+        payload = department_people(db, tenant_id, department_id, as_of)
     except OrgError as error:
         _raise(error)
         raise
+    if is_admin_user(current_user):
+        return payload
+    return project_department_people_for_member(db, tenant_id, payload)
 
 
-@router.get("/people", response_model=EnterprisePersonListResponse)
+@router.get(
+    "/people",
+    response_model=EnterprisePersonListResponse | EnterprisePersonDirectoryListResponse,
+)
 def get_people(
     db: SessionDep,
     current_user: CurrentUser,
     tenant_id: str = Query(...),
-) -> EnterprisePersonListResponse:
+) -> EnterprisePersonListResponse | EnterprisePersonDirectoryListResponse:
     _guard_member(db, tenant_id, current_user)
     try:
-        return list_people(db, tenant_id)
+        payload = list_people(db, tenant_id)
     except OrgError as error:
         _raise(error)
         raise
+    if is_admin_user(current_user):
+        return payload
+    return project_people_for_member(payload)
 
 
 @router.post("/people", response_model=EnterprisePersonRead)

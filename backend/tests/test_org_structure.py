@@ -307,6 +307,242 @@ def test_member_can_read_enterprise_directory(org_db) -> None:
     assert error.value.status_code == 403
 
 
+def test_member_directory_hides_agents_history_and_account_links(org_db) -> None:
+    db, (owner, admin, agent_a, _agent_b) = org_db
+    department = post_department(_dept("研发"), db=db, current_user=admin)
+    active = post_person(
+        _person(
+            admin,
+            "张三",
+            phone="13800000000",
+            email="zhangsan@example.com",
+            primary_user_id=owner.id,
+        ),
+        db=db,
+        current_user=admin,
+    )
+    departed = post_person(
+        _person(admin, "李四", phone="13900000000", primary_user_id=admin.id),
+        db=db,
+        current_user=admin,
+    )
+    former = post_person(_person(admin, "王五", phone="13700000000"), db=db, current_user=admin)
+    post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=active.id,
+            position_title="工程师",
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=departed.id,
+            position_title="顾问",
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=former.id,
+            position_title="实习生",
+            valid_from="2025-01-01",
+            valid_to="2025-12-31",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    patch_person(
+        departed.id,
+        _person(admin, "李四", status="left", phone="13900000000", primary_user_id=admin.id),
+        db=db,
+        current_user=admin,
+    )
+    post_head(
+        HeadWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=active.id,
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    put_agent_departments(
+        agent_a.id,
+        AgentDepartmentsUpdateRequest(
+            tenant_id="tenant_demo",
+            department_ids=[department.id],
+            primary_department_id=department.id,
+        ),
+        db=db,
+        current_user=admin,
+    )
+
+    tree = get_org_tree(tenant_id="tenant_demo", db=db, current_user=owner)
+    admin_tree = get_org_tree(tenant_id="tenant_demo", db=db, current_user=admin)
+    assert [item.name for item in tree.people] == [item.name for item in admin_tree.people]
+    assert tree.agents == []
+    assert {(item.agent_id, item.department_id) for item in admin_tree.agents} == {
+        (agent_a.id, department.id)
+    }
+
+    detail = get_department_people(
+        department.id,
+        tenant_id="tenant_demo",
+        as_of="2026-11-01",
+        db=db,
+        current_user=owner,
+    )
+    assert [item.person_name for item in detail.people] == ["张三"]
+    assert detail.agents == []
+    assert detail.heads == []
+    assert detail.current_head is None
+    assert detail.affiliations == []
+    assert "primary_user_id" not in detail.people[0].model_dump()
+
+    admin_detail = get_department_people(
+        department.id,
+        tenant_id="tenant_demo",
+        as_of="2026-11-01",
+        db=db,
+        current_user=admin,
+    )
+    assert {item.person_name for item in admin_detail.people} == {"张三", "李四"}
+    assert {item.person_name for item in admin_detail.affiliations} == {"张三", "李四", "王五"}
+    assert admin_detail.heads
+    assert admin_detail.current_head is not None
+    assert admin_detail.current_head.person_name == "张三"
+    assert [item.agent_id for item in admin_detail.agents] == [agent_a.id]
+    assert admin_detail.people[0].primary_user_id in {owner.id, admin.id}
+
+    visible = get_people(tenant_id="tenant_demo", db=db, current_user=owner)
+    assert {item.name for item in visible.people} == {"张三", "王五"}
+    zhang = next(item for item in visible.people if item.name == "张三")
+    dumped = zhang.model_dump()
+    assert dumped["phone"] == "13800000000"
+    assert dumped["email"] == "zhangsan@example.com"
+    for field in ("primary_user_id", "primary_user_name", "primary_username"):
+        assert field not in dumped
+
+    admin_people = get_people(tenant_id="tenant_demo", db=db, current_user=admin)
+    by_name = {item.name: item for item in admin_people.people}
+    assert set(by_name) == {"张三", "李四", "王五"}
+    assert by_name["李四"].status == "left"
+    assert by_name["李四"].phone == "13900000000"
+    assert by_name["张三"].primary_user_id == owner.id
+    assert by_name["张三"].primary_user_name == "Owner"
+    assert by_name["张三"].primary_username == "owner"
+
+
+def test_member_directory_http_payload_omits_admin_fields(org_db) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.db import get_session
+    from app.org.api import router
+    from app.security.auth import get_current_user
+
+    db, (owner, admin, agent_a, _agent_b) = org_db
+    department = post_department(_dept("研发"), db=db, current_user=admin)
+    person = post_person(
+        _person(admin, "张三", primary_user_id=owner.id, phone="13800000000"),
+        db=db,
+        current_user=admin,
+    )
+    post_person(
+        _person(admin, "李四", status="left", primary_user_id=admin.id),
+        db=db,
+        current_user=admin,
+    )
+    post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=person.id,
+            position_title="工程师",
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    post_head(
+        HeadWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=person.id,
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    put_agent_departments(
+        agent_a.id,
+        AgentDepartmentsUpdateRequest(
+            tenant_id="tenant_demo",
+            department_ids=[department.id],
+            primary_department_id=department.id,
+        ),
+        db=db,
+        current_user=admin,
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+
+    def _member() -> object:
+        return owner
+
+    def _admin() -> object:
+        return admin
+
+    def _db():
+        yield db
+
+    app.dependency_overrides[get_session] = _db
+    client = TestClient(app)
+
+    app.dependency_overrides[get_current_user] = _member
+    member_body = client.get("/api/enterprise/org/people", params={"tenant_id": "tenant_demo"}).json()
+    assert [item["name"] for item in member_body["people"]] == ["张三"]
+    member_row = member_body["people"][0]
+    assert member_row["phone"] == "13800000000"
+    for field in ("primary_user_id", "primary_user_name", "primary_username"):
+        assert field not in member_row
+
+    member_tree = client.get("/api/enterprise/org/tree", params={"tenant_id": "tenant_demo"}).json()
+    assert member_tree["agents"] == []
+    assert [item["name"] for item in member_tree["people"]] == ["张三"]
+
+    member_department = client.get(
+        f"/api/enterprise/org/departments/{department.id}/people",
+        params={"tenant_id": "tenant_demo", "as_of": "2026-11-01"},
+    ).json()
+    assert member_department["agents"] == []
+    assert member_department["heads"] == []
+    assert member_department["affiliations"] == []
+    assert member_department["current_head"] is None
+    assert [item["person_name"] for item in member_department["people"]] == ["张三"]
+    assert "primary_user_id" not in member_department["people"][0]
+
+    app.dependency_overrides[get_current_user] = _admin
+    admin_body = client.get("/api/enterprise/org/people", params={"tenant_id": "tenant_demo"}).json()
+    admin_rows = {item["name"]: item for item in admin_body["people"]}
+    assert set(admin_rows) == {"张三", "李四"}
+    assert admin_rows["张三"]["primary_user_id"] == owner.id
+    assert admin_rows["张三"]["primary_username"] == "owner"
+    assert admin_rows["李四"]["status"] == "left"
+
+
 def test_create_move_and_reject_cycle_maintains_paths(org_db) -> None:
     db, (_owner, admin, _agent_a, _agent_b) = org_db
     root = post_department(_dept("研发"), db=db, current_user=admin)
