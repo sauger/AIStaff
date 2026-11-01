@@ -21,7 +21,12 @@ from app.org.schema import (
     OrgTreeResponse,
 )
 
-_ACCOUNT_LINK_FIELDS = {"primary_user_id", "primary_user_name", "primary_username"}
+_ACCOUNT_LINK_FIELDS = {
+    "primary_user_id",
+    "primary_user_name",
+    "primary_username",
+    "wecom_userid",
+}
 
 
 def project_org_tree_for_member(tree: OrgTreeResponse) -> OrgTreeResponse:

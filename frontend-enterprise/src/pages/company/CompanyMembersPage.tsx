@@ -41,6 +41,7 @@ type PersonDraft = {
   primaryUserId: string;
   primaryUsername: string;
   wecomUserid: string;
+  linkedAccountLabel: string;
 };
 
 type AgentDraft = {
@@ -58,6 +59,7 @@ const EMPTY_PERSON: PersonDraft = {
   primaryUserId: '',
   primaryUsername: '',
   wecomUserid: '',
+  linkedAccountLabel: '',
 };
 
 const INPUT_CLASS = 'h-8 rounded-[10px] text-[12px]';
@@ -72,7 +74,8 @@ function draftFromPerson(row: EnterprisePersonRead): PersonDraft {
     status: row.status === 'left' ? 'left' : 'active',
     primaryUserId: row.primary_user_id || '',
     primaryUsername: row.primary_username || '',
-    wecomUserid: '',
+    wecomUserid: row.wecom_userid || '',
+    linkedAccountLabel: row.primary_user_name || row.primary_username || '',
   };
 }
 
@@ -189,6 +192,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
         person.employee_no || '',
         person.primary_username || '',
         person.primary_user_name || '',
+        person.wecom_userid || '',
         departmentsText,
       ].some((value) => value.toLowerCase().includes(keyword));
     })
@@ -238,7 +242,12 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
   }
 
   function openPersonEdit(person: EnterprisePersonRead) {
-    setPersonDraft(draftFromPerson(person));
+    const draft = draftFromPerson(person);
+    const webLinked = users.some((user) => user.id === person.primary_user_id);
+    setPersonDraft({
+      ...draft,
+      primaryUserId: webLinked ? person.primary_user_id || '' : '',
+    });
   }
 
   async function savePerson() {
@@ -256,7 +265,10 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
         phone: personDraft.phone.trim() || null,
         email: personDraft.email.trim() || null,
         status: personDraft.status,
-        primary_user_id: personDraft.primaryUserId || null,
+        primary_user_id: users.some((user) => user.id === personDraft.primaryUserId)
+          ? personDraft.primaryUserId
+          : null,
+        wecom_userid: personDraft.wecomUserid.trim() || null,
       };
       if (personDraft.id) {
         await api.patch(`/api/enterprise/org/people/${encodeURIComponent(personDraft.id)}`, payload);
@@ -369,7 +381,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <WecomDirectoryPicker
               buttonLabel="从企微选择"
               title="从企微通讯录选择"
-              description="可多选。确认后把姓名、邮箱和 userid 留在本页，用于核对账号和权限；不会写入组织或通讯录。"
+              description="可多选。确认后可把一位成员填入企业人员；保存时写入企微 userid，并关联已有的企业微信会话账号。"
               buttonClassName="h-8 rounded-[10px] px-3 text-[12px]"
               onConfirm={(users) => setWecomSelection(users)}
             />
@@ -389,7 +401,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <div>
               <h3 className="m-0 text-[13px] font-semibold text-[#18181a]">{`已从企微选择 ${wecomSelection.length} 人`}</h3>
               <p className="m-0 mt-1 text-[12px] leading-[1.6] text-[#858b9c]">
-                这些信息只留在本页，用于配账号和权限。复制后可到账号管理调整角色，或到企微应用填写临时身份绑定。一次只能把一位成员填入新建人员表单，userid 不会写入人员档案。
+                保存人员时会写入企微 userid。若该 userid 已有企业微信会话账号，私聊会显示这名人员的姓名。一次只能填入一位成员。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -505,6 +517,11 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
                   <div className="min-w-0">
                     <div className="truncate text-[13px] font-medium text-[#18181a]" data-i18n-ignore>{person.name}</div>
                     <div className="mt-[2px] text-[11px] text-[#858b9c]" data-i18n-ignore>{person.employee_no || '未填工号'}</div>
+                    {person.wecom_userid ? (
+                      <div className="mt-[2px] truncate text-[11px] text-[#858b9c]" data-i18n-ignore>
+                        {`企微 ${person.wecom_userid}`}
+                      </div>
+                    ) : null}
                   </div>
                   <div>
                     <span className="rounded-full bg-[#eef4f2] px-[8px] py-[3px] text-[10px] text-[#0f766e]">企业人员</span>
@@ -615,12 +632,29 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
               <Input value={personDraft?.email || ''} onChange={(event) => setPersonDraft((prev) => (prev ? { ...prev, email: event.target.value } : prev))} className={INPUT_CLASS} placeholder="选填" />
             </label>
           </div>
-          {personDraft?.wecomUserid ? (
-            <div className="rounded-[10px] bg-[#fafbfc] px-3 py-2 text-[12px] text-[#464c5e]">
-              企微 userid
-              <div className="mt-1 font-medium text-[#18181a]" data-i18n-ignore>{personDraft.wecomUserid}</div>
-              <p className="m-0 mt-1 text-[11px] text-[#858b9c]">仅用于核对，保存人员档案时不会写入。</p>
-            </div>
+          <label className="flex flex-col gap-[4px] text-[12px] text-[#464c5e]">
+            企微 userid
+            <Input
+              value={personDraft?.wecomUserid || ''}
+              onChange={(event) => setPersonDraft((prev) => (prev ? { ...prev, wecomUserid: event.target.value } : prev))}
+              className={INPUT_CLASS}
+              placeholder="选填，通讯录成员详情里的账号"
+              aria-label="企微 userid"
+            />
+          </label>
+          <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
+            保存后，若本租户已有该 userid 的企业微信会话账号，会关联到该账号，私聊即可显示此姓名。这不会把渠道身份改绑到网页登录账号。
+          </p>
+          {personDraft?.wecomUserid.trim() ? (
+            <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
+              已填写企微 userid，且已有会话账号时，以该账号作为花名册关联，不再同时使用另一个登录账号。
+            </p>
+          ) : null}
+          {personDraft?.linkedAccountLabel ? (
+            <p className="m-0 text-[11px] text-[#858b9c]">
+              当前关联账号
+              <span className="ml-1 text-[#18181a]" data-i18n-ignore>{personDraft.linkedAccountLabel}</span>
+            </p>
           ) : null}
           <label className="flex flex-col gap-[4px] text-[12px] text-[#464c5e]">
             关联登录账号（可选）

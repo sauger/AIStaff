@@ -1106,6 +1106,10 @@ class EnterprisePerson(SQLModel, table=True):
         UniqueConstraint(
             "tenant_id", "source", "external_id", name="uq_enterprise_person_external_id"
         ),
+        # 同一租户一个企微 userid 只对应一名企业人员。NULL 不参与唯一，未填的人员不受限。
+        UniqueConstraint(
+            "tenant_id", "wecom_userid", name="uq_enterprise_person_wecom_userid"
+        ),
         Index("ix_enterprise_person_tenant_name", "tenant_id", "name"),
         Index("ix_enterprise_person_tenant_status", "tenant_id", "status"),
     )
@@ -1122,9 +1126,13 @@ class EnterprisePerson(SQLModel, table=True):
     primary_user_id: Optional[str] = Field(
         default=None, foreign_key="users.id", ondelete="SET NULL", index=True
     )
-    # 导入/同步预留：manual / csv / wecom / feishu / dingtalk
+    # 导入/同步预留：manual / csv / wecom / feishu / dingtalk。
+    # external_id 不是花名册匹配键；只存来源 id，不拿来猜说话人。
     source: str = Field(default="manual", index=True)
     external_id: Optional[str] = Field(default=None, index=True)
+    # 企微通讯录 userid。写入时若已有本租户 ChannelIdentity，则把该身份的
+    # staffdeck_user_id 记到 primary_user_id。花名册仍只按 primary_user_id 匹配。
+    wecom_userid: Optional[str] = None
     last_synced_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

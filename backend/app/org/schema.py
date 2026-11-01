@@ -42,6 +42,7 @@ class EnterprisePersonWriteRequest(BaseModel):
     email: str | None = None
     status: str = "active"
     primary_user_id: str | None = None
+    wecom_userid: str | None = None
 
 
 class EnterprisePersonRead(BaseModel):
@@ -57,6 +58,7 @@ class EnterprisePersonRead(BaseModel):
     primary_username: str | None = None
     source: str = "manual"
     external_id: str | None = None
+    wecom_userid: str | None = None
     created_at: str
     updated_at: str
 

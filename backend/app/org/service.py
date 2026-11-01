@@ -45,6 +45,7 @@ from app.org.schema import (
     OrgTreeResponse,
     TenureUpdateRequest,
 )
+from app.org.wecom_link import resolve_wecom_person_link
 
 _NAME_LIMIT = 80
 _ENTERPRISE_NAME_LIMIT = 120
@@ -173,7 +174,15 @@ def create_person(
     _require_tenant(db, tenant_id)
     name = _require_person_name(request.name)
     status = _require_person_status(request.status)
-    primary_user_id = _optional_user_link(db, tenant_id, request.primary_user_id)
+    link = resolve_wecom_person_link(
+        db,
+        tenant_id=tenant_id,
+        person_name=name,
+        wecom_userid=request.wecom_userid,
+    )
+    primary_user_id = link.speaker_user_id or _optional_user_link(
+        db, tenant_id, request.primary_user_id
+    )
     row = EnterprisePerson(
         tenant_id=tenant_id,
         name=name,
@@ -182,6 +191,7 @@ def create_person(
         email=_optional_text(request.email, 120),
         status=status,
         primary_user_id=primary_user_id,
+        wecom_userid=link.wecom_userid,
     )
     db.add(row)
     _commit(db)
@@ -196,12 +206,23 @@ def update_person(
     request: EnterprisePersonWriteRequest,
 ) -> EnterprisePersonRead:
     row = _require_person(db, tenant_id, person_id)
-    row.name = _require_person_name(request.name)
+    name = _require_person_name(request.name)
+    link = resolve_wecom_person_link(
+        db,
+        tenant_id=tenant_id,
+        person_name=name,
+        wecom_userid=request.wecom_userid,
+        exclude_person_id=row.id,
+    )
+    row.name = name
     row.employee_no = _optional_text(request.employee_no, 80)
     row.phone = _optional_text(request.phone, 120)
     row.email = _optional_text(request.email, 120)
     row.status = _require_person_status(request.status)
-    row.primary_user_id = _optional_user_link(db, tenant_id, request.primary_user_id, exclude_id=row.id)
+    row.primary_user_id = link.speaker_user_id or _optional_user_link(
+        db, tenant_id, request.primary_user_id, exclude_id=row.id
+    )
+    row.wecom_userid = link.wecom_userid
     row.updated_at = utc_now()
     db.add(row)
     _commit(db)
@@ -852,6 +873,7 @@ def _person_read_with_users(
         primary_username=user.username if user else None,
         source=row.source,
         external_id=row.external_id,
+        wecom_userid=row.wecom_userid,
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -1177,6 +1199,13 @@ def _commit(db: Session) -> None:
 
 def _integrity_error(error: IntegrityError) -> OrgError:
     text = f"{error} {getattr(error, 'orig', '')}".lower()
+    # SQLite 报的是表名 enterprise_people，不是模型名 enterprise_person。
+    if "enterprise_people" in text and "wecom_userid" in text:
+        return OrgError(
+            "ORG_WECOM_USERID_TAKEN",
+            "该企微 userid 已关联其他企业人员。",
+            status_code=409,
+        )
     if "enterprise_person" in text and "primary_user" in text:
         return OrgError("ORG_USER_ALREADY_LINKED", "该账号已关联其他企业人员。", status_code=409)
     if "enterprise_person" in text and "external_id" in text:

@@ -187,7 +187,23 @@ def resolve_or_provision_user(
     """按 (tenant, channel, scope, external_id) 解析 StaffDeck 用户，不存在则开通懒建账号。
 
     name_resolver 可选:传入 open_id 返回真实姓名;用于将占位 display_name 替换为渠道真实名。
+
+    企微私聊在返回前，若企业人员已记下这个 userid 且还没有主账号，把新建或已有的
+    影子用户写成 primary_user_id。不改 ChannelIdentity 指向，也不覆盖已有主账号。
     """
+
+    def finish(resolved: User) -> User:
+        if channel == "wecom" and not str(external_id).startswith("group:"):
+            from app.org.wecom_link import attach_pending_wecom_person
+
+            attach_pending_wecom_person(
+                db,
+                tenant_id=tenant_id,
+                wecom_userid=external_id,
+                user=resolved,
+            )
+        return resolved
+
     identity = find_channel_identity(db, tenant_id, channel, external_id, account_scope)
     if not identity and external_id.startswith("group:"):
         # 兼容 PR 早期数据:group_{scope}_{chatid} → group:{chatid}
@@ -216,7 +232,7 @@ def resolve_or_provision_user(
                     db.add(user)
                     db.add(identity)
                     db.flush()
-            return user
+            return finish(user)
         # 损坏或跨租户 identity 不能继续占据正常 scope 唯一键。
         db.delete(identity)
         db.flush()
@@ -256,7 +272,7 @@ def resolve_or_provision_user(
         if identity:
             user = db.get(User, identity.staffdeck_user_id)
             if user and user.tenant_id == tenant_id:
-                return user
+                return finish(user)
             db.delete(identity)
             db.flush()
         user = db.exec(
@@ -274,9 +290,9 @@ def resolve_or_provision_user(
                 )
             )
             db.flush()
-            return user
+            return finish(user)
         raise
-    return user
+    return finish(user)
 
 
 def unbind_external_identity(
