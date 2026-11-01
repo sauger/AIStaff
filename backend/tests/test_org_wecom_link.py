@@ -154,41 +154,27 @@ def test_create_links_existing_wecom_shadow_and_roster_matches() -> None:
         assert db.get(User, shadow.id).display_name == "陈龙"
 
 
-def test_update_keeps_web_primary_when_wecom_speaker_differs() -> None:
+def test_update_rehangs_web_primary_onto_unique_wecom_speaker() -> None:
     engine = _engine()
     with Session(engine) as db:
         owner, admin = _seed(db)
-        created = post_person(_person(primary_user_id=owner.id), db=db, current_user=admin)
+        created = post_person(_person(name="陈龙", primary_user_id=owner.id), db=db, current_user=admin)
         owner_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id)
         assert owner_roster.status == "matched"
         shadow = _shadow(db, display_name="企业微信用户 77898")
 
         updated = patch_person(
             created.id,
-            _person(primary_user_id=owner.id, wecom_userid="18016077898"),
+            _person(name="陈龙", primary_user_id=owner.id, wecom_userid="18016077898"),
             db=db,
             current_user=admin,
         )
-        assert updated.primary_user_id == owner.id
+        assert updated.primary_user_id == shadow.id
         assert updated.wecom_userid == "18016077898"
-        assert updated.wecom_link_notice
-        assert updated.wecom_link_notice.startswith("未改挂花名册主账号")
-        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).name == "陈龙"
-        shadow_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id)
-        assert shadow_roster.status == "unmatched"
-        assert db.get(User, shadow.id).display_name == "企业微信用户 77898"
-        assert _identity(db, shadow.id).staffdeck_user_id == shadow.id
-
-        hung = patch_person(
-            created.id,
-            _person(primary_user_id=None, wecom_userid="18016077898"),
-            db=db,
-            current_user=admin,
-        )
-        assert hung.primary_user_id == shadow.id
-        assert hung.wecom_link_notice is None
+        assert updated.wecom_link_notice == "已改挂花名册主账号到企微会话"
         assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id).name == "陈龙"
         assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).status == "unmatched"
+        assert _roster_name(db, shadow.id) == "陈龙"
         assert db.get(User, shadow.id).display_name == "陈龙"
         assert _identity(db, shadow.id).staffdeck_user_id == shadow.id
 

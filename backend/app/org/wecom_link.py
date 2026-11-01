@@ -6,13 +6,12 @@
 网页登录账号的路径。
 
 写入规则：
-- 主账号为空，或已经就是该说话人：才把 ``primary_user_id`` 设为说话人。
-  影子账号可以。已经绑过网页账号、且 ChannelIdentity 也指向该网页账号时，保持不动。
-- 已经有另一个主账号（例如网页 admin）：只记下 userid，不改挂，并返回提示。
-  操作者要让私聊认人，需先清空主账号再保存。
+- 本租户里这个 userid 恰好对应一个说话人：保存时把 ``primary_user_id``
+  直接改成该用户，可以覆盖已有的网页主账号。不必先清空关联登录账号。
+- 说话人已经是当前主账号，或 ChannelIdentity 已指向该网页账号：主账号不变。
 - 清除 userid 时，已有的主账号保留，避免花名册掉线。
 - 还没有 ChannelIdentity：只记下 userid。之后对方第一次私聊时，
-  若人员还没有主账号，再补上影子用户。
+  若人员还没有主账号，再补上影子用户。入站不覆盖已有主账号。
 - 同一 userid 在不同企业/应用范围指向不同用户：拒绝，不猜。
 - 不改 ``ChannelIdentity.staffdeck_user_id``。绑定码仍负责改挂渠道身份。
 """
@@ -33,10 +32,7 @@ logger = logging.getLogger(__name__)
 
 _WECOM_USERID_LIMIT = 128
 _PLACEHOLDER_PREFIXES = ("企业微信用户 ", "企业微信群聊 ")
-KEEP_WEB_PRIMARY_NOTICE = (
-    "未改挂花名册主账号，因已有网页账号关联。"
-    "清空关联登录账号后再保存，才会改挂到企微会话账号。"
-)
+REHANG_NOTICE = "已改挂花名册主账号到企微会话"
 
 
 @dataclass(frozen=True)
@@ -71,9 +67,10 @@ def choose_roster_primary(
     speaker_user_id: str | None,
     stored_wecom_userid: str | None,
 ) -> tuple[str | None, str | None]:
-    """决定花名册主账号，以及要不要提示「未改挂」。
+    """决定花名册主账号，以及要不要提示「已改挂」。
 
-    返回 ``(primary_user_id, notice)``。notice 只在保住了另一个网页账号时出现。
+    返回 ``(primary_user_id, notice)``。有唯一说话人时直接改挂，
+    即使请求里还带着另一个网页主账号。
     """
 
     clearing_wecom = bool(existing_wecom_userid) and not stored_wecom_userid
@@ -84,10 +81,13 @@ def choose_roster_primary(
         ):
             return requested_primary_user_id, None
         return existing_primary_user_id, None
-    if speaker_user_id and requested_primary_user_id in {None, speaker_user_id}:
-        return speaker_user_id, None
-    if speaker_user_id and requested_primary_user_id not in {None, speaker_user_id}:
-        return requested_primary_user_id, KEEP_WEB_PRIMARY_NOTICE
+    if speaker_user_id:
+        replaced_other = (
+            existing_primary_user_id not in {None, speaker_user_id}
+            or requested_primary_user_id not in {None, speaker_user_id}
+        )
+        notice = REHANG_NOTICE if replaced_other else None
+        return speaker_user_id, notice
     return requested_primary_user_id, None
 
 

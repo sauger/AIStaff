@@ -59,7 +59,7 @@ class EnterprisePersonRead(BaseModel):
     source: str = "manual"
     external_id: str | None = None
     wecom_userid: str | None = None
-    # 仅本次保存的提示。列表读取为空。已有网页主账号时不会静默改挂。
+    # 仅本次保存的提示。列表读取为空。改挂到企微说话人时给一句说明。
     wecom_link_notice: str | None = None
     created_at: str
     updated_at: str
