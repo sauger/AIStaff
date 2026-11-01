@@ -71,6 +71,7 @@ def init_db() -> None:
     _migrate_org_department_sibling_names()
     _migrate_org_department_sync_fields()
     _migrate_org_people_schema()
+    _migrate_enterprise_person_wecom_userid()
     _migrate_agent_primary_owner()
     _migrate_wecom_apps()
     _purge_orphaned_chat_sessions()
@@ -257,6 +258,33 @@ def _migrate_org_department_sync_fields() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_org_departments_external_id "
                 "ON org_departments (tenant_id, external_id)"
+            )
+        )
+
+
+def _migrate_enterprise_person_wecom_userid() -> None:
+    """Add EnterprisePerson.wecom_userid on existing SQLite databases.
+
+    create_all does not alter tables that already exist. The unique index
+    allows many NULLs, so people without a WeCom userid stay unconstrained.
+    """
+    if not database_url.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        tables = set(inspect(connection).get_table_names())
+        if "enterprise_people" not in tables:
+            return
+        columns = {
+            column["name"] for column in inspect(connection).get_columns("enterprise_people")
+        }
+        if "wecom_userid" not in columns:
+            connection.execute(
+                text("ALTER TABLE enterprise_people ADD COLUMN wecom_userid VARCHAR")
+            )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_person_wecom_userid "
+                "ON enterprise_people (tenant_id, wecom_userid)"
             )
         )
 

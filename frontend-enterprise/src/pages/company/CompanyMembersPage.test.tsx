@@ -259,6 +259,60 @@ describe('CompanyMembersPage', () => {
     const dialog = await screen.findByRole('dialog', { name: '新建企业人员' });
     expect(within(dialog).getByDisplayValue('张三')).toBeTruthy();
     expect(within(dialog).getByDisplayValue('zhangsan@example.com')).toBeTruthy();
-    expect(within(dialog).getByText('zhangsan')).toBeTruthy();
+    const userid = within(dialog).getByLabelText('企微 userid') as HTMLInputElement;
+    expect(userid.value).toBe('zhangsan');
+  });
+
+  it('saves the WeCom userid onto the new person', async () => {
+    const posted: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/org/people') && method === 'POST') {
+        posted.push(JSON.parse(String(init?.body || '{}')));
+        return jsonResponse({
+          id: 'person-new',
+          tenant_id: 'tenant_demo',
+          name: '张三',
+          status: 'active',
+          source: 'manual',
+          wecom_userid: 'zhangsan',
+          created_at: '',
+          updated_at: '',
+        });
+      }
+      if (url.includes('/directory/departments/') && url.includes('/users')) {
+        return jsonResponse({
+          users: [
+            { userid: 'zhangsan', name: '张三', email: 'zhangsan@example.com', department_ids: [16] },
+          ],
+        });
+      }
+      if (url.includes('/directory/departments')) {
+        return jsonResponse({
+          departments: [{ id: 16, name: '数字化赋能中心', parent_id: 0, order: 1 }],
+        });
+      }
+      if (url.includes('/org/people')) return jsonResponse({ people: [] });
+      if (url.includes('/org/tree')) return jsonResponse({ departments: [], people: [], agents: [] });
+      if (url.includes('/org/agents')) return jsonResponse({ agents: [] });
+      if (url.includes('/org/departments')) return jsonResponse({ departments: [] });
+      if (url.includes('/api/auth/users')) return jsonResponse([]);
+      return jsonResponse({});
+    }));
+
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: '从企微选择' }));
+    await user.click(await screen.findByRole('checkbox', { name: '张三 zhangsan' }));
+    await user.click(screen.getByRole('button', { name: '确认选择' }));
+    await user.click(await screen.findByRole('button', { name: '填入新建人员' }));
+    const dialog = await screen.findByRole('dialog', { name: '新建企业人员' });
+    await user.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.wecom_userid).toBe('zhangsan');
+    expect(posted[0]?.name).toBe('张三');
+    expect(posted[0]?.primary_user_id).toBeNull();
   });
 });

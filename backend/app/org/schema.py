@@ -42,6 +42,7 @@ class EnterprisePersonWriteRequest(BaseModel):
     email: str | None = None
     status: str = "active"
     primary_user_id: str | None = None
+    wecom_userid: str | None = None
 
 
 class EnterprisePersonRead(BaseModel):
@@ -57,6 +58,9 @@ class EnterprisePersonRead(BaseModel):
     primary_username: str | None = None
     source: str = "manual"
     external_id: str | None = None
+    wecom_userid: str | None = None
+    # 仅本次保存的提示。列表读取为空。已有网页主账号时不会静默改挂。
+    wecom_link_notice: str | None = None
     created_at: str
     updated_at: str
 

@@ -1548,6 +1548,8 @@ export type EnterprisePersonRead = {
   primary_username?: string | null;
   source: string;
   external_id?: string | null;
+  wecom_userid?: string | null;
+  wecom_link_notice?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -1564,6 +1566,7 @@ export type EnterprisePersonWriteRequest = {
   email?: string | null;
   status?: 'active' | 'left';
   primary_user_id?: string | null;
+  wecom_userid?: string | null;
 };
 
 export type OrgPersonRead = {
