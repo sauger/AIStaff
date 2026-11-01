@@ -175,28 +175,11 @@ def test_person_account_link_is_unique_and_internal_only(org_db) -> None:
     assert error.value.status_code == 400
 
 
-def _all_org_endpoints():
-    """(名称, 调用闭包) 列表：普通 member 对企业管理全部端点都必须 403。"""
+def _member_forbidden_org_endpoints():
+    """普通成员不能改组织，也不能读取数字员工的部门分配。"""
     person_request = EnterprisePersonWriteRequest(tenant_id="tenant_demo", name="张三")
     department_request = DepartmentWriteRequest(tenant_id="tenant_demo", name="研发")
     tenure_request = TenureUpdateRequest(tenant_id="tenant_demo")
-    read = {
-        "settings:get": lambda db, user: get_org_settings(
-            tenant_id="tenant_demo", db=db, current_user=user
-        ),
-        "departments:get": lambda db, user: get_departments(
-            tenant_id="tenant_demo", db=db, current_user=user
-        ),
-        "tree:get": lambda db, user: get_org_tree(
-            tenant_id="tenant_demo", db=db, current_user=user
-        ),
-        "people:get": lambda db, user: get_people(
-            tenant_id="tenant_demo", db=db, current_user=user
-        ),
-        "agents:get": lambda db, user: get_org_agents(
-            tenant_id="tenant_demo", db=db, current_user=user
-        ),
-    }
     write = {
         "settings:patch": lambda db, user: patch_org_settings(
             OrgSettingsUpdateRequest(tenant_id="tenant_demo", enterprise_name="越权"),
@@ -211,9 +194,6 @@ def _all_org_endpoints():
         ),
         "departments:delete": lambda db, user: remove_department(
             "dept_x", tenant_id="tenant_demo", db=db, current_user=user
-        ),
-        "department-people:get": lambda db, user: get_department_people(
-            "dept_x", tenant_id="tenant_demo", as_of=None, db=db, current_user=user
         ),
         "people:post": lambda db, user: post_person(person_request, db=db, current_user=user),
         "people:patch": lambda db, user: patch_person(
@@ -258,19 +238,72 @@ def _all_org_endpoints():
             db=db,
             current_user=user,
         ),
+        "agents:get": lambda db, user: get_org_agents(
+            tenant_id="tenant_demo", db=db, current_user=user
+        ),
     }
-    return [*read.items(), *write.items()]
+    return [*write.items()]
 
 
 @pytest.mark.parametrize(
     "name,call",
-    _all_org_endpoints(),
-    ids=[item[0] for item in _all_org_endpoints()],
+    _member_forbidden_org_endpoints(),
+    ids=[item[0] for item in _member_forbidden_org_endpoints()],
 )
 def test_member_cannot_manage_any_org_endpoint(org_db, name, call) -> None:
     db, (owner, _admin, _agent_a, _agent_b) = org_db
     with pytest.raises(HTTPException) as error:
         call(db, owner)
+    assert error.value.status_code == 403
+
+
+def test_member_can_read_enterprise_directory(org_db) -> None:
+    db, (owner, admin, _agent_a, _agent_b) = org_db
+    department = post_department(_dept("研发"), db=db, current_user=admin)
+    person = post_person(
+        _person(
+            admin,
+            "张三",
+            phone="13800000000",
+            email="zhangsan@example.com",
+            employee_no="E001",
+        ),
+        db=db,
+        current_user=admin,
+    )
+    post_affiliation(
+        AffiliationWriteRequest(
+            tenant_id="tenant_demo",
+            department_id=department.id,
+            person_id=person.id,
+            position_title="工程师",
+            valid_from="2026-01-01",
+        ),
+        db=db,
+        current_user=admin,
+    )
+
+    settings = get_org_settings(tenant_id="tenant_demo", db=db, current_user=owner)
+    assert settings.enterprise_name == "Demo Enterprise"
+    listed = get_departments(tenant_id="tenant_demo", db=db, current_user=owner)
+    assert [item.name for item in listed.departments] == ["研发"]
+    visible = get_people(tenant_id="tenant_demo", db=db, current_user=owner)
+    assert visible.people[0].phone == "13800000000"
+    assert visible.people[0].email == "zhangsan@example.com"
+    tree = get_org_tree(tenant_id="tenant_demo", db=db, current_user=owner)
+    assert [item.name for item in tree.departments] == ["研发"]
+    assert [item.name for item in tree.people] == ["张三"]
+    detail = get_department_people(
+        department.id,
+        tenant_id="tenant_demo",
+        as_of=None,
+        db=db,
+        current_user=owner,
+    )
+    assert [item.person_name for item in detail.people] == ["张三"]
+
+    with pytest.raises(HTTPException) as error:
+        post_person(_person(admin, "越权"), db=db, current_user=owner)
     assert error.value.status_code == 403
 
 

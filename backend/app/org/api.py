@@ -52,7 +52,7 @@ from app.org.service import (
     update_person,
     update_settings,
 )
-from app.security.auth import get_current_user
+from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import ensure_tenant_admin
 from app.security.tenant import ensure_tenant
 
@@ -75,13 +75,19 @@ def _guard(db: Session, tenant_id: str, current_user: User) -> None:
     ensure_tenant(db, tenant_id)
 
 
+def _guard_member(db: Session, tenant_id: str, current_user: User) -> None:
+    """Enterprise directory reads are available to every user in the tenant."""
+    ensure_current_user_tenant(tenant_id, current_user)
+    ensure_tenant(db, tenant_id)
+
+
 @router.get("/settings", response_model=OrgSettingsRead)
 def get_org_settings(
     db: SessionDep,
     current_user: CurrentUser,
     tenant_id: str = Query(...),
 ) -> OrgSettingsRead:
-    _guard(db, tenant_id, current_user)
+    _guard_member(db, tenant_id, current_user)
     try:
         return read_settings(db, tenant_id)
     except OrgError as error:
@@ -109,7 +115,7 @@ def get_departments(
     current_user: CurrentUser,
     tenant_id: str = Query(...),
 ) -> DepartmentListResponse:
-    _guard(db, tenant_id, current_user)
+    _guard_member(db, tenant_id, current_user)
     try:
         return list_departments(db, tenant_id)
     except OrgError as error:
@@ -168,7 +174,7 @@ def get_org_tree(
     current_user: CurrentUser,
     tenant_id: str = Query(...),
 ) -> OrgTreeResponse:
-    _guard(db, tenant_id, current_user)
+    _guard_member(db, tenant_id, current_user)
     try:
         return org_tree(db, tenant_id)
     except OrgError as error:
@@ -184,7 +190,7 @@ def get_department_people(
     tenant_id: str = Query(...),
     as_of: str | None = Query(None),
 ) -> DepartmentPeopleResponse:
-    _guard(db, tenant_id, current_user)
+    _guard_member(db, tenant_id, current_user)
     try:
         return department_people(db, tenant_id, department_id, as_of)
     except OrgError as error:
@@ -198,7 +204,7 @@ def get_people(
     current_user: CurrentUser,
     tenant_id: str = Query(...),
 ) -> EnterprisePersonListResponse:
-    _guard(db, tenant_id, current_user)
+    _guard_member(db, tenant_id, current_user)
     try:
         return list_people(db, tenant_id)
     except OrgError as error:
