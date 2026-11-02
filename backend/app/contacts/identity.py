@@ -280,14 +280,18 @@ def apply_explicit_web_user(
     db: Session,
     person: EnterprisePerson,
 ) -> ExplicitWebLinkConflict | None:
-    """把成员明确选择的网页账号写到 org 联系人。
+    """把成员的网页登录同步到 org 联系人。
 
-    这条联系人上已有别的网页账号、且新账号没被占用时，直接改写。
-    新账号已在另一条联系人上时不抢，只记合并建议。
+    主账号是网页用户时写入或改写 ``web_user_id``。这条联系人上已有别的网页账号、
+    且新账号没被占用时，直接改写。新账号已在另一条联系人上时不抢，只记合并建议。
+
+    主账号不是网页用户时清掉 ``web_user_id``。表单清空关联登录后，花名册可能改挂到
+    企微影子；不清的话原网页账号会一直占着唯一键。
     """
 
     user = _primary_user(db, person)
     if user is None or user.source != "web":
+        _release_org_web_user(db, person)
         return None
     contact = _find_org_by_person(db, person.tenant_id, person.id)
     if contact is None:
@@ -317,6 +321,15 @@ def apply_explicit_web_user(
     except IntegrityError:
         nested.rollback()
         db.expire(contact)
+        holder = _find_by_web_user(db, person.tenant_id, user.id)
+        if holder is not None and holder.id != contact.id:
+            _record_merge_suggestion(db, person.tenant_id, holder, contact, "same_web_user")
+            return ExplicitWebLinkConflict(
+                holder_id=holder.id,
+                holder_name=str(holder.display_name or "").strip() or "未命名联系人",
+                org_contact_id=contact.id,
+                kind="taken",
+            )
         return ExplicitWebLinkConflict(
             holder_id="",
             holder_name="",
@@ -325,6 +338,18 @@ def apply_explicit_web_user(
         )
     nested.commit()
     return None
+
+
+def _release_org_web_user(db: Session, person: EnterprisePerson) -> None:
+    """主账号不再是网页登录时，放开这条 org 联系人占用的 web_user_id。"""
+
+    contact = _find_org_by_person(db, person.tenant_id, person.id)
+    if contact is None or not contact.web_user_id:
+        return
+    contact.web_user_id = None
+    contact.updated_at = utc_now()
+    db.add(contact)
+    db.flush()
 
 
 def sync_org_contact_from_person(

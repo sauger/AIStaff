@@ -263,6 +263,50 @@ def test_changing_web_primary_rewrites_org_contact_web_user() -> None:
         assert previous.kind == "personal"
 
 
+def test_clearing_web_primary_releases_org_web_user_for_someone_else() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _owner, admin = _seed(db)
+        shadow = _shadow(db, display_name="企业微信用户 77898")
+        created = post_person(
+            _person(name="陈龙", primary_user_id=admin.id, wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert created.primary_user_id == admin.id
+        org = db.exec(
+            select(PersonContact).where(PersonContact.enterprise_person_id == created.id)
+        ).one()
+        assert org.web_user_id == admin.id
+
+        cleared = patch_person(
+            created.id,
+            _person(name="陈龙", primary_user_id=None, wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert cleared.primary_user_id == shadow.id
+        assert cleared.wecom_link_notice == "已改挂花名册主账号到企微会话"
+        db.refresh(org)
+        assert org.web_user_id is None
+
+        other = post_person(
+            _person(name="李四", primary_user_id=admin.id),
+            db=db,
+            current_user=admin,
+        )
+        assert other.primary_user_id == admin.id
+        other_org = db.exec(
+            select(PersonContact).where(PersonContact.enterprise_person_id == other.id)
+        ).one()
+        assert other_org.web_user_id == admin.id
+        db.refresh(org)
+        assert org.web_user_id is None
+        web = ensure_web_contact(db, db.get(User, admin.id))
+        assert web is not None
+        assert web.id == other_org.id
+
+
 def test_taken_web_user_does_not_pretend_the_member_link_saved() -> None:
     engine = _engine()
     with Session(engine) as db:
