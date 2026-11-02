@@ -127,6 +127,9 @@ if (Test-Path packaging\out\staffdeck\runtime) { Remove-Item -Recurse -Force pac
 Copy-Item -Recurse -Force packaging\runtime_dl\python packaging\out\staffdeck\runtime
 
 Write-Host "==> [4b/6] Bundle SRT + Node runtime"
+# sandbox_runtime is only the staging copy. The fetcher reuses packaging/cache
+# (or STAFFDECK_PACKAGING_CACHE) when the pinned Node archive and SRT bundle
+# still validate. See packaging/BUILD.md.
 if (Test-Path packaging\sandbox_runtime) { Remove-Item -Recurse -Force packaging\sandbox_runtime }
 if (Test-Path packaging\out\staffdeck\sandbox) { Remove-Item -Recurse -Force packaging\out\staffdeck\sandbox }
 & $PY.Command @($PY.PrefixArgs) packaging\fetch_sandbox_runtime.py packaging\sandbox_runtime

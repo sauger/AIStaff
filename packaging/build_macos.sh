@@ -162,6 +162,9 @@ rm -rf "$APP/Contents/Resources/runtime" "$APP/Contents/MacOS/runtime"
 cp -R packaging/runtime_dl/python "$APP/Contents/Resources/runtime"
 
 echo "==> [4b/5] 附带 SRT + Node 运行时"
+# sandbox_runtime is only the staging copy. The fetcher reuses packaging/cache
+# (or STAFFDECK_PACKAGING_CACHE) when the pinned Node archive and SRT bundle
+# still validate. See packaging/BUILD.md.
 rm -rf packaging/sandbox_runtime "$APP/Contents/Resources/sandbox"
 python3 packaging/fetch_sandbox_runtime.py packaging/sandbox_runtime
 cp -R packaging/sandbox_runtime "$APP/Contents/Resources/sandbox"

@@ -109,6 +109,9 @@ packaging/out/staffdeck/staffdeck --packaging-smoke
 rm -rf packaging/out/staffdeck/runtime
 cp -a "$RUNTIME_DL_ROOT/python" packaging/out/staffdeck/runtime
 echo "==> [5b/8] Bundling SRT + Node runtime"
+# sandbox_runtime is only the staging copy. fetch_sandbox_runtime.py reuses
+# packaging/cache (or STAFFDECK_PACKAGING_CACHE) when the pinned Node archive
+# and SRT bundle still validate. See packaging/BUILD.md.
 rm -rf packaging/sandbox_runtime packaging/out/staffdeck/sandbox
 python3 packaging/fetch_sandbox_runtime.py packaging/sandbox_runtime
 cp -a packaging/sandbox_runtime packaging/out/staffdeck/sandbox
