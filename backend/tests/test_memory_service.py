@@ -1,8 +1,21 @@
+from datetime import timedelta
+
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.api.memories import clear_my_memories, list_memories
-from app.db.models import AgentProfile, ChatSession, MemoryRecord, Message, ModelConfig, Tenant, User
+from app.db.models import (
+    AgentProfile,
+    ChatSession,
+    EnterprisePerson,
+    MemoryRecord,
+    Message,
+    ModelConfig,
+    PersonContact,
+    Tenant,
+    User,
+    utc_now,
+)
 from app.llm.client import LLMClient
 from app.memory.jobs import _conversation_messages_for_turn
 from app.memory.service import MemoryService, memory_rows_for_read
@@ -241,6 +254,285 @@ def test_context_memories_returns_all_supported_memories_without_model_selection
         rows = MemoryService(db).context_memories("tenant_demo", "user_demo")
 
     assert {row.content for row in rows} == {"memory-0", "memory-1", "memory-2"}
+
+
+def test_same_contact_recalls_preferred_name_for_a_different_user() -> None:
+    with _test_session() as db:
+        db.add(
+            PersonContact(
+                id="pcontact_org",
+                tenant_id="tenant_demo",
+                kind="org",
+                display_name="陈龙",
+                status="active",
+                web_user_id="user_web",
+                channel_user_id="user_shadow",
+            )
+        )
+        db.add(
+            PersonContact(
+                id="pcontact_other",
+                tenant_id="tenant_demo",
+                kind="org",
+                display_name="别人",
+                status="active",
+            )
+        )
+        newer = utc_now()
+        db.add(
+            MemoryRecord(
+                tenant_id="tenant_demo",
+                user_id="user_web",
+                contact_id="pcontact_org",
+                kind="profile",
+                content="龙哥",
+                metadata_json={"key": "preferred_name"},
+                updated_at=newer - timedelta(hours=2),
+            )
+        )
+        db.add(
+            MemoryRecord(
+                tenant_id="tenant_demo",
+                user_id="user_web",
+                contact_id="pcontact_other",
+                kind="profile",
+                content="别的称呼",
+                metadata_json={"key": "preferred_name"},
+                updated_at=newer,
+            )
+        )
+        db.add(
+            MemoryRecord(
+                tenant_id="tenant_demo",
+                user_id="user_stranger",
+                kind="profile",
+                content="路人",
+                metadata_json={"key": "preferred_name"},
+            )
+        )
+        db.commit()
+
+        shared = MemoryService(db).context_memories(
+            "tenant_demo",
+            "user_shadow",
+            contact_id="pcontact_org",
+        )
+        own_channel_only = MemoryService(db).context_memories("tenant_demo", "user_shadow")
+        web_without_contact = MemoryService(db).context_memories("tenant_demo", "user_web")
+
+    assert [row.content for row in shared] == ["龙哥"]
+    assert own_channel_only == []
+    # 不带 contact 时仍按 user_id 去重，同一用户只留最新称呼。
+    assert [row.content for row in web_without_contact] == ["别的称呼"]
+
+
+def test_org_recall_includes_name_left_on_unmerged_archived_personal() -> None:
+    with _test_session() as db:
+        db.add(
+            EnterprisePerson(
+                id="person_chen",
+                tenant_id="tenant_demo",
+                name="陈龙",
+                status="active",
+                primary_user_id="user_web",
+                wecom_userid="chen",
+            )
+        )
+        db.add(
+            PersonContact(
+                id="pcontact_org",
+                tenant_id="tenant_demo",
+                kind="org",
+                display_name="陈龙",
+                status="active",
+                enterprise_person_id="person_chen",
+                wecom_userid="chen",
+                wecom_corp_id="ww",
+                channel_user_id="user_shadow",
+            )
+        )
+        db.add(
+            PersonContact(
+                id="pcontact_old",
+                tenant_id="tenant_demo",
+                kind="personal",
+                display_name="旧网页档",
+                status="archived",
+                web_user_id="user_web",
+            )
+        )
+        db.add(
+            MemoryRecord(
+                tenant_id="tenant_demo",
+                user_id="user_web",
+                contact_id="pcontact_old",
+                kind="profile",
+                content="龙哥",
+                metadata_json={"key": "preferred_name"},
+            )
+        )
+        db.commit()
+
+        shared = MemoryService(db).context_memories(
+            "tenant_demo",
+            "user_shadow",
+            contact_id="pcontact_org",
+        )
+
+    assert [row.content for row in shared] == ["龙哥"]
+
+
+def test_preferred_name_on_merged_personal_is_recalled_from_org() -> None:
+    with _test_session() as db:
+        db.add(
+            PersonContact(
+                id="pcontact_org",
+                tenant_id="tenant_demo",
+                kind="org",
+                display_name="陈龙",
+                status="active",
+                web_user_id="user_web",
+                channel_user_id="user_shadow",
+            )
+        )
+        db.add(
+            PersonContact(
+                id="pcontact_old",
+                tenant_id="tenant_demo",
+                kind="personal",
+                display_name="旧档",
+                status="archived",
+                merged_into_id="pcontact_org",
+            )
+        )
+        db.add(
+            MemoryRecord(
+                tenant_id="tenant_demo",
+                user_id="user_web",
+                contact_id="pcontact_old",
+                kind="profile",
+                content="龙哥",
+                metadata_json={"key": "preferred_name"},
+            )
+        )
+        db.commit()
+
+        shared = MemoryService(db).context_memories(
+            "tenant_demo",
+            "user_shadow",
+            contact_id="pcontact_org",
+        )
+
+    assert [row.content for row in shared] == ["龙哥"]
+
+
+def test_unstamped_preferred_name_is_recalled_for_the_contacts_users() -> None:
+    with _test_session() as db:
+        db.add(
+            PersonContact(
+                id="pcontact_org",
+                tenant_id="tenant_demo",
+                kind="org",
+                display_name="陈龙",
+                status="active",
+                web_user_id="user_web",
+                channel_user_id="user_shadow",
+            )
+        )
+        db.add(
+            MemoryRecord(
+                tenant_id="tenant_demo",
+                user_id="user_web",
+                kind="profile",
+                content="龙哥",
+                metadata_json={"key": "preferred_name"},
+            )
+        )
+        db.commit()
+
+        shared = MemoryService(db).context_memories(
+            "tenant_demo",
+            "user_shadow",
+            contact_id="pcontact_org",
+        )
+
+    assert [row.content for row in shared] == ["龙哥"]
+
+
+def test_capture_updates_preferred_name_across_users_on_the_same_contact(monkeypatch) -> None:
+    def fake_init(self, model_config):
+        return None
+
+    def fake_generate_json(self, system_prompt, payload):
+        assert "龙哥" in payload["existing_memories"]
+        return {
+            "memories": [
+                {
+                    "operation": "upsert",
+                    "kind": "profile",
+                    "key": "preferred_name",
+                    "content": "龙嫂",
+                    "importance": 0.95,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_json", fake_generate_json)
+
+    with _test_session() as db:
+        db.add(
+            PersonContact(
+                id="pcontact_org",
+                tenant_id="tenant_demo",
+                kind="org",
+                display_name="陈龙",
+                status="active",
+                web_user_id="user_web",
+                channel_user_id="user_shadow",
+            )
+        )
+        db.add(
+            MemoryRecord(
+                tenant_id="tenant_demo",
+                user_id="user_web",
+                contact_id="pcontact_org",
+                kind="profile",
+                content="龙哥",
+                metadata_json={"key": "preferred_name"},
+            )
+        )
+        db.commit()
+
+        MemoryService(db).capture_turn(
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id="user_shadow",
+                message="叫我龙嫂",
+            ),
+            ChatSession(
+                id="session_wecom",
+                tenant_id="tenant_demo",
+                user_id="user_shadow",
+                contact_id="pcontact_org",
+            ),
+            StepAgentResult(),
+            None,
+            ModelConfig(tenant_id="tenant_demo", name="demo", api_key_encrypted="", model="demo"),
+            [{"role": "user", "content": "叫我龙嫂"}],
+        )
+        db.commit()
+        rows = list(db.exec(select(MemoryRecord).where(MemoryRecord.kind == "profile")).all())
+        recalled = MemoryService(db).context_memories(
+            "tenant_demo",
+            "user_web",
+            contact_id="pcontact_org",
+        )
+
+    assert len(rows) == 1
+    assert rows[0].content == "龙嫂"
+    assert rows[0].contact_id == "pcontact_org"
+    assert [row.content for row in recalled] == ["龙嫂"]
 
 
 def test_memory_rows_for_read_deduplicates_by_structured_key_without_text_filtering() -> None:

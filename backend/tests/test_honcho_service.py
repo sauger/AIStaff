@@ -20,6 +20,8 @@ class FakeHoncho:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.representation = "喜欢上午沟通"
+        self.representations: dict[str, str] = {}
+        self.peer_errors: dict[str, Exception] = {}
         self.error: Exception | None = None
 
     def ensure_workspace(self, workspace_id: str, metadata: dict | None = None) -> None:
@@ -50,8 +52,12 @@ class FakeHoncho:
 
     def fetch_representation(self, workspace_id: str, peer_id: str, *, timeout_seconds: float) -> str:
         self.calls.append(("representation", workspace_id, peer_id, timeout_seconds))
+        if peer_id in self.peer_errors:
+            raise self.peer_errors[peer_id]
         if self.error:
             raise self.error
+        if peer_id in self.representations:
+            return self.representations[peer_id]
         return self.representation
 
 
@@ -363,6 +369,201 @@ def test_assistant_dual_write_uses_agent_peer() -> None:
 
     message = next(call for call in client.calls if call[0] == "message")
     assert message[3] == "agent_agent_xyz"
+
+
+def test_representation_and_dual_write_share_the_contact_peer() -> None:
+    from app.honcho.jobs import run_honcho_dual_write_job
+
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    session.user_id = "user_shadow"
+    session.contact_id = "pcontact_org"
+    db.add(session)
+    db.commit()
+    client = FakeHoncho()
+    queued: list[dict] = []
+    request = _request(user_id="user_shadow")
+
+    schedule_honcho_message(
+        db,
+        request,
+        session,
+        role="user",
+        content="叫我龙哥",
+        message_id="msg_user",
+        settings=_settings(),
+        enqueue=queued.append,
+    )
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [{"kind": "profile", "content": "龙哥"}],
+        settings=_settings(),
+        client=client,
+    )
+    assert queued[0]["contact_id"] == "pcontact_org"
+    assert queued[0]["user_id"] == "user_shadow"
+    assert client.calls[-1] == (
+        "representation",
+        "tenant_tenant_demo",
+        "contact_pcontact_org",
+        0.2,
+    )
+    assert memories[0]["content"] == "龙哥"
+
+    run_honcho_dual_write_job(queued[0], settings=_settings(), client=client)
+
+    message = next(call for call in client.calls if call[0] == "message")
+    peers = [call for call in client.calls if call[0] == "peer"]
+    assert message[3] == "contact_pcontact_org"
+    assert [call[2] for call in peers] == ["contact_pcontact_org", "agent_agent_xyz"]
+    assert peers[0][3] == {"staff_peer": "contact:pcontact_org"}
+    assert any(
+        call[0] == "workspace" and call[1] == "tenant_tenant_demo" for call in client.calls
+    )
+    assert "user_shadow" not in message[3]
+    db.close()
+
+
+def _contact_request(db: Session, session: ChatSession) -> ChatTurnRequest:
+    session.user_id = "user_shadow"
+    session.contact_id = "pcontact_org"
+    db.add(session)
+    db.commit()
+    return _request(user_id="user_shadow")
+
+
+def test_cold_contact_peer_falls_back_to_legacy_user_representation() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    request = _contact_request(db, session)
+    client = FakeHoncho()
+    client.representations["contact_pcontact_org"] = "  "
+    client.representations["user_user_shadow"] = "迁移前喜欢上午沟通"
+
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [{"kind": "fact", "content": "本地事实"}],
+        settings=_settings(),
+        client=client,
+    )
+
+    reads = [call for call in client.calls if call[0] == "representation"]
+    assert [call[2] for call in reads] == ["contact_pcontact_org", "user_user_shadow"]
+    assert memories[0]["content"] == "本地事实"
+    assert "迁移前喜欢上午沟通" in str(memories[1]["content"])
+    db.close()
+
+
+def test_missing_contact_peer_falls_back_to_legacy_user_representation() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    request = _contact_request(db, session)
+    client = FakeHoncho()
+    client.peer_errors["contact_pcontact_org"] = HonchoRequestError(404, "missing")
+    client.representations["user_user_shadow"] = "迁移前喜欢上午沟通"
+
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [],
+        settings=_settings(),
+        client=client,
+    )
+
+    reads = [call for call in client.calls if call[0] == "representation"]
+    assert [call[2] for call in reads] == ["contact_pcontact_org", "user_user_shadow"]
+    assert "迁移前喜欢上午沟通" in str(memories[0]["content"])
+    db.close()
+
+
+def test_warm_contact_peer_does_not_read_the_legacy_user() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    request = _contact_request(db, session)
+    client = FakeHoncho()
+    client.representations["contact_pcontact_org"] = "新画像"
+    client.representations["user_user_shadow"] = "旧画像"
+
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [],
+        settings=_settings(),
+        client=client,
+    )
+
+    reads = [call for call in client.calls if call[0] == "representation"]
+    assert [call[2] for call in reads] == ["contact_pcontact_org"]
+    assert "新画像" in str(memories[0]["content"])
+    assert "旧画像" not in str(memories[0]["content"])
+    db.close()
+
+
+def test_contact_peer_timeout_does_not_read_the_legacy_user() -> None:
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    request = _contact_request(db, session)
+    client = FakeHoncho()
+    client.peer_errors["contact_pcontact_org"] = HonchoTimeout("slow")
+    client.representations["user_user_shadow"] = "旧画像"
+
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [{"kind": "fact", "content": "本地事实"}],
+        settings=_settings(),
+        client=client,
+    )
+
+    reads = [call for call in client.calls if call[0] == "representation"]
+    assert [call[2] for call in reads] == ["contact_pcontact_org"]
+    assert memories == [{"kind": "fact", "content": "本地事实"}]
+    db.close()
+
+
+def test_dual_write_stays_on_contact_peer_when_read_uses_legacy_user() -> None:
+    from app.honcho.jobs import run_honcho_dual_write_job
+
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    request = _contact_request(db, session)
+    client = FakeHoncho()
+    client.representations["contact_pcontact_org"] = ""
+    client.representations["user_user_shadow"] = "迁移前喜欢上午沟通"
+    queued: list[dict] = []
+
+    schedule_honcho_message(
+        db,
+        request,
+        session,
+        role="user",
+        content="叫我龙哥",
+        settings=_settings(),
+        enqueue=queued.append,
+    )
+    inject_honcho_representation(
+        db,
+        request,
+        session,
+        [],
+        settings=_settings(),
+        client=client,
+    )
+    run_honcho_dual_write_job(queued[0], settings=_settings(), client=client)
+
+    peers = [call[2] for call in client.calls if call[0] == "peer"]
+    message = next(call for call in client.calls if call[0] == "message")
+    assert peers == ["contact_pcontact_org", "agent_agent_xyz"]
+    assert message[3] == "contact_pcontact_org"
+    assert "user_user_shadow" not in peers
+    db.close()
 
 
 def test_inject_appends_labeled_portrait_and_keeps_local_memory() -> None:

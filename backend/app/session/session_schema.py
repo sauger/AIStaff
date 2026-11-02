@@ -213,7 +213,7 @@ class SessionPublic(BaseModel):
 
 
 class TurnSpeaker(BaseModel):
-    """本轮对话用户。peer 与会话归属只用 user_id，不用渠道外部 id。
+    """本轮对话用户。Honcho peer 有 contact 时用 contact_id，否则用 user_id。
 
     roster_* 只在本轮已解析、并查过企业花名册之后填写。姓名进模型上下文，
     不进消息 metadata，也不携带手机号或企微 userid。

@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import and_, or_
 from sqlmodel import Session, select
 
 from app import paths
-from app.db.models import ChatSession, MemoryRecord, ModelConfig, Tool, User, utc_now
+from app.contacts.identity import memory_contact_ids
+from app.db.models import ChatSession, MemoryRecord, ModelConfig, PersonContact, Tool, User, utc_now
 from app.llm import LLMClient
 from app.observability.spans import llm_operation
 from app.session.session_schema import ChatTurnRequest, StepAgentResult
+from app.session.turn_speaker import portrait_contact_id
 from app.tools.tool_schema import ToolResult
 
 
@@ -18,6 +22,15 @@ PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "memory_extract
 MEMORY_SOURCE = "model_memory_extractor"
 PROFILE_NAME_KEY = "preferred_name"
 ALLOWED_MEMORY_KINDS = {"profile", "preference", "fact"}
+
+
+@dataclass(frozen=True)
+class _ContactMemoryScope:
+    """Recall and upsert share one contact, including rows merged into it."""
+
+    contact_id: str
+    contact_ids: tuple[str, ...]
+    linked_user_ids: tuple[str, ...]
 
 
 class MemoryService:
@@ -31,9 +44,15 @@ class MemoryService:
         query: str,
         limit: int | None = None,
         agent_id: str | None = None,
+        contact_id: str | None = None,
     ) -> list[MemoryRecord]:
         del query, limit
-        return self.context_memories(tenant_id, user_id, agent_id=agent_id)
+        return self.context_memories(
+            tenant_id,
+            user_id,
+            agent_id=agent_id,
+            contact_id=contact_id,
+        )
 
     def context_memories(
         self,
@@ -41,6 +60,7 @@ class MemoryService:
         user_id: str,
         *,
         agent_id: str | None = None,
+        contact_id: str | None = None,
     ) -> list[MemoryRecord]:
         return [
             row
@@ -49,6 +69,7 @@ class MemoryService:
                 user_id,
                 limit=None,
                 agent_id=agent_id,
+                contact_id=contact_id,
             )
             if row.kind in ALLOWED_MEMORY_KINDS
         ]
@@ -68,6 +89,7 @@ class MemoryService:
             return []
 
         agent_id = session.agent_id
+        contact_id = portrait_contact_id(request, session) or None
         user = self.db.get(User, request.user_id)
         username = user.username if user else request.user_id
         existing_rows = self._list_user_memories(
@@ -76,6 +98,7 @@ class MemoryService:
             limit=30,
             normalize=False,
             agent_id=agent_id,
+            contact_id=contact_id,
         )
         with llm_operation("memory.capture", existing_count=len(existing_rows)):
             raw_delta = LLMClient(model_config).generate_json(
@@ -98,6 +121,7 @@ class MemoryService:
                     update["kind"],
                     update["key"],
                     agent_id=agent_id,
+                    contact_id=contact_id,
                 )
                 continue
             records.append(
@@ -117,6 +141,7 @@ class MemoryService:
                         "agent_id": agent_id,
                     },
                     agent_id=agent_id,
+                    contact_id=contact_id,
                 )
             )
 
@@ -129,16 +154,15 @@ class MemoryService:
         limit: int | None = 80,
         normalize: bool = True,
         agent_id: str | None = None,
+        contact_id: str | None = None,
     ) -> list[MemoryRecord]:
-        statement = (
-            select(MemoryRecord)
-            .where(
-                MemoryRecord.tenant_id == tenant_id,
-                MemoryRecord.user_id == user_id,
-                MemoryRecord.kind != "conversation",
-            )
-            .order_by(MemoryRecord.updated_at.desc())
+        scope = self._contact_scope(tenant_id, user_id, contact_id)
+        statement = select(MemoryRecord).where(
+            MemoryRecord.tenant_id == tenant_id,
+            MemoryRecord.kind != "conversation",
         )
+        statement = statement.where(self._owner_filter(user_id, scope))
+        statement = statement.order_by(MemoryRecord.updated_at.desc())
         if limit is not None:
             statement = statement.limit(limit * 5 if agent_id else limit)
         rows = list(self.db.exec(statement).all())
@@ -146,7 +170,12 @@ class MemoryService:
             rows = [row for row in rows if self._memory_matches_agent(row, agent_id)]
         if limit is not None:
             rows = rows[:limit]
-        return memory_rows_for_read(rows) if normalize else rows
+        if not normalize:
+            return rows
+        return memory_rows_for_read(
+            rows,
+            scope_contact_id=scope.contact_id if scope is not None else None,
+        )
 
     def _upsert_keyed_memory(
         self,
@@ -160,8 +189,18 @@ class MemoryService:
         importance: float,
         metadata: dict[str, Any],
         agent_id: str | None = None,
+        contact_id: str | None = None,
     ) -> MemoryRecord:
-        existing, duplicates = self._find_keyed_memory_candidates(tenant_id, user_id, kind, key, agent_id=agent_id)
+        scope = self._contact_scope(tenant_id, user_id, contact_id)
+        existing, duplicates = self._find_keyed_memory_candidates(
+            tenant_id,
+            user_id,
+            kind,
+            key,
+            agent_id=agent_id,
+            contact_id=contact_id,
+            scope=scope,
+        )
         now = utc_now()
         if existing:
             existing.content = content[:1200]
@@ -183,7 +222,7 @@ class MemoryService:
                 metadata_json=metadata,
             )
             self.db.add(record)
-        self._stamp_contact_id(record, session_id)
+        self._stamp_contact_id(record, session_id, scope.contact_id if scope is not None else None)
 
         for duplicate in duplicates:
             if duplicate.id != record.id:
@@ -198,8 +237,16 @@ class MemoryService:
         kind: str,
         key: str,
         agent_id: str | None = None,
+        contact_id: str | None = None,
     ) -> None:
-        existing, duplicates = self._find_keyed_memory_candidates(tenant_id, user_id, kind, key, agent_id=agent_id)
+        existing, duplicates = self._find_keyed_memory_candidates(
+            tenant_id,
+            user_id,
+            kind,
+            key,
+            agent_id=agent_id,
+            contact_id=contact_id,
+        )
         for row in [existing, *duplicates]:
             if row:
                 self.db.delete(row)
@@ -211,18 +258,17 @@ class MemoryService:
         kind: str,
         key: str,
         agent_id: str | None = None,
+        contact_id: str | None = None,
+        scope: _ContactMemoryScope | None = None,
     ) -> tuple[MemoryRecord | None, list[MemoryRecord]]:
-        rows = list(
-            self.db.exec(
-                select(MemoryRecord)
-                .where(
-                    MemoryRecord.tenant_id == tenant_id,
-                    MemoryRecord.user_id == user_id,
-                    MemoryRecord.kind == kind,
-                )
-                .order_by(MemoryRecord.updated_at.desc())
-            ).all()
+        if scope is None and contact_id:
+            scope = self._contact_scope(tenant_id, user_id, contact_id)
+        statement = select(MemoryRecord).where(
+            MemoryRecord.tenant_id == tenant_id,
+            MemoryRecord.kind == kind,
         )
+        statement = statement.where(self._owner_filter(user_id, scope))
+        rows = list(self.db.exec(statement.order_by(MemoryRecord.updated_at.desc())).all())
         if agent_id:
             rows = [row for row in rows if self._memory_matches_agent(row, agent_id)]
         candidates = [row for row in rows if _memory_matches_key(row, key)]
@@ -285,12 +331,65 @@ class MemoryService:
         self.db.add(record)
         return record
 
-    def _stamp_contact_id(self, record: MemoryRecord, session_id: str | None) -> None:
+    def _stamp_contact_id(
+        self,
+        record: MemoryRecord,
+        session_id: str | None,
+        contact_id: str | None = None,
+    ) -> None:
+        if contact_id:
+            record.contact_id = contact_id
+            return
         if record.contact_id or not session_id:
             return
         session = self.db.get(ChatSession, session_id)
         if session is not None and session.contact_id:
             record.contact_id = session.contact_id
+
+    def _contact_scope(
+        self,
+        tenant_id: str,
+        user_id: str,
+        contact_id: str | None,
+    ) -> _ContactMemoryScope | None:
+        raw_id = str(contact_id or "").strip()
+        if not raw_id:
+            return None
+        scoped = memory_contact_ids(self.db, tenant_id, raw_id)
+        if scoped is None:
+            return None
+        canonical_id, contact_ids = scoped
+        linked: set[str] = set()
+        current_user_id = str(user_id or "").strip()
+        if current_user_id:
+            linked.add(current_user_id)
+        for scoped_id in contact_ids:
+            row = self.db.get(PersonContact, scoped_id)
+            if row is None:
+                continue
+            if row.web_user_id:
+                linked.add(row.web_user_id)
+            if row.channel_user_id:
+                linked.add(row.channel_user_id)
+        return _ContactMemoryScope(
+            contact_id=canonical_id,
+            contact_ids=contact_ids,
+            linked_user_ids=tuple(sorted(linked)),
+        )
+
+    @staticmethod
+    def _owner_filter(user_id: str, scope: _ContactMemoryScope | None):
+        if scope is None:
+            return MemoryRecord.user_id == user_id
+        filters = [MemoryRecord.contact_id.in_(scope.contact_ids)]
+        if scope.linked_user_ids:
+            filters.append(
+                and_(
+                    MemoryRecord.contact_id.is_(None),
+                    MemoryRecord.user_id.in_(scope.linked_user_ids),
+                )
+            )
+        return or_(*filters)
 
     def _memory_matches_agent(self, record: MemoryRecord, agent_id: str | None) -> bool:
         if memory_matches_agent(record, agent_id):
@@ -326,11 +425,17 @@ def _memories_for_model(records: list[MemoryRecord]) -> str:
     return "\n".join(lines)
 
 
-def memory_rows_for_read(rows: list[MemoryRecord]) -> list[MemoryRecord]:
+def memory_rows_for_read(
+    rows: list[MemoryRecord],
+    *,
+    scope_contact_id: str | None = None,
+) -> list[MemoryRecord]:
     visible: list[MemoryRecord] = []
     seen_keys: set[tuple[str, str, str | None, str]] = set()
     for row in rows:
-        dedupe_key = (row.user_id, row.kind, memory_agent_id(row), _read_dedupe_key(row))
+        # 无 contact 范围时仍按 user_id 去重，保持原来的用户记忆行为。
+        owner = scope_contact_id or row.user_id
+        dedupe_key = (owner, row.kind, memory_agent_id(row), _read_dedupe_key(row))
         if dedupe_key in seen_keys:
             continue
         seen_keys.add(dedupe_key)

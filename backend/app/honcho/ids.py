@@ -1,8 +1,9 @@
 """Map StaffDeck identities onto Honcho resource names.
 
-Logical ids follow the design: ``tenant:{id}``, ``user:{User.id}``,
-``agent:{agent_id}``, ``chat:{ChatSession.id}``. Honcho resource names only
-allow ``[A-Za-z0-9_-]`` and reject ``:``, so the wire id replaces that single
+Logical ids follow the design: ``tenant:{id}``, ``contact:{contact_id}`` when
+the turn has a contact, otherwise ``user:{User.id}``, plus ``agent:{agent_id}``
+and ``chat:{ChatSession.id}``. Honcho resource names only allow
+``[A-Za-z0-9_-]`` and reject ``:``, so the wire id replaces that single
 separator with ``_``. A raw id that already contains ``:`` is rejected instead
 of being folded into another peer. Channel external ids never enter the wire id.
 """
@@ -32,6 +33,9 @@ class HonchoIdentity:
     user_peer_metadata: dict[str, str]
     agent_peer_metadata: dict[str, str]
     session_metadata: dict[str, str]
+    # 迁移前的 user peer。只给 representation 回读，写入不再使用。
+    legacy_user_peer_logical: str | None = None
+    legacy_user_peer_id: str | None = None
 
 
 def wire_id(logical: str) -> str:
@@ -56,11 +60,18 @@ def build_honcho_identity(
     channel: str | None = None,
     account_scope: str | None = None,
     external_user_id: str | None = None,
+    contact_id: str | None = None,
 ) -> HonchoIdentity:
     workspace_logical = f"{workspace_prefix}{tenant_id}"
-    # TODO(P1): peer 从 user:{User.id} 改为 contact:{contact_id}。P0 只把 contact_id
-    # 挂在会话和本地记忆上，Honcho 仍用 User.id，避免改名打断已有画像。
-    user_peer_logical = f"user:{user_id}"
+    # 有联系人时网页 User 与渠道影子 User 共用一个 peer。没有联系人时仍用 User.id。
+    resolved_contact_id = str(contact_id or "").strip()
+    legacy_user_peer_logical = None
+    legacy_user_peer_id = None
+    if resolved_contact_id:
+        user_peer_logical = f"contact:{resolved_contact_id}"
+        legacy_user_peer_logical, legacy_user_peer_id = _legacy_user_peer(user_id)
+    else:
+        user_peer_logical = f"user:{user_id}"
     agent_peer_logical = f"agent:{agent_id}"
     session_logical = f"chat:{session_id}"
     channel_metadata = _channel_metadata(
@@ -80,7 +91,19 @@ def build_honcho_identity(
         user_peer_metadata={"staff_peer": user_peer_logical, **channel_metadata},
         agent_peer_metadata={"staff_peer": agent_peer_logical},
         session_metadata={"staff_session": session_logical, **channel_metadata},
+        legacy_user_peer_logical=legacy_user_peer_logical,
+        legacy_user_peer_id=legacy_user_peer_id,
     )
+
+
+def _legacy_user_peer(user_id: str) -> tuple[str | None, str | None]:
+    """旧 ``user:{User.id}`` peer。id 不合法时放弃回读，不影响 contact peer。"""
+
+    logical = f"user:{user_id}"
+    try:
+        return logical, wire_id(logical)
+    except HonchoIdError:
+        return None, None
 
 
 def _channel_metadata(
