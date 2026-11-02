@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from app.contacts.identity import ExplicitWebLinkConflict
 from app.db.models import (
     ORG_ROOT_PARENT_ID,
     AgentDepartmentAssignment,
@@ -196,9 +197,7 @@ def create_person(
         wecom_userid=wecom_userid,
     )
     db.add(row)
-    from app.contacts.identity import sync_org_contact_from_person
-
-    sync_org_contact_from_person(db, row)
+    _sync_person_contact(db, row)
     _commit(db)
     db.refresh(row)
     return _with_wecom_notice(_people_reads(db, tenant_id, [row])[0], notice)
@@ -231,9 +230,7 @@ def update_person(
     row.wecom_userid = wecom_userid
     row.updated_at = utc_now()
     db.add(row)
-    from app.contacts.identity import sync_org_contact_from_person
-
-    sync_org_contact_from_person(db, row)
+    _sync_person_contact(db, row)
     _commit(db)
     db.refresh(row)
     return _with_wecom_notice(_people_reads(db, tenant_id, [row])[0], notice)
@@ -1125,6 +1122,75 @@ def _require_company_agent(db: Session, tenant_id: str, agent_id: str) -> AgentP
     if _agent_hidden(row):
         raise OrgError("ORG_AGENT_NOT_FOUND", "数字员工不存在。", status_code=404)
     return row
+
+
+def _sync_person_contact(db: Session, person: EnterprisePerson) -> None:
+    """同步 org 联系人。网页登录被占用时不提交这次人员保存。"""
+
+    from app.contacts.identity import apply_explicit_web_user, sync_org_contact_from_person
+
+    sync_org_contact_from_person(db, person)
+    conflict = apply_explicit_web_user(db, person)
+    if conflict is None:
+        return
+    tenant_id = person.tenant_id
+    org_contact_id = conflict.org_contact_id
+    holder_id = conflict.holder_id
+    db.rollback()
+    _keep_web_link_suggestion(db, tenant_id, org_contact_id, holder_id, conflict)
+    raise _web_link_error(conflict)
+
+
+def _keep_web_link_suggestion(
+    db: Session,
+    tenant_id: str,
+    org_contact_id: str | None,
+    holder_id: str,
+    conflict: ExplicitWebLinkConflict,
+) -> None:
+    """人员保存回滚后，两条都还在的联系人仍留下合并建议。"""
+
+    from app.contacts.identity import record_merge_suggestion
+    from app.db.models import PersonContact
+
+    if conflict.kind != "taken":
+        return
+    if not org_contact_id or not holder_id or org_contact_id == holder_id:
+        return
+    org = db.get(PersonContact, org_contact_id)
+    holder = db.get(PersonContact, holder_id)
+    if (
+        org is None
+        or holder is None
+        or org.tenant_id != tenant_id
+        or holder.tenant_id != tenant_id
+    ):
+        return
+    record_merge_suggestion(
+        db,
+        tenant_id=tenant_id,
+        left=holder,
+        right=org,
+        reason="same_web_user",
+    )
+    db.commit()
+
+
+def _web_link_error(conflict: ExplicitWebLinkConflict) -> OrgError:
+    kind = conflict.kind
+    name = conflict.holder_name.strip()
+    if kind == "taken":
+        who = f"（{name}）" if name else ""
+        return OrgError(
+            "ORG_WEB_USER_CONTACT_TAKEN",
+            f"该网页账号已关联其他联系人{who}，不能挂到这名成员。请先合并联系人后再保存。",
+            status_code=409,
+        )
+    return OrgError(
+        "ORG_WEB_USER_NOT_LINKED",
+        "没能把网页登录账号挂到这名成员的联系人，请稍后重试。",
+        status_code=409,
+    )
 
 
 def _roster_account(

@@ -6,14 +6,17 @@
 网页登录账号的路径。
 
 写入规则：
-- 本租户里这个 userid 恰好对应一个说话人：保存时把 ``primary_user_id``
-  直接改成该用户，可以覆盖已有的网页主账号。不必先清空关联登录账号。
+- 成员表单明确选择了另一个登录账号时，保存保留该 ``primary_user_id``。
+  企微说话人不再覆盖这个选择。网页登录写在联系人的 ``web_user_id``。
+- 没有选择登录账号、且本租户里这个 userid 恰好对应一个企微说话人：
+  保存时把 ``primary_user_id`` 改成该说话人，花名册才能按影子账号命中。
 - 说话人已经是当前主账号，或 ChannelIdentity 已指向该网页账号：主账号不变。
 - 清除 userid 时，已有的主账号保留，避免花名册掉线。
 - 还没有 ChannelIdentity：只记下 userid。之后对方第一次私聊时，
   若人员还没有主账号，再补上影子用户。入站不覆盖已有主账号。
 - 同一 userid 在不同企业/应用范围指向不同用户：拒绝，不猜。
 - 不改 ``ChannelIdentity.staffdeck_user_id``。绑定码仍负责改挂渠道身份。
+  联系人上的网页登录不是企微说话人，不参与这里的改挂。
 """
 
 from __future__ import annotations
@@ -69,8 +72,8 @@ def choose_roster_primary(
 ) -> tuple[str | None, str | None]:
     """决定花名册主账号，以及要不要提示「已改挂」。
 
-    返回 ``(primary_user_id, notice)``。有唯一说话人时直接改挂，
-    即使请求里还带着另一个网页主账号。
+    返回 ``(primary_user_id, notice)``。请求里明确选了另一个登录账号时保留它。
+    只有没选登录账号时，才把唯一企微说话人写成主账号。
     """
 
     clearing_wecom = bool(existing_wecom_userid) and not stored_wecom_userid
@@ -81,11 +84,13 @@ def choose_roster_primary(
         ):
             return requested_primary_user_id, None
         return existing_primary_user_id, None
+    explicit_other = bool(
+        requested_primary_user_id and requested_primary_user_id != speaker_user_id
+    )
+    if explicit_other:
+        return requested_primary_user_id, None
     if speaker_user_id:
-        replaced_other = (
-            existing_primary_user_id not in {None, speaker_user_id}
-            or requested_primary_user_id not in {None, speaker_user_id}
-        )
+        replaced_other = existing_primary_user_id not in {None, speaker_user_id}
         notice = REHANG_NOTICE if replaced_other else None
         return speaker_user_id, notice
     return requested_primary_user_id, None
@@ -243,14 +248,20 @@ def _wecom_speakers(db: Session, tenant_id: str, userid: str) -> list[User]:
         )
     ).all()
     for row in contact_rows:
-        for user_id in (row.channel_user_id, row.web_user_id):
-            if not user_id or user_id in seen:
-                continue
-            contact_user = db.get(User, user_id)
-            if contact_user is None or contact_user.tenant_id != tenant_id:
-                continue
-            seen.add(contact_user.id)
-            speakers.append(contact_user)
+        # 网页登录只在 web_user_id。channel_user_id 里的网页账号同样是登录关联，
+        # 不能当成第二个企微说话人，否则会和影子会话冲突并把主账号改挂回去。
+        user_id = row.channel_user_id
+        if not user_id or user_id in seen:
+            continue
+        contact_user = db.get(User, user_id)
+        if (
+            contact_user is None
+            or contact_user.tenant_id != tenant_id
+            or contact_user.source == "web"
+        ):
+            continue
+        seen.add(contact_user.id)
+        speakers.append(contact_user)
     return speakers
 
 

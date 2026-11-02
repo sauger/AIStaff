@@ -12,7 +12,15 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.channels.service_identity import resolve_or_provision_user
-from app.db.models import ChannelIdentity, EnterprisePerson, Tenant, User
+from app.contacts.identity import ensure_web_contact, ensure_wecom_contact
+from app.db.models import (
+    ChannelIdentity,
+    ContactMergeSuggestion,
+    EnterprisePerson,
+    PersonContact,
+    Tenant,
+    User,
+)
 from app.org.api import get_people, patch_person, post_person
 from app.org.schema import EnterprisePersonWriteRequest
 from app.org.speaker_roster import lookup_speaker_roster
@@ -154,13 +162,58 @@ def test_create_links_existing_wecom_shadow_and_roster_matches() -> None:
         assert db.get(User, shadow.id).display_name == "陈龙"
 
 
-def test_update_rehangs_web_primary_onto_unique_wecom_speaker() -> None:
+def test_explicit_web_primary_stays_when_wecom_speaker_exists() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _owner, admin = _seed(db)
+        shadow = _shadow(db, display_name="企业微信用户 77898")
+        created = post_person(
+            _person(name="陈龙", wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert created.primary_user_id == shadow.id
+
+        updated = patch_person(
+            created.id,
+            _person(name="陈龙", primary_user_id=admin.id, wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert updated.primary_user_id == admin.id
+        assert updated.wecom_userid == "18016077898"
+        assert updated.wecom_link_notice is None
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=admin.id).name == "陈龙"
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id).status == "unmatched"
+        assert _identity(db, shadow.id).staffdeck_user_id == shadow.id
+
+        org = db.exec(
+            select(PersonContact).where(PersonContact.enterprise_person_id == created.id)
+        ).one()
+        assert org.kind == "org"
+        assert org.web_user_id == admin.id
+        assert org.wecom_userid == "18016077898"
+        web = ensure_web_contact(db, db.get(User, admin.id))
+        wecom = ensure_wecom_contact(
+            db,
+            tenant_id="tenant_demo",
+            wecom_userid="18016077898",
+            corp_id="ww_demo",
+            display_name=None,
+            user=shadow,
+        )
+        assert web is not None and wecom is not None
+        assert web.id == org.id
+        assert wecom.id == org.id
+        assert web.display_name == "陈龙"
+
+
+def test_adding_wecom_userid_keeps_selected_web_primary() -> None:
     engine = _engine()
     with Session(engine) as db:
         owner, admin = _seed(db)
         created = post_person(_person(name="陈龙", primary_user_id=owner.id), db=db, current_user=admin)
-        owner_roster = lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id)
-        assert owner_roster.status == "matched"
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).status == "matched"
         shadow = _shadow(db, display_name="企业微信用户 77898")
 
         updated = patch_person(
@@ -169,14 +222,99 @@ def test_update_rehangs_web_primary_onto_unique_wecom_speaker() -> None:
             db=db,
             current_user=admin,
         )
-        assert updated.primary_user_id == shadow.id
+        assert updated.primary_user_id == owner.id
         assert updated.wecom_userid == "18016077898"
-        assert updated.wecom_link_notice == "已改挂花名册主账号到企微会话"
-        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id).name == "陈龙"
-        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).status == "unmatched"
-        assert _roster_name(db, shadow.id) == "陈龙"
-        assert db.get(User, shadow.id).display_name == "陈龙"
+        assert updated.wecom_link_notice is None
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=owner.id).name == "陈龙"
+        assert lookup_speaker_roster(db, tenant_id="tenant_demo", user_id=shadow.id).status == "unmatched"
+        org = db.exec(
+            select(PersonContact).where(PersonContact.enterprise_person_id == created.id)
+        ).one()
+        assert org.web_user_id == owner.id
+        assert org.wecom_userid == "18016077898"
         assert _identity(db, shadow.id).staffdeck_user_id == shadow.id
+
+
+def test_changing_web_primary_rewrites_org_contact_web_user() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        owner, admin = _seed(db)
+        created = post_person(
+            _person(name="陈龙", primary_user_id=owner.id),
+            db=db,
+            current_user=admin,
+        )
+        updated = patch_person(
+            created.id,
+            _person(name="陈龙", primary_user_id=admin.id),
+            db=db,
+            current_user=admin,
+        )
+        assert updated.primary_user_id == admin.id
+        org = db.exec(
+            select(PersonContact).where(PersonContact.enterprise_person_id == created.id)
+        ).one()
+        assert org.web_user_id == admin.id
+        web = ensure_web_contact(db, db.get(User, admin.id))
+        previous = ensure_web_contact(db, db.get(User, owner.id))
+        assert web is not None and previous is not None
+        assert web.id == org.id
+        assert previous.id != org.id
+        assert previous.kind == "personal"
+
+
+def test_taken_web_user_does_not_pretend_the_member_link_saved() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _owner, admin = _seed(db)
+        shadow = _shadow(db)
+        created = post_person(
+            _person(name="陈龙", wecom_userid="18016077898"),
+            db=db,
+            current_user=admin,
+        )
+        assert created.primary_user_id == shadow.id
+        db.add(
+            PersonContact(
+                id="pcontact_admin",
+                tenant_id="tenant_demo",
+                kind="personal",
+                display_name="Administrator",
+                source="web_signup",
+                web_user_id=admin.id,
+                channel_user_id=admin.id,
+            )
+        )
+        db.commit()
+
+        with pytest.raises(HTTPException) as error:
+            patch_person(
+                created.id,
+                _person(name="陈龙", primary_user_id=admin.id, wecom_userid="18016077898"),
+                db=db,
+                current_user=admin,
+            )
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "ORG_WEB_USER_CONTACT_TAKEN"
+        assert "Administrator" in error.value.detail["message"]
+        person = db.get(EnterprisePerson, created.id)
+        assert person is not None
+        assert person.primary_user_id == shadow.id
+        org = db.exec(
+            select(PersonContact).where(PersonContact.enterprise_person_id == created.id)
+        ).one()
+        assert org.web_user_id is None
+        suggestion = db.exec(select(ContactMergeSuggestion)).one()
+        assert suggestion.status == "pending"
+        assert suggestion.reason == "same_web_user"
+        assert {suggestion.left_contact_id, suggestion.right_contact_id} == {
+            org.id,
+            "pcontact_admin",
+        }
+        web = ensure_web_contact(db, db.get(User, admin.id))
+        assert web is not None
+        assert web.id == "pcontact_admin"
+        assert web.display_name == "Administrator"
 
 
 def test_userid_without_channel_identity_does_not_invent_a_roster_name() -> None:
