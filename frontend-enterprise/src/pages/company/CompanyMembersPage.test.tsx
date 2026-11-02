@@ -394,4 +394,82 @@ describe('CompanyMembersPage', () => {
     expect(patched[0]?.name).toBe('陈龙');
     expect(patched[0]?.primary_user_id).toBe('user-admin');
   });
+
+  it('keeps the selected WeCom userid after the picker closes and save', async () => {
+    const patched: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      if (url.includes('/org/people/') && method === 'PATCH') {
+        patched.push(JSON.parse(String(init?.body || '{}')));
+        return jsonResponse({
+          id: 'person-chen',
+          tenant_id: 'tenant_demo',
+          name: '陈龙',
+          status: 'active',
+          source: 'manual',
+          primary_user_id: 'user-admin',
+          wecom_userid: '18016077898',
+          created_at: '',
+          updated_at: '',
+        });
+      }
+      if (url.includes('/directory/departments/') && url.includes('/users')) {
+        return jsonResponse({
+          users: [
+            { userid: '18016077898', name: '陈龙', email: 'chen@example.com', department_ids: [16] },
+          ],
+        });
+      }
+      if (url.includes('/directory/departments')) {
+        return jsonResponse({
+          departments: [{ id: 16, name: '数字化赋能中心', parent_id: 0, order: 1 }],
+        });
+      }
+      if (url.includes('/org/people')) {
+        return jsonResponse({
+          people: [{
+            id: 'person-chen',
+            tenant_id: 'tenant_demo',
+            name: '陈龙',
+            status: 'active',
+            source: 'manual',
+            primary_user_id: 'user-admin',
+            primary_username: 'admin',
+            primary_user_name: 'Admin',
+            created_at: '',
+            updated_at: '',
+          }],
+        });
+      }
+      if (url.includes('/org/tree')) return jsonResponse({ departments: [], people: [], agents: [] });
+      if (url.includes('/org/agents')) return jsonResponse({ agents: [] });
+      if (url.includes('/org/departments')) return jsonResponse({ departments: [] });
+      if (url.includes('/api/auth/users')) {
+        return jsonResponse([
+          { id: 'user-admin', tenant_id: 'tenant_demo', username: 'admin', display_name: 'Admin', role: 'admin', source: 'web' },
+        ]);
+      }
+      return jsonResponse({});
+    }));
+
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: '编辑' }));
+    const dialog = await screen.findByRole('dialog', { name: '编辑企业人员' });
+    await user.click(within(dialog).getByRole('button', { name: '选择企微用户' }));
+    const picker = await screen.findByRole('dialog', { name: '选择企微用户' });
+    await user.click(within(picker).getByRole('radio', { name: '陈龙 18016077898' }));
+    await user.click(within(picker).getByRole('button', { name: '取消' }));
+
+    expect(screen.queryByRole('dialog', { name: '选择企微用户' })).toBeNull();
+    const editDialog = await screen.findByRole('dialog', { name: '编辑企业人员' });
+    expect((within(editDialog).getByLabelText('企微 userid') as HTMLInputElement).value).toBe('18016077898');
+    await user.click(within(editDialog).getByRole('button', { name: '保存' }));
+
+    expect(patched).toHaveLength(1);
+    expect(patched[0]?.wecom_userid).toBe('18016077898');
+    expect(patched[0]?.name).toBe('陈龙');
+    expect(patched[0]?.primary_user_id).toBe('user-admin');
+  });
 });

@@ -77,4 +77,43 @@ describe('WecomOaAgentConfigPanel applicant binding', () => {
     expect(await screen.findByText('尚未绑定企微用户。')).toBeTruthy();
     expect(calls.some((call) => call.method === 'DELETE' && call.url.includes('/wecom-applicant'))).toBe(true);
   });
+
+  it('does not bind an approval identity when the picker is cancelled', async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || 'GET';
+      calls.push({ url, method });
+      if (url.includes('/directory/departments/') && url.includes('/users')) {
+        return jsonResponse({
+          users: [
+            { userid: 'zhangsan', name: '张三', email: 'zhangsan@example.com', department_ids: [16] },
+          ],
+        });
+      }
+      if (url.includes('/directory/departments')) {
+        return jsonResponse({
+          departments: [{ id: 16, name: '数字化赋能中心', parent_id: 0, order: 1 }],
+        });
+      }
+      if (url.includes('/approval-config')) return jsonResponse({ config: null });
+      return jsonResponse({});
+    }));
+
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <WecomOaAgentConfigPanel agentId="agent-1" />
+      </I18nProvider>,
+    );
+    await screen.findByText('尚未绑定企微用户。');
+    await user.click(screen.getByRole('button', { name: '选择绑定用户' }));
+    await screen.findByRole('dialog', { name: '选择绑定的企微用户' });
+    await user.click(await screen.findByRole('radio', { name: '张三 zhangsan' }));
+    await user.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(screen.queryByRole('dialog', { name: '选择绑定的企微用户' })).toBeNull();
+    expect(screen.getByText('尚未绑定企微用户。')).toBeTruthy();
+    expect(calls.some((call) => call.method === 'PUT')).toBe(false);
+  });
 });
