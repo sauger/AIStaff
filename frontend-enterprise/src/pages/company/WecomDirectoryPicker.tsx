@@ -46,6 +46,8 @@ type Props = {
   buttonClassName?: string;
   disabled?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** 单选时，点中成员就通知。取消和关闭不会调用 onConfirm。 */
+  onSelect?: (user: WecomDirectoryUser) => void;
   onConfirm: (users: WecomDirectoryUser[]) => void | Promise<void>;
 };
 
@@ -89,6 +91,7 @@ export default function WecomDirectoryPicker({
   buttonClassName,
   disabled = false,
   onOpenChange,
+  onSelect,
   onConfirm,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -176,6 +179,7 @@ export default function WecomDirectoryPicker({
       else next.set(user.userid, user);
       return next;
     });
+    if (mode === 'single') onSelect?.(user);
   }
 
   async function confirm() {

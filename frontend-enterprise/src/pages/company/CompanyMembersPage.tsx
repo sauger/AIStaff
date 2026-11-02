@@ -687,6 +687,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
                 confirmLabel="填入 userid"
                 buttonClassName="h-8 shrink-0 rounded-[10px] px-3 text-[12px]"
                 onOpenChange={setWecomPickerOpen}
+                onSelect={(person) => applySelectedWecomUser(person)}
                 onConfirm={(users) => {
                   const person = users[0];
                   if (person) applySelectedWecomUser(person);
