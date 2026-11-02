@@ -75,13 +75,22 @@ describe('WecomAppApprovalTemplatesTab', () => {
           app_id: 'wapp_1',
           app_name: '审批',
           templates: [],
-          assignments: [{
-            agent_id: 'agent_a',
-            agent_name: '小李',
-            template_id: 'tpl_purchase',
-            template_name: '采购合同审批',
-            scenario_key: 'default',
-          }],
+          assignments: [
+            {
+              agent_id: 'agent_a',
+              agent_name: '小李',
+              template_id: 'tpl_purchase',
+              template_name: '采购合同审批',
+              scenario_key: 'contract',
+            },
+            {
+              agent_id: 'agent_b',
+              agent_name: '小王',
+              template_id: 'tpl_purchase',
+              template_name: '采购合同审批',
+              scenario_key: '  ',
+            },
+          ],
           error: '读取企微审批模板失败：/oa/gettemplatelist',
           notice: null,
         };
@@ -106,6 +115,16 @@ describe('WecomAppApprovalTemplatesTab', () => {
       expect.objectContaining({
         template_id: 'tpl_purchase',
         agent_ids: ['agent_a'],
+        scenario_key: 'contract',
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: '取消分配 小王' }));
+    expect(api.post).toHaveBeenCalledWith(
+      expect.stringContaining('/approval-templates/assignments/remove'),
+      expect.objectContaining({
+        template_id: 'tpl_purchase',
+        agent_ids: ['agent_b'],
+        scenario_key: 'default',
       }),
     );
   });

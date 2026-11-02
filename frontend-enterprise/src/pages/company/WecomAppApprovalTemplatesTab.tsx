@@ -32,7 +32,7 @@ type TemplateAssignment = {
   agent_name: string;
   template_id: string;
   template_name?: string | null;
-  scenario_key: string;
+  scenario_key?: string;
 };
 
 type TemplatePayload = {
@@ -77,6 +77,11 @@ function withoutCatalogError(value: string | null | undefined): string | null {
   const text = String(value || '').trim();
   if (!text || /gettemplatelist/i.test(text)) return null;
   return text;
+}
+
+function scenarioKeyOf(value: string | null | undefined): string {
+  const key = String(value || '').trim();
+  return key || 'default';
 }
 
 function sourceLabel(source: string | undefined): string | null {
@@ -227,9 +232,10 @@ export default function WecomAppApprovalTemplatesTab({
     }
   }
 
-  async function unassign(templateId: string, agentId: string) {
+  async function unassign(templateId: string, agentId: string, scenarioKey?: string) {
     if (!appId) return;
-    const key = `${templateId}:${agentId}`;
+    const scenario_key = scenarioKeyOf(scenarioKey);
+    const key = `${templateId}:${agentId}:${scenario_key}`;
     setRemovingAssignmentKey(key);
     try {
       await api.post(
@@ -237,7 +243,7 @@ export default function WecomAppApprovalTemplatesTab({
         {
           template_id: templateId,
           agent_ids: [agentId],
-          scenario_key: 'default',
+          scenario_key,
         },
       );
       notify.success('已取消分配');
@@ -538,7 +544,8 @@ export default function WecomAppApprovalTemplatesTab({
           ) : (
             <ul className="m-0 flex list-none flex-col gap-[8px] p-0">
               {(payload?.assignments || []).map((row) => {
-                const key = `${row.template_id}:${row.agent_id}:${row.scenario_key}`;
+                const scenarioKey = scenarioKeyOf(row.scenario_key);
+                const key = `${row.template_id}:${row.agent_id}:${scenarioKey}`;
                 return (
                   <li key={key} className="flex flex-wrap items-center gap-[8px] text-[12px] text-[#464c5e]">
                     <span data-i18n-ignore>{templateTitle(row.template_id)}</span>
@@ -548,8 +555,8 @@ export default function WecomAppApprovalTemplatesTab({
                       variant="outline"
                       className={OUTLINE_BUTTON_CLASS}
                       aria-label={`取消分配 ${row.agent_name}`}
-                      disabled={removingAssignmentKey === `${row.template_id}:${row.agent_id}`}
-                      onClick={() => void unassign(row.template_id, row.agent_id)}
+                      disabled={removingAssignmentKey === key}
+                      onClick={() => void unassign(row.template_id, row.agent_id, row.scenario_key)}
                     >
                       取消分配
                     </UIButton>
