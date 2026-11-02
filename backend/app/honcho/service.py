@@ -12,7 +12,7 @@ from app.honcho.client import HonchoClient
 from app.honcho.ids import HonchoIdError, build_honcho_identity
 from app.honcho.runtime import apply_honcho_ui_config
 from app.session.session_schema import ChatTurnRequest
-from app.session.turn_speaker import portrait_user_id, stable_portrait_user_id
+from app.session.turn_speaker import portrait_contact_id, portrait_user_id, stable_portrait_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ def schedule_honcho_message(
         if not settings.honcho_base_url.strip():
             logger.warning("honcho schedule skipped because HONCHO_BASE_URL is empty")
             return
+        contact_id = portrait_contact_id(request, session)
         payload = {
             "tenant_id": request.tenant_id,
             "user_id": user_id,
@@ -71,6 +72,8 @@ def schedule_honcho_message(
             "external_user_id": request.channel_external_user_id,
             "channel_is_group": False,
         }
+        if contact_id:
+            payload["contact_id"] = contact_id
         if enqueue is None:
             from app.honcho.jobs import enqueue_honcho_dual_write
 
@@ -113,6 +116,7 @@ def inject_honcho_representation(
             channel=request.channel,
             account_scope=request.channel_external_account_scope,
             external_user_id=request.channel_external_user_id,
+            contact_id=portrait_contact_id(request, session) or None,
         )
         honcho = client or build_honcho_client(settings)
         text = honcho.fetch_representation(
@@ -158,6 +162,7 @@ def dual_write_message(
             channel=_optional_str(payload.get("channel")),
             account_scope=_optional_str(payload.get("account_scope")),
             external_user_id=_optional_str(payload.get("external_user_id")),
+            contact_id=_optional_str(payload.get("contact_id")),
         )
     except HonchoIdError:
         logger.warning("honcho dual-write skipped because the identity is not a stable peer")

@@ -2114,7 +2114,7 @@ class MemoryRecord(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("mem"), primary_key=True)
     tenant_id: str = Field(index=True)
     user_id: str = Field(index=True)
-    # 本地记忆锚。查询仍兼容 user_id；新写入尽量带上联系人。
+    # 有 contact 时按联系人聚合称呼和画像；没有则仍按 user_id。
     contact_id: Optional[str] = Field(default=None, index=True)
     username: Optional[str] = Field(default=None, index=True)
     session_id: Optional[str] = Field(default=None, index=True)

@@ -10,7 +10,7 @@
 - 群聊桶不是联系人，继续走原来的 CI 懒建。
 - ``channel_user_id`` 记住会话用的 User，网页登录只进 ``web_user_id``。
 
-Honcho peer 仍是 ``user:{User.id}``。改为 ``contact:{contact_id}`` 留到 P1。
+Honcho 用户 peer 在有 contact 时是 ``contact:{contact_id}``，否则回退 ``user:{User.id}``。
 """
 
 from __future__ import annotations
@@ -18,11 +18,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.db.models import (
+    ChatSession,
     ContactMergeSuggestion,
     EnterprisePerson,
     PersonContact,
@@ -64,27 +65,30 @@ def is_placeholder_display_name(value: str | None) -> bool:
 
 
 def bind_turn_contact(db: Session, request: object) -> object:
-    """给已解析的本轮说话人补上 contact_id。群聊和未解析说话人不建联系人。"""
+    """给已解析的本轮说话人补上 contact_id。群聊和未解析说话人不建联系人。
+
+    会话若还指着已归档或已合并的 personal，升到目标 org 联系人，避免一直锁在旧档。
+    """
 
     speaker = getattr(request, "speaker", None)
     if speaker is None or getattr(speaker, "status", None) != "resolved":
         return request
-    contact_id = str(getattr(speaker, "contact_id", "") or "").strip()
     channel = str(getattr(request, "channel", "") or "web").strip() or "web"
-    # 来信会话的 contact 是发件人，执行技能的说话人仍是邮箱主人，不能把两边当成同一个人。
-    if not contact_id and channel != "mail_inbound":
-        session_id = str(getattr(request, "session_id", "") or "").strip()
-        if session_id:
-            from app.db.models import ChatSession
-
-            session = db.get(ChatSession, session_id)
-            if (
-                session is not None
-                and session.tenant_id == getattr(request, "tenant_id", None)
-                and session.contact_id
-            ):
-                contact_id = session.contact_id
     is_group = bool(getattr(request, "channel_is_group", False))
+    tenant_id = str(getattr(request, "tenant_id", "") or "")
+    # 来信会话的 contact 是发件人，执行技能的说话人仍是邮箱主人，不能把两边当成同一个人。
+    session = _speaker_session(db, request, channel)
+    contact_id = str(getattr(speaker, "contact_id", "") or "").strip()
+    if channel != "mail_inbound" and contact_id:
+        contact_id = _promoted_contact_id(db, tenant_id, contact_id) or contact_id
+    elif (
+        session is not None
+        and session.contact_id
+        and _speaker_matches_session_user(speaker, session)
+    ):
+        contact_id = _promoted_contact_id(db, tenant_id, str(session.contact_id)) or str(
+            session.contact_id
+        )
     if not contact_id and channel == "wecom" and not is_group:
         external_id = normalize_wecom_userid(getattr(request, "channel_external_user_id", None))
         user_id = str(getattr(speaker, "user_id", "") or "").strip()
@@ -92,7 +96,7 @@ def bind_turn_contact(db: Session, request: object) -> object:
         if external_id and not external_id.startswith("group:") and user is not None:
             contact = ensure_wecom_contact(
                 db,
-                tenant_id=str(getattr(request, "tenant_id", "") or ""),
+                tenant_id=tenant_id,
                 wecom_userid=external_id,
                 corp_id=normalize_corp_id(
                     getattr(request, "channel_external_account_scope", None)
@@ -104,14 +108,211 @@ def bind_turn_contact(db: Session, request: object) -> object:
     if not contact_id and channel in {"web", ""} and not is_group:
         user_id = str(getattr(speaker, "user_id", "") or "").strip()
         user = db.get(User, user_id) if user_id else None
-        if user is not None and user.tenant_id == getattr(request, "tenant_id", None):
+        if user is not None and user.tenant_id == tenant_id:
             contact = ensure_web_contact(db, user)
             contact_id = contact.id if contact is not None else ""
+    if channel != "mail_inbound" and contact_id:
+        contact_id = _promoted_contact_id(db, tenant_id, contact_id) or contact_id
+    if session is not None and contact_id:
+        _adopt_promoted_session_contact(db, session, contact_id)
     if not contact_id:
         return request
     return request.model_copy(
         update={"speaker": speaker.model_copy(update={"contact_id": contact_id})}
     )
+
+
+def _session_for_turn(db: Session, request: object) -> ChatSession | None:
+    session_id = str(getattr(request, "session_id", "") or "").strip()
+    if not session_id:
+        return None
+    session = db.get(ChatSession, session_id)
+    if session is None or session.tenant_id != getattr(request, "tenant_id", None):
+        return None
+    return session
+
+
+def _speaker_session(db: Session, request: object, channel: str) -> ChatSession | None:
+    """本轮可以读写的会话。来信会话的 contact 是发件人，不能当成说话人。"""
+
+    if channel == "mail_inbound":
+        return None
+    session = _session_for_turn(db, request)
+    if session is None or session.channel == "mail_inbound":
+        return None
+    return session
+
+
+def _speaker_matches_session_user(speaker: object, session: ChatSession) -> bool:
+    speaker_user = str(getattr(speaker, "user_id", "") or "").strip()
+    session_user = str(session.user_id or "").strip()
+    return bool(speaker_user and speaker_user == session_user)
+
+
+def _adopt_promoted_session_contact(db: Session, session: ChatSession, contact_id: str) -> None:
+    """本轮升档结果就是这条旧 personal 的 org 时，才改挂会话。"""
+
+    if session.channel == "mail_inbound":
+        return
+    current = str(session.contact_id or "").strip()
+    if not current or current == contact_id:
+        return
+    tenant_id = str(session.tenant_id or "")
+    if not _contact_is_stale(db, tenant_id, current):
+        return
+    promoted = _promoted_contact_id(db, tenant_id, current)
+    if not promoted or promoted != contact_id or promoted == current:
+        return
+    target = db.get(PersonContact, promoted)
+    if target is None or not _is_active_org(target, tenant_id):
+        return
+    session.contact_id = target.id
+    session.updated_at = utc_now()
+    db.add(session)
+    db.flush()
+
+
+def _promoted_contact_id(db: Session, tenant_id: str, contact_id: str) -> str | None:
+    contact = db.get(PersonContact, contact_id)
+    if contact is None or contact.tenant_id != tenant_id:
+        return None
+    if not _contact_is_stale(db, tenant_id, contact.id):
+        return contact.id
+    canonical = _canonicalize(db, contact)
+    if (
+        canonical is not None
+        and canonical.id != contact.id
+        and _is_active_org(canonical, tenant_id)
+    ):
+        return canonical.id
+    org = _active_org_sharing_identity(db, contact)
+    if org is not None:
+        return org.id
+    if (
+        canonical is not None
+        and canonical.id != contact.id
+        and canonical.tenant_id == tenant_id
+        and canonical.status == "active"
+        and not str(canonical.merged_into_id or "").strip()
+    ):
+        return canonical.id
+    return contact.id
+
+
+def _contact_is_stale(db: Session, tenant_id: str, contact_id: str) -> bool:
+    contact = db.get(PersonContact, contact_id)
+    if contact is None or contact.tenant_id != tenant_id or contact.kind != "personal":
+        return False
+    if str(contact.merged_into_id or "").strip():
+        return True
+    return contact.status == "archived"
+
+
+def _is_active_org(contact: PersonContact | None, tenant_id: str) -> bool:
+    return bool(
+        contact is not None
+        and contact.tenant_id == tenant_id
+        and contact.kind == "org"
+        and contact.status == "active"
+        and not str(contact.merged_into_id or "").strip()
+    )
+
+
+def memory_contact_ids(
+    db: Session,
+    tenant_id: str,
+    contact_id: str,
+) -> tuple[str, tuple[str, ...]] | None:
+    """同一真人的记忆范围：当前联系人、合并进来的旧档，以及已升到此 org 的归档 personal。"""
+
+    contact = db.get(PersonContact, contact_id)
+    if contact is None or contact.tenant_id != tenant_id:
+        return None
+    canonical_id = _promoted_contact_id(db, tenant_id, contact.id) or contact.id
+    root = db.get(PersonContact, canonical_id)
+    if root is None or root.tenant_id != tenant_id:
+        root = contact
+        canonical_id = contact.id
+    found = _merged_source_ids(db, canonical_id)
+    found.add(contact.id)
+    found.update(_archived_personal_ids_for_org(db, root))
+    return canonical_id, tuple(sorted(found))
+
+
+def _merged_source_ids(db: Session, root_id: str) -> set[str]:
+    found = {root_id}
+    frontier = {root_id}
+    for _ in range(_MERGE_DEPTH):
+        if not frontier:
+            break
+        rows = list(
+            db.exec(select(PersonContact).where(PersonContact.merged_into_id.in_(frontier))).all()
+        )
+        frontier = {row.id for row in rows if row.id not in found}
+        found.update(frontier)
+    return found
+
+
+def _archived_personal_ids_for_org(db: Session, org: PersonContact) -> set[str]:
+    """没有 merged_into 指针、但认人时会升到这条 org 的归档 personal。"""
+
+    if org.kind != "org" or org.status != "active" or org.merged_into_id:
+        return set()
+    person = None
+    if org.enterprise_person_id:
+        person = db.get(EnterprisePerson, org.enterprise_person_id)
+        if person is not None and person.tenant_id != org.tenant_id:
+            person = None
+    match_clauses = []
+    if org.web_user_id:
+        match_clauses.append(PersonContact.web_user_id == org.web_user_id)
+    if org.wecom_userid:
+        match_clauses.append(PersonContact.wecom_userid == org.wecom_userid)
+    if person is not None:
+        if person.primary_user_id:
+            match_clauses.append(PersonContact.web_user_id == person.primary_user_id)
+        if person.wecom_userid:
+            match_clauses.append(PersonContact.wecom_userid == person.wecom_userid)
+        match_clauses.append(PersonContact.enterprise_person_id == person.id)
+    if not match_clauses:
+        return set()
+    rows = db.exec(
+        select(PersonContact).where(
+            PersonContact.tenant_id == org.tenant_id,
+            PersonContact.kind == "personal",
+            PersonContact.status == "archived",
+            PersonContact.merged_into_id.is_(None),
+            or_(*match_clauses),
+        )
+    ).all()
+    return {row.id for row in rows if row.id != org.id}
+
+
+def _active_org_sharing_identity(db: Session, contact: PersonContact) -> PersonContact | None:
+    """归档 personal 没有合并指针时，按企微 / 网页账号找到仍有效的 org 联系人。"""
+
+    tenant = contact.tenant_id
+    person: EnterprisePerson | None = None
+    if contact.enterprise_person_id:
+        person = db.get(EnterprisePerson, contact.enterprise_person_id)
+        if person is not None and person.tenant_id != tenant:
+            person = None
+    if person is None and contact.wecom_userid:
+        person = _active_person_by_wecom(db, tenant, contact.wecom_userid)
+    if person is None and contact.web_user_id:
+        person = db.exec(
+            select(EnterprisePerson).where(
+                EnterprisePerson.tenant_id == tenant,
+                EnterprisePerson.primary_user_id == contact.web_user_id,
+                EnterprisePerson.status == "active",
+            )
+        ).first()
+    if person is None or person.status != "active":
+        return None
+    org = _find_org_by_person(db, tenant, person.id)
+    if org is None or org.id == contact.id or not _is_active_org(org, tenant):
+        return None
+    return org
 
 
 def lookup_wecom_contact_id(

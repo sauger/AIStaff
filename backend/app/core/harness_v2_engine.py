@@ -76,6 +76,7 @@ from app.session.session_schema import (
 from app.session.turn_speaker import (
     attach_speaker_roster,
     current_speaker_for_requirement,
+    portrait_contact_id,
     stamp_conversation_speaker,
 )
 from app.skills.nesting import discoverable_sops, expand_visible_sops
@@ -311,6 +312,7 @@ class HarnessV2Engine:
                 request.tenant_id,
                 request.user_id,
                 agent_id=session.agent_id,
+                contact_id=portrait_contact_id(request, session) or None,
             )
         ]
         if memory_context:

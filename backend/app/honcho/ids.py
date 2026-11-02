@@ -1,8 +1,9 @@
 """Map StaffDeck identities onto Honcho resource names.
 
-Logical ids follow the design: ``tenant:{id}``, ``user:{User.id}``,
-``agent:{agent_id}``, ``chat:{ChatSession.id}``. Honcho resource names only
-allow ``[A-Za-z0-9_-]`` and reject ``:``, so the wire id replaces that single
+Logical ids follow the design: ``tenant:{id}``, ``contact:{contact_id}`` when
+the turn has a contact, otherwise ``user:{User.id}``, plus ``agent:{agent_id}``
+and ``chat:{ChatSession.id}``. Honcho resource names only allow
+``[A-Za-z0-9_-]`` and reject ``:``, so the wire id replaces that single
 separator with ``_``. A raw id that already contains ``:`` is rejected instead
 of being folded into another peer. Channel external ids never enter the wire id.
 """
@@ -56,11 +57,15 @@ def build_honcho_identity(
     channel: str | None = None,
     account_scope: str | None = None,
     external_user_id: str | None = None,
+    contact_id: str | None = None,
 ) -> HonchoIdentity:
     workspace_logical = f"{workspace_prefix}{tenant_id}"
-    # TODO(P1): peer 从 user:{User.id} 改为 contact:{contact_id}。P0 只把 contact_id
-    # 挂在会话和本地记忆上，Honcho 仍用 User.id，避免改名打断已有画像。
-    user_peer_logical = f"user:{user_id}"
+    # 有联系人时网页 User 与渠道影子 User 共用一个 peer。没有联系人时仍用 User.id。
+    resolved_contact_id = str(contact_id or "").strip()
+    if resolved_contact_id:
+        user_peer_logical = f"contact:{resolved_contact_id}"
+    else:
+        user_peer_logical = f"user:{user_id}"
     agent_peer_logical = f"agent:{agent_id}"
     session_logical = f"chat:{session_id}"
     channel_metadata = _channel_metadata(

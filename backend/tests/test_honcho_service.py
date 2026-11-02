@@ -365,6 +365,61 @@ def test_assistant_dual_write_uses_agent_peer() -> None:
     assert message[3] == "agent_agent_xyz"
 
 
+def test_representation_and_dual_write_share_the_contact_peer() -> None:
+    from app.honcho.jobs import run_honcho_dual_write_job
+
+    db = _db()
+    session = _seed(db, honcho_enabled=True)
+    session.user_id = "user_shadow"
+    session.contact_id = "pcontact_org"
+    db.add(session)
+    db.commit()
+    client = FakeHoncho()
+    queued: list[dict] = []
+    request = _request(user_id="user_shadow")
+
+    schedule_honcho_message(
+        db,
+        request,
+        session,
+        role="user",
+        content="叫我龙哥",
+        message_id="msg_user",
+        settings=_settings(),
+        enqueue=queued.append,
+    )
+    memories = inject_honcho_representation(
+        db,
+        request,
+        session,
+        [{"kind": "profile", "content": "龙哥"}],
+        settings=_settings(),
+        client=client,
+    )
+    assert queued[0]["contact_id"] == "pcontact_org"
+    assert queued[0]["user_id"] == "user_shadow"
+    assert client.calls[-1] == (
+        "representation",
+        "tenant_tenant_demo",
+        "contact_pcontact_org",
+        0.2,
+    )
+    assert memories[0]["content"] == "龙哥"
+
+    run_honcho_dual_write_job(queued[0], settings=_settings(), client=client)
+
+    message = next(call for call in client.calls if call[0] == "message")
+    peers = [call for call in client.calls if call[0] == "peer"]
+    assert message[3] == "contact_pcontact_org"
+    assert [call[2] for call in peers] == ["contact_pcontact_org", "agent_agent_xyz"]
+    assert peers[0][3] == {"staff_peer": "contact:pcontact_org"}
+    assert any(
+        call[0] == "workspace" and call[1] == "tenant_tenant_demo" for call in client.calls
+    )
+    assert "user_shadow" not in message[3]
+    db.close()
+
+
 def test_inject_appends_labeled_portrait_and_keeps_local_memory() -> None:
     db = _db()
     session = _seed(db, honcho_enabled=True)

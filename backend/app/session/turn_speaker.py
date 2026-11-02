@@ -119,6 +119,40 @@ def resolve_known_user_speaker(user_id: str | None, *, channel: str) -> TurnSpea
     )
 
 
+def portrait_contact_id(request: ChatTurnRequest, session: object | None = None) -> str:
+    """Contact that should own this turn's memory and Honcho user peer.
+
+    A resolved speaker contact wins. Otherwise use the session contact, except
+    on inbound mail: that session contact is the sender, not the mailbox owner.
+    Group chats and unresolved speakers do not get a contact peer.
+    """
+
+    if request.channel == "wecom" and request.speaker is None:
+        return ""
+    speaker = request.speaker
+    if speaker is not None:
+        if speaker.status != "resolved":
+            return ""
+        contact_id = str(speaker.contact_id or "").strip()
+        if contact_id:
+            return contact_id
+        if request.channel == "mail_inbound":
+            return ""
+    elif request.channel == "mail_inbound":
+        return ""
+    if session is None or getattr(session, "channel", None) == "mail_inbound":
+        return ""
+    speaker_user = ""
+    if speaker is not None and speaker.status == "resolved":
+        speaker_user = str(speaker.user_id or "").strip()
+    if not speaker_user:
+        speaker_user = str(request.user_id or "").strip()
+    session_user = str(getattr(session, "user_id", "") or "").strip()
+    if not speaker_user or speaker_user != session_user:
+        return ""
+    return str(getattr(session, "contact_id", "") or "").strip()
+
+
 def portrait_user_id(request: ChatTurnRequest) -> str:
     """Honcho peer user. A present speaker wins; an external id never does.
 

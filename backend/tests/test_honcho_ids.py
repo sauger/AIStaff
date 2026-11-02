@@ -100,6 +100,57 @@ def test_raw_id_containing_colon_is_rejected() -> None:
         )
 
 
+def test_contact_peer_replaces_user_peer_and_keeps_workspace_agent_session() -> None:
+    with_contact = build_honcho_identity(
+        tenant_id="tenant_demo",
+        user_id="user_shadow",
+        agent_id="agent_xyz",
+        session_id="session_wecom",
+        contact_id="pcontact_org",
+    )
+    without_contact = build_honcho_identity(
+        tenant_id="tenant_demo",
+        user_id="user_shadow",
+        agent_id="agent_xyz",
+        session_id="session_wecom",
+    )
+
+    assert with_contact.user_peer_logical == "contact:pcontact_org"
+    assert with_contact.user_peer_id == "contact_pcontact_org"
+    assert with_contact.user_peer_metadata["staff_peer"] == "contact:pcontact_org"
+    assert with_contact.workspace_logical == "tenant:tenant_demo"
+    assert with_contact.workspace_id == "tenant_tenant_demo"
+    assert with_contact.agent_peer_logical == "agent:agent_xyz"
+    assert with_contact.agent_peer_id == "agent_agent_xyz"
+    assert with_contact.session_logical == "chat:session_wecom"
+    assert with_contact.session_id == "chat_session_wecom"
+    assert without_contact.user_peer_logical == "user:user_shadow"
+    assert without_contact.user_peer_id == "user_user_shadow"
+
+
+def test_same_contact_is_one_peer_for_different_users() -> None:
+    web = build_honcho_identity(
+        tenant_id="tenant_demo",
+        user_id="user_web",
+        agent_id="agent_xyz",
+        session_id="session_web",
+        contact_id="pcontact_org",
+    )
+    wecom = build_honcho_identity(
+        tenant_id="tenant_demo",
+        user_id="user_shadow",
+        agent_id="agent_xyz",
+        session_id="session_wecom",
+        channel="wecom",
+        external_user_id="chen",
+        contact_id="pcontact_org",
+    )
+
+    assert web.user_peer_id == wecom.user_peer_id == "contact_pcontact_org"
+    assert web.session_id != wecom.session_id
+    assert "chen" not in wecom.user_peer_id
+
+
 def test_tenants_do_not_share_a_workspace() -> None:
     one = build_honcho_identity(
         tenant_id="tenant_a",

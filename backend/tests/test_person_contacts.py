@@ -15,6 +15,7 @@ from app.channels.crypto import encrypt_channel_secret
 from app.channels.service_identity import resolve_or_provision_user
 from app.channels.service_intake import process_inbound
 from app.contacts.identity import (
+    bind_turn_contact,
     ensure_email_contact,
     ensure_web_contact,
     ensure_wecom_contact,
@@ -286,6 +287,366 @@ def test_speaker_prefers_contact_display_name_without_primary_user() -> None:
         assert request.speaker.roster_status == "matched"
         assert request.speaker.roster_name == "张三"
         assert request.speaker.contact_id == contact.id
+
+
+def _archived_personal_merged_into_org(db: Session) -> tuple[PersonContact, PersonContact, User]:
+    web = _user(db, "user_web", source="web", name="陈龙")
+    shadow = _user(db, "user_shadow", source="wecom", name="企业微信用户 chen")
+    org = PersonContact(
+        id="pcontact_org",
+        tenant_id="tenant_demo",
+        kind="org",
+        display_name="陈龙",
+        status="active",
+        wecom_userid="chen",
+        wecom_corp_id="ww",
+        web_user_id=web.id,
+        channel_user_id=shadow.id,
+    )
+    db.add(org)
+    db.commit()
+    personal = PersonContact(
+        id="pcontact_old",
+        tenant_id="tenant_demo",
+        kind="personal",
+        display_name="旧档",
+        status="archived",
+        wecom_userid="chen",
+        wecom_corp_id="ww",
+        merged_into_id=org.id,
+    )
+    db.add(personal)
+    db.commit()
+    return org, personal, shadow
+
+
+def test_bind_turn_promotes_archived_session_contact_to_org() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _tenant(db)
+        org, personal, shadow = _archived_personal_merged_into_org(db)
+        session = ChatSession(
+            id="session_wecom",
+            tenant_id="tenant_demo",
+            user_id=shadow.id,
+            contact_id=personal.id,
+            channel="wecom",
+        )
+        db.add(session)
+        db.commit()
+
+        request = bind_turn_contact(
+            db,
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id=shadow.id,
+                session_id=session.id,
+                message="你好",
+                channel="wecom",
+                channel_external_user_id="chen",
+                channel_external_account_scope="ww",
+                speaker=TurnSpeaker(
+                    status="resolved",
+                    user_id=shadow.id,
+                    channel="wecom",
+                    source="channel_identity",
+                ),
+            ),
+        )
+        db.commit()
+
+        assert request.speaker is not None
+        assert request.speaker.contact_id == org.id
+        stored = db.get(ChatSession, session.id)
+        assert stored is not None
+        assert stored.contact_id == org.id
+
+
+def test_bind_turn_promotes_session_when_speaker_already_has_org_contact() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _tenant(db)
+        org, personal, shadow = _archived_personal_merged_into_org(db)
+        session = ChatSession(
+            id="session_wecom",
+            tenant_id="tenant_demo",
+            user_id=shadow.id,
+            contact_id=personal.id,
+            channel="wecom",
+        )
+        db.add(session)
+        db.commit()
+
+        request = bind_turn_contact(
+            db,
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id=shadow.id,
+                session_id=session.id,
+                message="你好",
+                channel="wecom",
+                speaker=TurnSpeaker(
+                    status="resolved",
+                    user_id=shadow.id,
+                    channel="wecom",
+                    source="channel_identity",
+                    contact_id=org.id,
+                ),
+            ),
+        )
+        db.commit()
+
+        assert request.speaker is not None
+        assert request.speaker.contact_id == org.id
+        stored = db.get(ChatSession, session.id)
+        assert stored is not None
+        assert stored.contact_id == org.id
+
+
+def test_bind_turn_keeps_active_personal_session_contact() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _tenant(db)
+        user = _user(db, "user_web", source="web", name="陈龙")
+        personal = PersonContact(
+            id="pcontact_live",
+            tenant_id="tenant_demo",
+            kind="personal",
+            display_name="陈龙",
+            status="active",
+            web_user_id=user.id,
+        )
+        db.add(personal)
+        session = ChatSession(
+            id="session_web",
+            tenant_id="tenant_demo",
+            user_id=user.id,
+            contact_id=personal.id,
+            channel="web",
+        )
+        db.add(session)
+        db.commit()
+
+        request = bind_turn_contact(
+            db,
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id=user.id,
+                session_id=session.id,
+                message="你好",
+                channel="web",
+                speaker=TurnSpeaker(
+                    status="resolved",
+                    user_id=user.id,
+                    channel="web",
+                    source="web_login",
+                ),
+            ),
+        )
+        db.commit()
+
+        assert request.speaker is not None
+        assert request.speaker.contact_id == personal.id
+        stored = db.get(ChatSession, session.id)
+        assert stored is not None
+        assert stored.contact_id == personal.id
+
+
+def test_bind_turn_promotes_archived_personal_without_merge_pointer() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _tenant(db)
+        web = _user(db, "user_web", source="web", name="陈龙")
+        person = EnterprisePerson(
+            id="person_chen",
+            tenant_id="tenant_demo",
+            name="陈龙",
+            status="active",
+            primary_user_id=web.id,
+            wecom_userid="chen",
+        )
+        db.add(person)
+        db.commit()
+        org = PersonContact(
+            id="pcontact_org",
+            tenant_id="tenant_demo",
+            kind="org",
+            display_name="陈龙",
+            status="active",
+            enterprise_person_id=person.id,
+            wecom_userid="chen",
+            wecom_corp_id="ww",
+        )
+        personal = PersonContact(
+            id="pcontact_old",
+            tenant_id="tenant_demo",
+            kind="personal",
+            display_name="旧网页档",
+            status="archived",
+            web_user_id=web.id,
+        )
+        db.add(org)
+        db.add(personal)
+        session = ChatSession(
+            id="session_web",
+            tenant_id="tenant_demo",
+            user_id=web.id,
+            contact_id=personal.id,
+            channel="web",
+        )
+        db.add(session)
+        db.commit()
+
+        request = bind_turn_contact(
+            db,
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id=web.id,
+                session_id=session.id,
+                message="你好",
+                channel="web",
+                speaker=TurnSpeaker(
+                    status="resolved",
+                    user_id=web.id,
+                    channel="web",
+                    source="web_login",
+                ),
+            ),
+        )
+        db.commit()
+
+        assert request.speaker is not None
+        assert request.speaker.contact_id == org.id
+        stored = db.get(ChatSession, session.id)
+        assert stored is not None
+        assert stored.contact_id == org.id
+
+
+def test_bind_turn_does_not_give_session_contact_to_a_different_user() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _tenant(db)
+        org, personal, shadow = _archived_personal_merged_into_org(db)
+        other = _user(db, "user_tl", source="web", name="组长")
+        session = ChatSession(
+            id="session_wecom",
+            tenant_id="tenant_demo",
+            user_id=shadow.id,
+            contact_id=personal.id,
+            channel="wecom",
+            team_id="team_1",
+        )
+        db.add(session)
+        db.commit()
+
+        request = bind_turn_contact(
+            db,
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id=other.id,
+                session_id=session.id,
+                message="我来接手",
+                channel="web",
+                speaker=TurnSpeaker(
+                    status="resolved",
+                    user_id=other.id,
+                    channel="web",
+                    source="web_login",
+                ),
+            ),
+        )
+        db.commit()
+
+        assert request.speaker is not None
+        assert request.speaker.contact_id not in {org.id, personal.id}
+        stored = db.get(ChatSession, session.id)
+        assert stored is not None
+        assert stored.contact_id == personal.id
+
+
+def test_bind_turn_keeps_mail_sender_when_owner_continues_on_web() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _tenant(db)
+        org, personal, shadow = _archived_personal_merged_into_org(db)
+        del shadow
+        owner = _user(db, "user_owner", source="web", name="邮箱主人")
+        session = ChatSession(
+            id="session_mail",
+            tenant_id="tenant_demo",
+            user_id=owner.id,
+            contact_id=personal.id,
+            channel="mail_inbound",
+        )
+        db.add(session)
+        db.commit()
+
+        request = bind_turn_contact(
+            db,
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id=owner.id,
+                session_id=session.id,
+                message="继续处理",
+                channel="web",
+                speaker=TurnSpeaker(
+                    status="resolved",
+                    user_id=owner.id,
+                    channel="web",
+                    source="web_login",
+                ),
+            ),
+        )
+        db.commit()
+
+        assert request.speaker is not None
+        assert request.speaker.contact_id not in {org.id, personal.id}
+        stored = db.get(ChatSession, session.id)
+        assert stored is not None
+        assert stored.contact_id == personal.id
+
+
+def test_bind_turn_does_not_rewrite_mail_sender_contact() -> None:
+    engine = _engine()
+    with Session(engine) as db:
+        _tenant(db)
+        org, personal, shadow = _archived_personal_merged_into_org(db)
+        del shadow
+        owner = _user(db, "user_owner", source="web", name="邮箱主人")
+        session = ChatSession(
+            id="session_mail",
+            tenant_id="tenant_demo",
+            user_id=owner.id,
+            contact_id=personal.id,
+            channel="mail_inbound",
+        )
+        db.add(session)
+        db.commit()
+
+        request = bind_turn_contact(
+            db,
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                user_id=owner.id,
+                session_id=session.id,
+                message="请处理这封邮件",
+                channel="mail_inbound",
+                speaker=TurnSpeaker(
+                    status="resolved",
+                    user_id=owner.id,
+                    channel="mail_inbound",
+                    source="session_user",
+                ),
+            ),
+        )
+        db.commit()
+
+        assert request.speaker is not None
+        assert request.speaker.contact_id is None
+        stored = db.get(ChatSession, session.id)
+        assert stored is not None
+        assert stored.contact_id == personal.id
+        assert org.id != stored.contact_id
 
 
 def test_extension_is_unique_per_agent_and_contact() -> None:
