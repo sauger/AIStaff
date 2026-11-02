@@ -131,7 +131,7 @@ def unified_system_prompt() -> str:
 
 
 def speaker_prompt_text(speaker: object) -> str | None:
-    """模型可见的当前说话人。姓名只来自已挂上的花名册字段，这里不查库。"""
+    """模型可见的当前说话人。姓名和日常称呼都只来自已挂上的字段，这里不查库。"""
 
     if not isinstance(speaker, dict) or "status" not in speaker:
         return None
@@ -147,24 +147,57 @@ def speaker_prompt_text(speaker: object) -> str | None:
     roster_status = str(speaker.get("roster_status") or "").strip()
     name = single_line(speaker.get("name"))
     department = single_line(speaker.get("department"))
+    preferred_name = single_line(speaker.get("preferred_name"))
     if roster_status == "matched" and name:
         lines.append("roster_status=matched")
         lines.append(f"name={name}")
         if department:
             lines.append(f"department={department}")
-        lines.append(
-            "name 是当前联系人的展示名；组织内联系人与企业花名册一致。"
-            "用户询问自己是谁时直接用 name 回答，"
-            "不要说没有身份信息，也不要念出 user_id。"
-            "没有 department 时不要编造部门。"
-        )
+        lines.append(_formal_name_instruction(has_preferred_name=bool(preferred_name)))
+        lines.extend(_preferred_name_lines(preferred_name, has_formal_name=True))
     elif roster_status in {"matched", "unmatched"}:
         lines.append("roster_status=unmatched")
         lines.append("企业花名册没有这条账号的记录。不要编造姓名或部门。")
+        lines.extend(_preferred_name_lines(preferred_name, has_formal_name=False))
     else:
         # 已解析但本轮没查花名册。只有 user_id，不能让模型把别的字段当成姓名。
         lines.append("不要编造姓名或部门。")
+        lines.extend(_preferred_name_lines(preferred_name, has_formal_name=False))
     return "\n".join(lines)
+
+
+def _formal_name_instruction(*, has_preferred_name: bool) -> str:
+    if has_preferred_name:
+        return (
+            "name 是当前联系人的正式展示名；组织内联系人与企业花名册一致。"
+            "用户问「我是谁」或「我叫什么名字」时直接用 name 回答，"
+            "不要说没有身份信息，也不要念出 user_id。"
+            "没有 department 时不要编造部门。"
+        )
+    return (
+        "name 是当前联系人的展示名；组织内联系人与企业花名册一致。"
+        "用户询问自己是谁时直接用 name 回答，"
+        "不要说没有身份信息，也不要念出 user_id。"
+        "没有 department 时不要编造部门。"
+    )
+
+
+def _preferred_name_lines(preferred_name: str, *, has_formal_name: bool) -> list[str]:
+    if not preferred_name:
+        return []
+    if has_formal_name:
+        usage = (
+            "preferred_name 是本地记忆里的日常称呼，也会写入槽位 user_name。"
+            "主动称呼用户，以及用户问「你叫我什么」或「怎么称呼我」时用 preferred_name，"
+            "不要改用 name。"
+        )
+    else:
+        usage = (
+            "preferred_name 是本地记忆里的日常称呼，也会写入槽位 user_name。"
+            "主动称呼用户，以及用户问「你叫我什么」或「怎么称呼我」时用 preferred_name。"
+            "不要编造正式姓名。"
+        )
+    return [f"preferred_name={preferred_name}", usage]
 
 
 def stage_payload(

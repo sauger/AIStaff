@@ -220,8 +220,10 @@ _CURRENT_SPEAKER_KEYS = (
     "roster_status",
     "name",
     "department",
+    "preferred_name",
 )
-_SPEAKER_IDENTITY_KEYS = ("user_id", "roster_status", "name", "department")
+_SPEAKER_IDENTITY_KEYS = ("user_id", "roster_status", "name", "department", "preferred_name")
+_SINGLE_LINE_SPEAKER_KEYS = {"name", "department", "preferred_name"}
 
 
 def dump_task_requirement(requirement: TaskRequirement) -> dict[str, Any]:
@@ -240,7 +242,7 @@ def _sanitize_current_speaker(value: dict[str, str] | None) -> dict[str, str] | 
     for key in _CURRENT_SPEAKER_KEYS:
         text = (
             single_line(value.get(key))
-            if key in {"name", "department"}
+            if key in _SINGLE_LINE_SPEAKER_KEYS
             else str(value.get(key) or "").strip()
         )
         if text:
