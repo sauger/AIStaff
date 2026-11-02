@@ -32,6 +32,19 @@ class SpeakerRoster:
     department: str = ""
 
 
+def department_for_person(db: Session, tenant_id: str, person_id: str) -> str:
+    """在职人员今天恰好一个部门时返回部门名。"""
+
+    tenant = str(tenant_id or "").strip()
+    person = str(person_id or "").strip()
+    if not tenant or not person:
+        return ""
+    row = db.get(EnterprisePerson, person)
+    if row is None or row.tenant_id != tenant or row.status != "active":
+        return ""
+    return _current_department_name(db, tenant, person)
+
+
 def lookup_speaker_roster(db: Session, *, tenant_id: str, user_id: str) -> SpeakerRoster:
     """按登录账号查花名册。不读渠道外部 id，也不写库。"""
 

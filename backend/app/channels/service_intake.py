@@ -622,6 +622,27 @@ def _stage_received_reaction(
     )
 
 
+def _inbound_contact_id(
+    db: Session,
+    binding: ChannelBinding,
+    *,
+    external_id: str,
+    scope: str,
+) -> str | None:
+    """私聊入站已经确保过的联系人。群桶不挂联系人。"""
+
+    if binding.channel != "wecom" or str(external_id).startswith("group:"):
+        return None
+    from app.contacts.identity import lookup_wecom_contact_id
+
+    return lookup_wecom_contact_id(
+        db,
+        tenant_id=binding.tenant_id,
+        wecom_userid=external_id,
+        corp_id=scope,
+    )
+
+
 def _message_text(binding: ChannelBinding, inbound: ChannelInbound) -> str:
     text = inbound.text.strip()
     if not text and inbound.attachments:
@@ -779,6 +800,16 @@ def _bind_external_identity(
             display_name=owner.display_name or owner.username,
         )
     db.add(identity)
+    if binding.channel == "wecom":
+        from app.contacts.identity import attach_web_user_to_wecom_contact
+
+        attach_web_user_to_wecom_contact(
+            db,
+            tenant_id=binding.tenant_id,
+            wecom_userid=external_id,
+            corp_id=scope,
+            user=owner,
+        )
     # ② 历史迁移:原懒建账号名下的渠道会话与全部记忆迁到码主账号
     if old_user_id and old_user_id != owner.id:
         _migrate_sessions(db, binding, from_user_id=old_user_id, to_user=owner)
@@ -1754,6 +1785,12 @@ def process_inbound(
             scope,
             name_resolver=_build_name_resolver(binding),
         )
+        inbound_contact_id = _inbound_contact_id(
+            db,
+            binding,
+            external_id=external_id,
+            scope=scope,
+        )
         # 通讯录懒连接：不创建联系人。group: 发送者跳过；已有行按账号或次级渠道 id 回填。
         if not str(external_id).startswith("group:"):
             link_inbound_contact(
@@ -1825,13 +1862,20 @@ def process_inbound(
                 inbound.text,
                 team_id=team.id,
                 team_title=f"团队 {team.name} · TL 对话",
+                contact_id=inbound_contact_id,
             )
         elif route_agent_id:
             current_agent_id = route_agent_id
             pointer_reset = False
             route_decision = None
             chat_session = find_or_create_channel_session(
-                db, binding, user, current_agent_id, inbound.external_conv_id, inbound.text
+                db,
+                binding,
+                user,
+                current_agent_id,
+                inbound.external_conv_id,
+                inbound.text,
+                contact_id=inbound_contact_id,
             )
         else:
             current_agent_id, pointer_reset = resolve_current_agent(db, binding, inbound.external_conv_id)
@@ -1841,7 +1885,13 @@ def process_inbound(
             if route_decision and route_decision.switched:
                 current_agent_id = route_decision.agent_id
             chat_session = find_or_create_channel_session(
-                db, binding, user, current_agent_id, inbound.external_conv_id, inbound.text
+                db,
+                binding,
+                user,
+                current_agent_id,
+                inbound.external_conv_id,
+                inbound.text,
+                contact_id=inbound_contact_id,
             )
         # 群聊回复投递到群会话，私聊投递到发言人
         chat_session.channel_target_json = target
@@ -1961,6 +2011,8 @@ def process_inbound(
                 )
                 if speaker.status == "resolved" and speaker.user_id:
                     turn_user_id = speaker.user_id
+                if speaker.status == "resolved" and inbound_contact_id:
+                    speaker = speaker.model_copy(update={"contact_id": inbound_contact_id})
             request = ChatTurnRequest(
                 tenant_id=binding.tenant_id,
                 session_id=session_id,

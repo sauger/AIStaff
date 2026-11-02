@@ -221,6 +221,7 @@ class TurnSpeaker(BaseModel):
 
     status: Literal["resolved", "unresolved"]
     user_id: Optional[str] = None
+    contact_id: Optional[str] = None
     channel: str = "web"
     source: Literal["web_login", "channel_identity", "session_user", "unresolved"] = "unresolved"
     reason: Optional[str] = None

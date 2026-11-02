@@ -940,11 +940,20 @@ def _default_skill_runner(
     from app.session.turn_speaker import resolve_known_user_speaker
 
     owner_id = str((agent.metadata_json or {}).get("owner_user_id") or "").strip() or None
+    from app.contacts.identity import ensure_email_contact
+
+    sender_contact = ensure_email_contact(
+        db,
+        tenant_id=agent.tenant_id,
+        email=message.from_address,
+        display_name=None,
+    )
     session = ChatSession(
         id=new_id("session"),
         tenant_id=agent.tenant_id,
         user_id=owner_id,
         agent_id=agent.id,
+        contact_id=sender_contact.id if sender_contact is not None else None,
         title=f"来信 · {message.subject or message.id}",
         channel="mail_inbound",
     )

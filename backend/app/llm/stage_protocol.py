@@ -153,7 +153,8 @@ def speaker_prompt_text(speaker: object) -> str | None:
         if department:
             lines.append(f"department={department}")
         lines.append(
-            "name 是企业花名册上的姓名。用户询问自己是谁时直接用 name 回答，"
+            "name 是当前联系人的展示名；组织内联系人与企业花名册一致。"
+            "用户询问自己是谁时直接用 name 回答，"
             "不要说没有身份信息，也不要念出 user_id。"
             "没有 department 时不要编造部门。"
         )

@@ -190,7 +190,18 @@ def resolve_or_provision_user(
 
     企微私聊在返回前，若企业人员已记下这个 userid 且还没有主账号，把新建或已有的
     影子用户写成 primary_user_id。不改 ChannelIdentity 指向，也不覆盖已有主账号。
+    企微私聊不再新建 ChannelIdentity：认人落在 contacts，旧 CI 只读。
     """
+
+    if channel == "wecom" and not str(external_id).startswith("group:"):
+        return _resolve_wecom_user_without_new_identity(
+            db,
+            tenant_id,
+            external_id,
+            display_name,
+            account_scope,
+            name_resolver=name_resolver,
+        )
 
     def finish(resolved: User) -> User:
         if channel == "wecom" and not str(external_id).startswith("group:"):
@@ -295,6 +306,87 @@ def resolve_or_provision_user(
     return finish(user)
 
 
+def _resolve_wecom_user_without_new_identity(
+    db: Session,
+    tenant_id: str,
+    external_id: str,
+    display_name: str | None,
+    account_scope: str,
+    *,
+    name_resolver: Callable[[str], str | None] | None,
+) -> User:
+    """企微私聊用户。读遗留 CI，不插入新 CI；联系人由 ensure_wecom_contact 维护。"""
+
+    from app.contacts.identity import ensure_wecom_contact
+
+    def finish(resolved: User) -> User:
+        from app.org.wecom_link import attach_pending_wecom_person
+
+        ensure_wecom_contact(
+            db,
+            tenant_id=tenant_id,
+            wecom_userid=external_id,
+            corp_id=account_scope,
+            display_name=display_name or resolved.display_name,
+            user=resolved,
+        )
+        attach_pending_wecom_person(
+            db,
+            tenant_id=tenant_id,
+            wecom_userid=external_id,
+            user=resolved,
+        )
+        return resolved
+
+    identity = find_channel_identity(db, tenant_id, "wecom", external_id, account_scope)
+    if identity:
+        user = db.get(User, identity.staffdeck_user_id)
+        if user and user.tenant_id == tenant_id:
+            if (
+                name_resolver
+                and _is_placeholder_display_name(user.display_name or "", "wecom")
+            ):
+                real_name = name_resolver(external_id)
+                if real_name:
+                    user.display_name = real_name
+                    db.add(user)
+                    db.flush()
+            return finish(user)
+        db.delete(identity)
+        db.flush()
+
+    username = channel_username(tenant_id, "wecom", external_id, account_scope)
+    user = db.exec(
+        select(User).where(User.tenant_id == tenant_id, User.username == username)
+    ).first()
+    if user is not None:
+        return finish(user)
+
+    resolved_name = None
+    if name_resolver:
+        resolved_name = name_resolver(external_id)
+    final_display = (resolved_name or display_name or "").strip() or None
+    user = User(
+        tenant_id=tenant_id,
+        username=username,
+        display_name=final_display or username,
+        role="member",
+        source="wecom",
+        password_hash=hash_password(secrets.token_urlsafe(24)),
+    )
+    db.add(user)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        user = db.exec(
+            select(User).where(User.tenant_id == tenant_id, User.username == username)
+        ).first()
+        if user is None:
+            raise
+    return finish(user)
+
+
 def unbind_external_identity(
     db: Session,
     tenant_id: str,
@@ -363,6 +455,17 @@ def unbind_external_identity(
             row.user_id = lazy.id
             row.username = lazy.username
             db.add(row)
+    if channel == "wecom":
+        from app.contacts.identity import detach_web_user_from_wecom_contact
+
+        detach_web_user_from_wecom_contact(
+            db,
+            tenant_id=tenant_id,
+            wecom_userid=external_id,
+            corp_id=account_scope,
+            web_user_id=current.id,
+            channel_user=lazy,
+        )
     return current
 
 

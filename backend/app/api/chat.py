@@ -2177,11 +2177,15 @@ def create_chat_session(
     ensure_tenant(db, request.tenant_id)
     _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
     title = _normalize_title(request.title)
+    from app.contacts.identity import ensure_web_contact
+
+    web_contact = ensure_web_contact(db, current_user)
     row = ChatSession(
         id=new_id("session"),
         tenant_id=request.tenant_id,
         user_id=current_user.id,
         agent_id=request.agent_id,
+        contact_id=web_contact.id if web_contact is not None else None,
         title=title,
     )
     db.add(row)

@@ -22,6 +22,7 @@ from app.db.models import (
     ChannelInboundEvent,
     ChatSession,
     MemoryRecord,
+    PersonContact,
     Tenant,
     User,
 )
@@ -182,9 +183,12 @@ def test_same_tenant_different_corp_same_userid_get_different_users() -> None:
         # 同租户两企业同名不撞 username
         assert channel_username("tenant_demo", "wecom", "zhangsan", "corpA") in usernames
         assert channel_username("tenant_demo", "wecom", "zhangsan", "corpB") in usernames
-        identities = db.exec(select(ChannelIdentity)).all()
-        assert len(identities) == 2
-        assert {i.external_account_scope for i in identities} == {"corpA", "corpB"}
+        assert db.exec(select(ChannelIdentity)).all() == []
+        contacts = db.exec(select(PersonContact)).all()
+        assert len(contacts) == 2
+        assert {row.wecom_corp_id for row in contacts} == {"corpA", "corpB"}
+        assert {row.wecom_userid for row in contacts} == {"zhangsan"}
+        assert {row.channel_user_id for row in contacts} == {user_a, user_b}
 
 
 def test_same_corp_different_bindings_share_identity() -> None:
@@ -199,7 +203,12 @@ def test_same_corp_different_bindings_share_identity() -> None:
 
     assert RecordingAgentLoop.calls[0].user_id == RecordingAgentLoop.calls[1].user_id
     with Session(engine) as db:
-        assert len(db.exec(select(ChannelIdentity)).all()) == 1
+        assert db.exec(select(ChannelIdentity)).all() == []
+        contacts = db.exec(select(PersonContact)).all()
+        assert len(contacts) == 1
+        assert contacts[0].wecom_corp_id == "corpX"
+        assert contacts[0].wecom_userid == "zhangsan"
+        assert contacts[0].channel_user_id == RecordingAgentLoop.calls[0].user_id
 
 
 def test_cross_corp_same_msgid_events_both_processed() -> None:

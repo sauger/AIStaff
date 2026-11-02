@@ -104,7 +104,9 @@ def _contact(db: Session, contact_id: str) -> Contact:
 
 def test_contact_table_keeps_channel_ids_and_user_link_nullable(contact_db) -> None:
     db, _seeded, _engine = contact_db
-    columns = {column["name"]: column for column in inspect(db.get_bind()).get_columns("contacts")}
+    columns = {
+        column["name"]: column for column in inspect(db.get_bind()).get_columns("agent_contacts")
+    }
     for name in (
         "name",
         "phone",

@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import JSON, Column, Index, Integer, UniqueConstraint, text
+from sqlalchemy import JSON, CheckConstraint, Column, Index, Integer, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 
@@ -1042,12 +1042,13 @@ class EmployeeLoginGuide(SQLModel, table=True):
 
 
 class Contact(SQLModel, table=True):
-    """员工通讯录里的真人权威行。渠道外部 id 是可空次级查找键，不是主键。
+    """员工通讯录（按数字员工一本）。不是租户级认人主档。
 
-    primary_user_id 懒连到 User.id：表单不要求已有账号。入站只在已有联系人时回填。
+    租户级沟通对象在 ``PersonContact``（表名 ``contacts``）。本表因此叫
+    ``agent_contacts``：渠道外部 id 仍是可空次级查找键，入站只回填已有行。
     """
 
-    __tablename__ = "contacts"
+    __tablename__ = "agent_contacts"
     __table_args__ = (
         UniqueConstraint(
             "tenant_id", "agent_id", "wecom_userid", name="uq_contact_agent_wecom_userid"
@@ -1088,6 +1089,153 @@ class Contact(SQLModel, table=True):
     )
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class PersonContact(SQLModel, table=True):
+    """租户内一个沟通对象。渠道 ID 直接挂在本表，认人不再写 channel_identities。
+
+    ``kind=org`` 由企业人员同步或唯一命中组织字段时使用；入站未命中才建
+    ``kind=personal``。同一有效渠道字段不能再克隆一条 personal。
+    ``channel_user_id`` 只服务现有会话用户（影子账号或网页账号），不是第二个人。
+    ``web_user_id`` 仍只表示网页登录用户。
+    """
+
+    __tablename__ = "contacts"
+    __table_args__ = (
+        CheckConstraint("kind IN ('org', 'personal')", name="ck_person_contact_kind"),
+        CheckConstraint("status IN ('active', 'archived')", name="ck_person_contact_status"),
+        Index(
+            "uq_person_contact_wecom",
+            "tenant_id",
+            "wecom_corp_id",
+            "wecom_userid",
+            unique=True,
+            sqlite_where=text(
+                "wecom_userid IS NOT NULL AND wecom_userid != '' AND merged_into_id IS NULL"
+            ),
+            postgresql_where=text(
+                "wecom_userid IS NOT NULL AND wecom_userid <> '' AND merged_into_id IS NULL"
+            ),
+        ),
+        Index(
+            "uq_person_contact_web_user",
+            "tenant_id",
+            "web_user_id",
+            unique=True,
+            sqlite_where=text("web_user_id IS NOT NULL AND merged_into_id IS NULL"),
+            postgresql_where=text("web_user_id IS NOT NULL AND merged_into_id IS NULL"),
+        ),
+        Index(
+            "uq_person_contact_email",
+            "tenant_id",
+            "email",
+            unique=True,
+            sqlite_where=text(
+                "email IS NOT NULL AND email != '' AND merged_into_id IS NULL"
+            ),
+            postgresql_where=text(
+                "email IS NOT NULL AND email <> '' AND merged_into_id IS NULL"
+            ),
+        ),
+        Index(
+            "uq_person_contact_enterprise_person",
+            "tenant_id",
+            "enterprise_person_id",
+            unique=True,
+            sqlite_where=text(
+                "enterprise_person_id IS NOT NULL AND merged_into_id IS NULL"
+            ),
+            postgresql_where=text(
+                "enterprise_person_id IS NOT NULL AND merged_into_id IS NULL"
+            ),
+        ),
+        Index("ix_person_contact_tenant_kind", "tenant_id", "kind"),
+        Index("ix_person_contact_tenant_status", "tenant_id", "status"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("pcontact"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    kind: str = Field(default="personal", index=True)
+    display_name: str
+    status: str = Field(default="active", index=True)
+    # 空字符串表示尚未区分企业。NULL 在 SQLite 唯一索引里互不相等，不能用来防双档。
+    wecom_corp_id: str = Field(default="")
+    wecom_userid: Optional[str] = Field(default=None, index=True)
+    web_user_id: Optional[str] = Field(
+        default=None, foreign_key="users.id", ondelete="SET NULL", index=True
+    )
+    email: Optional[str] = Field(default=None, index=True)
+    phone: Optional[str] = None
+    enterprise_person_id: Optional[str] = Field(
+        default=None,
+        foreign_key="enterprise_people.id",
+        ondelete="SET NULL",
+        index=True,
+    )
+    source: Optional[str] = Field(default=None, index=True)
+    merged_into_id: Optional[str] = Field(default=None, foreign_key="contacts.id", index=True)
+    # 兼容：会话仍挂 User。网页账号同时写入 web_user_id；影子账号只写这里。
+    channel_user_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ContactExtension(SQLModel, table=True):
+    """某个数字员工对某个联系人的私有备注。员工之间互不可见。"""
+
+    __tablename__ = "contact_extensions"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "agent_id",
+            "contact_id",
+            name="uq_contact_extension_agent_contact",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("pconext"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    contact_id: str = Field(foreign_key="contacts.id", ondelete="CASCADE", index=True)
+    agent_id: str = Field(index=True)
+    notes: Optional[str] = None
+    # 草案字段 extra。列名 extra_json，与仓库其它 JSON 列一致。
+    extra_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ContactMergeSuggestion(SQLModel, table=True):
+    """合并建议。P0 只落待确认行，不执行合并。"""
+
+    __tablename__ = "contact_merge_suggestions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'rejected')",
+            name="ck_contact_merge_suggestion_status",
+        ),
+        Index(
+            "uq_contact_merge_suggestion_pending",
+            "tenant_id",
+            "left_contact_id",
+            "right_contact_id",
+            "reason",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("pmerge"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    left_contact_id: str = Field(foreign_key="contacts.id", index=True)
+    right_contact_id: str = Field(foreign_key="contacts.id", index=True)
+    reason: str
+    status: str = Field(default="pending", index=True)
+    keep_contact_id: Optional[str] = Field(default=None, foreign_key="contacts.id")
+    decided_by_user_id: Optional[str] = None
+    decided_by_agent_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    decided_at: Optional[datetime] = None
 
 
 class EnterprisePerson(SQLModel, table=True):
@@ -1319,10 +1467,15 @@ class MockOrder(SQLModel, table=True):
 
 class ChatSession(SQLModel, table=True):
     __tablename__ = "sessions"
+    __table_args__ = (
+        Index("ix_sessions_tenant_contact", "tenant_id", "contact_id"),
+    )
 
     id: str = Field(primary_key=True)
     tenant_id: str = Field(index=True)
     user_id: Optional[str] = Field(default=None, index=True)
+    # 新会话挂联系人。旧行可空，认人不再只靠 user_id。
+    contact_id: Optional[str] = Field(default=None, foreign_key="contacts.id", index=True)
     agent_id: Optional[str] = Field(default=None, index=True)
     title: Optional[str] = None
     active_skill_id: Optional[str] = None
@@ -1961,6 +2114,8 @@ class MemoryRecord(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("mem"), primary_key=True)
     tenant_id: str = Field(index=True)
     user_id: str = Field(index=True)
+    # 本地记忆锚。查询仍兼容 user_id；新写入尽量带上联系人。
+    contact_id: Optional[str] = Field(default=None, index=True)
     username: Optional[str] = Field(default=None, index=True)
     session_id: Optional[str] = Field(default=None, index=True)
     kind: str = Field(default="conversation", index=True)

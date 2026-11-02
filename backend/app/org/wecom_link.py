@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.db.models import ChannelIdentity, EnterprisePerson, User, utc_now
+from app.db.models import ChannelIdentity, EnterprisePerson, PersonContact, User, utc_now
 from app.org.errors import OrgError
 from app.text import single_line
 
@@ -140,8 +140,9 @@ def attach_pending_wecom_person(
     if person is None or person.primary_user_id:
         return
     # 多个企业/应用范围指向不同用户时不猜。保存接口会 409；入站不能把回合打失败。
+    # 新入站不再写 ChannelIdentity。没有其它说话人时，这次影子用户就是唯一候选。
     speakers = _wecom_speakers(db, tenant_id, userid)
-    if [item.id for item in speakers] != [user.id]:
+    if any(item.id != user.id for item in speakers):
         return
     holder = db.exec(
         select(EnterprisePerson).where(
@@ -233,6 +234,23 @@ def _wecom_speakers(db: Session, tenant_id: str, userid: str) -> list[User]:
             continue
         seen.add(user.id)
         speakers.append(user)
+    contact_rows = db.exec(
+        select(PersonContact).where(
+            PersonContact.tenant_id == tenant_id,
+            PersonContact.wecom_userid == userid,
+            PersonContact.merged_into_id.is_(None),
+            PersonContact.status == "active",
+        )
+    ).all()
+    for row in contact_rows:
+        for user_id in (row.channel_user_id, row.web_user_id):
+            if not user_id or user_id in seen:
+                continue
+            contact_user = db.get(User, user_id)
+            if contact_user is None or contact_user.tenant_id != tenant_id:
+                continue
+            seen.add(contact_user.id)
+            speakers.append(contact_user)
     return speakers
 
 

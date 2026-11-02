@@ -196,6 +196,9 @@ def create_person(
         wecom_userid=wecom_userid,
     )
     db.add(row)
+    from app.contacts.identity import sync_org_contact_from_person
+
+    sync_org_contact_from_person(db, row)
     _commit(db)
     db.refresh(row)
     return _with_wecom_notice(_people_reads(db, tenant_id, [row])[0], notice)
@@ -228,6 +231,9 @@ def update_person(
     row.wecom_userid = wecom_userid
     row.updated_at = utc_now()
     db.add(row)
+    from app.contacts.identity import sync_org_contact_from_person
+
+    sync_org_contact_from_person(db, row)
     _commit(db)
     db.refresh(row)
     return _with_wecom_notice(_people_reads(db, tenant_id, [row])[0], notice)

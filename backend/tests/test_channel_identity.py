@@ -8,7 +8,7 @@ from app.channels.service_identity import (
     external_identity_for_message,
     resolve_or_provision_user,
 )
-from app.db.models import ChannelIdentity, Tenant, User
+from app.db.models import ChannelIdentity, PersonContact, Tenant, User
 
 
 def _test_engine():
@@ -126,15 +126,25 @@ def test_corrupt_cross_tenant_identity_is_replaced_in_current_tenant() -> None:
         db.commit()
 
         assert current_user.tenant_id == "tenant_b"
-        identity = db.exec(
-            select(ChannelIdentity).where(
-                ChannelIdentity.tenant_id == "tenant_b",
-                ChannelIdentity.external_account_scope == "corpB",
-                ChannelIdentity.external_user_id == "zhangsan",
+        assert current_user.id != foreign_user.id
+        # 坏掉的跨租户 CI 被清掉，新入站不再补写 channel_identities。
+        assert (
+            db.exec(
+                select(ChannelIdentity).where(
+                    ChannelIdentity.tenant_id == "tenant_b",
+                    ChannelIdentity.external_user_id == "zhangsan",
+                )
+            ).first()
+            is None
+        )
+        contact = db.exec(
+            select(PersonContact).where(
+                PersonContact.tenant_id == "tenant_b",
+                PersonContact.wecom_userid == "zhangsan",
             )
         ).one()
-        assert identity.staffdeck_user_id == current_user.id
-        assert identity.staffdeck_user_id != foreign_user.id
+        assert contact.channel_user_id == current_user.id
+        assert contact.kind == "personal"
 
 
 def test_group_account_provision() -> None:

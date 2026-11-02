@@ -1160,12 +1160,16 @@ class AgentLoop:
     def _get_or_create_session(self, request: ChatTurnRequest) -> ChatSession:
         session_id = request.session_id or new_id("session")
         chat_session = self.db.get(ChatSession, session_id)
+        contact_id = None
+        if request.speaker is not None and request.speaker.contact_id:
+            contact_id = request.speaker.contact_id
         if not chat_session:
             chat_session = ChatSession(
                 id=session_id,
                 tenant_id=request.tenant_id,
                 user_id=request.user_id,
                 agent_id=request.agent_id,
+                contact_id=contact_id,
                 channel=(
                     request.channel
                     if request.channel in {PILOTDECK_GROUP_CHAT_CHANNEL, "skill_test"}
@@ -1174,8 +1178,12 @@ class AgentLoop:
             )
             self.db.add(chat_session)
             self.db.flush()
-        elif not chat_session.agent_id and request.agent_id:
-            chat_session.agent_id = request.agent_id
+        else:
+            if not chat_session.agent_id and request.agent_id:
+                chat_session.agent_id = request.agent_id
+            if contact_id and not chat_session.contact_id:
+                chat_session.contact_id = contact_id
+                self.db.add(chat_session)
         return chat_session
 
     def _current_skill_step(
