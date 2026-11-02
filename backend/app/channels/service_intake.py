@@ -501,6 +501,21 @@ def _stage_interrupted_notice(
     )
 
 
+def _is_idempotency_key_conflict(exc: IntegrityError) -> bool:
+    """只认 channel_deliveries.idempotency_key 的唯一约束冲突。"""
+    message = f"{getattr(exc, 'orig', '')} {exc}".lower()
+    return "idempotency_key" in message and ("unique" in message or "duplicate" in message)
+
+
+def _log_skipped_notice(binding: ChannelBinding, key: str, delivery_id: str | None) -> None:
+    logger.info(
+        "入站通知幂等键已存在，跳过重复入队 binding=%s idempotency_key=%s delivery=%s",
+        binding.id,
+        key,
+        delivery_id or "-",
+    )
+
+
 def _stage_notice(
     db: Session,
     binding: ChannelBinding,
@@ -513,9 +528,9 @@ def _stage_notice(
 ) -> None:
     """系统提示投递(指令回复/员工下线提示);session_id 用 conv: 前缀占位。
 
-    调用方给出稳定 idempotency_key 时，同键投递已存在则跳过。入站守护重放
-    （例如知识库提案确认通知）不得再次 INSERT，否则 UNIQUE 冲突会在提交时
-    失败并把 SQLite 连接池打满。查询失败或其它写入错误继续抛出。
+    调用方给出稳定 idempotency_key 时，同键投递已存在则跳过。并发两路都没查到时，
+    INSERT 若撞上该键的 UNIQUE，只回滚本次 savepoint 并同样跳过，不把冲突冒泡到
+    外层入站事务。查询失败或其它写入错误继续抛出。
     """
     if not _valid_notice_target(binding.channel, target):
         return
@@ -523,32 +538,42 @@ def _stage_notice(
     if final_for_event:
         delivery_target["reaction_final"] = True
     key = idempotency_key or new_id("chnotice")
-    if idempotency_key:
-        existing = db.exec(
-            select(ChannelDelivery).where(ChannelDelivery.idempotency_key == key)
-        ).first()
-        if existing is not None:
-            logger.info(
-                "入站通知幂等键已存在，跳过重复入队 binding=%s idempotency_key=%s delivery=%s",
-                binding.id,
-                key,
-                existing.id,
-            )
-            return
-    db.add(
-        ChannelDelivery(
-            tenant_id=binding.tenant_id,
-            binding_id=binding.id,
-            session_id=f"conv:{external_conv_id}",
-            message_id=None,
-            target_json=delivery_target,
-            kind="notice",
-            text=text,
-            status="pending",
-            next_attempt_at=utc_now(),
-            idempotency_key=key,
-        )
+    delivery = ChannelDelivery(
+        tenant_id=binding.tenant_id,
+        binding_id=binding.id,
+        session_id=f"conv:{external_conv_id}",
+        message_id=None,
+        target_json=delivery_target,
+        kind="notice",
+        text=text,
+        status="pending",
+        next_attempt_at=utc_now(),
+        idempotency_key=key,
     )
+    if not idempotency_key:
+        db.add(delivery)
+        return
+    existing = db.exec(
+        select(ChannelDelivery).where(ChannelDelivery.idempotency_key == key)
+    ).first()
+    if existing is not None:
+        _log_skipped_notice(binding, key, existing.id)
+        return
+    # begin_nested() 会先把其它待写入刷进外层事务，再开 savepoint。
+    # 幂等键冲突只回滚这一条 INSERT。
+    nested = db.begin_nested()
+    try:
+        db.add(delivery)
+        db.flush()
+    except IntegrityError as exc:
+        nested.rollback()
+        if delivery in db:
+            db.expunge(delivery)
+        if not _is_idempotency_key_conflict(exc):
+            raise
+        _log_skipped_notice(binding, key, None)
+        return
+    nested.commit()
 
 
 _NEGATIVE_NAME_CACHE_TTL = 300  # 5 minutes
