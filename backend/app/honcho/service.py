@@ -8,7 +8,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.db.models import AgentProfile, UIConfig
-from app.honcho.client import HonchoClient
+from app.honcho.client import HonchoClient, HonchoRequestError, HonchoTimeout
 from app.honcho.ids import HonchoIdError, build_honcho_identity
 from app.honcho.runtime import apply_honcho_ui_config
 from app.session.session_schema import ChatTurnRequest
@@ -119,11 +119,23 @@ def inject_honcho_representation(
             contact_id=portrait_contact_id(request, session) or None,
         )
         honcho = client or build_honcho_client(settings)
-        text = honcho.fetch_representation(
+        timeout_seconds = max(settings.honcho_timeout_ms, 1) / 1000
+        # 短期 dual-read：contact peer 还是空的或 404 时，再读迁移前的 user peer。
+        # 写入仍只写 contact peer。TODO: contact 画像积累后去掉这次回读。
+        text, cold = _read_representation(
+            honcho,
             identity.workspace_id,
             identity.user_peer_id,
-            timeout_seconds=max(settings.honcho_timeout_ms, 1) / 1000,
+            timeout_seconds=timeout_seconds,
         )
+        legacy_peer_id = identity.legacy_user_peer_id
+        if cold and legacy_peer_id and legacy_peer_id != identity.user_peer_id:
+            text, _cold = _read_representation(
+                honcho,
+                identity.workspace_id,
+                legacy_peer_id,
+                timeout_seconds=timeout_seconds,
+            )
     except Exception:
         logger.warning("honcho representation skipped", exc_info=True)
         return memories
@@ -209,6 +221,44 @@ def dual_write_message(
         content=content,
         metadata=message_metadata,
     )
+
+
+def _read_representation(
+    honcho: HonchoClient,
+    workspace_id: str,
+    peer_id: str,
+    *,
+    timeout_seconds: float,
+) -> tuple[str, bool]:
+    """Return ``(text, cold)``. Cold means the peer is missing or has no portrait.
+
+    Timeout and server errors are not cold: a second peer read would only add
+    another wait while Honcho is already unavailable.
+    """
+
+    try:
+        text = str(
+            honcho.fetch_representation(
+                workspace_id,
+                peer_id,
+                timeout_seconds=timeout_seconds,
+            )
+            or ""
+        ).strip()
+    except HonchoTimeout:
+        logger.warning("honcho representation timed out peer=%s", peer_id)
+        return "", False
+    except HonchoRequestError as exc:
+        if exc.status_code == 404:
+            return "", True
+        logger.warning("honcho representation failed peer=%s", peer_id, exc_info=True)
+        return "", False
+    except Exception:
+        logger.warning("honcho representation failed peer=%s", peer_id, exc_info=True)
+        return "", False
+    if text:
+        return text, False
+    return "", True
 
 
 def representation_memory(text: str) -> dict[str, object]:

@@ -124,8 +124,11 @@ def test_contact_peer_replaces_user_peer_and_keeps_workspace_agent_session() -> 
     assert with_contact.agent_peer_id == "agent_agent_xyz"
     assert with_contact.session_logical == "chat:session_wecom"
     assert with_contact.session_id == "chat_session_wecom"
+    assert with_contact.legacy_user_peer_logical == "user:user_shadow"
+    assert with_contact.legacy_user_peer_id == "user_user_shadow"
     assert without_contact.user_peer_logical == "user:user_shadow"
     assert without_contact.user_peer_id == "user_user_shadow"
+    assert without_contact.legacy_user_peer_id is None
 
 
 def test_same_contact_is_one_peer_for_different_users() -> None:

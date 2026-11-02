@@ -33,6 +33,9 @@ class HonchoIdentity:
     user_peer_metadata: dict[str, str]
     agent_peer_metadata: dict[str, str]
     session_metadata: dict[str, str]
+    # 迁移前的 user peer。只给 representation 回读，写入不再使用。
+    legacy_user_peer_logical: str | None = None
+    legacy_user_peer_id: str | None = None
 
 
 def wire_id(logical: str) -> str:
@@ -62,8 +65,11 @@ def build_honcho_identity(
     workspace_logical = f"{workspace_prefix}{tenant_id}"
     # 有联系人时网页 User 与渠道影子 User 共用一个 peer。没有联系人时仍用 User.id。
     resolved_contact_id = str(contact_id or "").strip()
+    legacy_user_peer_logical = None
+    legacy_user_peer_id = None
     if resolved_contact_id:
         user_peer_logical = f"contact:{resolved_contact_id}"
+        legacy_user_peer_logical, legacy_user_peer_id = _legacy_user_peer(user_id)
     else:
         user_peer_logical = f"user:{user_id}"
     agent_peer_logical = f"agent:{agent_id}"
@@ -85,7 +91,19 @@ def build_honcho_identity(
         user_peer_metadata={"staff_peer": user_peer_logical, **channel_metadata},
         agent_peer_metadata={"staff_peer": agent_peer_logical},
         session_metadata={"staff_session": session_logical, **channel_metadata},
+        legacy_user_peer_logical=legacy_user_peer_logical,
+        legacy_user_peer_id=legacy_user_peer_id,
     )
+
+
+def _legacy_user_peer(user_id: str) -> tuple[str | None, str | None]:
+    """旧 ``user:{User.id}`` peer。id 不合法时放弃回读，不影响 contact peer。"""
+
+    logical = f"user:{user_id}"
+    try:
+        return logical, wire_id(logical)
+    except HonchoIdError:
+        return None, None
 
 
 def _channel_metadata(
