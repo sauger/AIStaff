@@ -74,7 +74,183 @@ def init_db() -> None:
     _migrate_enterprise_person_wecom_userid()
     _migrate_agent_primary_owner()
     _migrate_wecom_apps()
+    _migrate_identity_contacts()
     _purge_orphaned_chat_sessions()
+
+
+def _migrate_identity_contacts() -> None:
+    if not str(database_url).startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        migrate_identity_contacts(connection)
+
+
+def migrate_identity_contacts(connection) -> None:
+    """把员工通讯录从 contacts 挪到 agent_contacts，并建租户级 contacts。
+
+    旧库的 contacts 是按数字员工的通讯录（有 agent_id，没有 kind）。
+    草案里的 contacts 是租户级认人主档。两边不能共用一张表，所以先搬通讯录，
+    再按模型创建 contacts / contact_extensions / contact_merge_suggestions。
+    历史企微 channel_identities 只读回填，不改 CI 行。
+    """
+
+    from app.db.models import ContactExtension, ContactMergeSuggestion, PersonContact
+
+    _relocate_agent_address_book(connection)
+    PersonContact.__table__.create(connection, checkfirst=True)
+    ContactExtension.__table__.create(connection, checkfirst=True)
+    ContactMergeSuggestion.__table__.create(connection, checkfirst=True)
+    _add_column_if_missing(connection, "sessions", "contact_id", "VARCHAR")
+    _add_column_if_missing(connection, "memories", "contact_id", "VARCHAR")
+    tables = set(inspect(connection).get_table_names())
+    if "sessions" in tables:
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_sessions_tenant_contact "
+                "ON sessions (tenant_id, contact_id)"
+            )
+        )
+    if "memories" in tables:
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_memories_contact_id ON memories (contact_id)"
+            )
+        )
+    _backfill_wecom_contacts(connection)
+
+
+def _add_column_if_missing(connection, table: str, column: str, ddl_type: str) -> None:
+    tables = set(inspect(connection).get_table_names())
+    if table not in tables:
+        return
+    columns = {item["name"] for item in inspect(connection).get_columns(table)}
+    if column not in columns:
+        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+
+
+def _relocate_agent_address_book(connection) -> None:
+    tables = set(inspect(connection).get_table_names())
+    if "contacts" not in tables:
+        return
+    columns = {column["name"] for column in inspect(connection).get_columns("contacts")}
+    if "kind" in columns or "agent_id" not in columns:
+        return
+    if "agent_contacts" not in tables:
+        connection.execute(text("ALTER TABLE contacts RENAME TO agent_contacts"))
+        return
+    destination = [
+        column["name"] for column in inspect(connection).get_columns("agent_contacts")
+    ]
+    shared = [name for name in destination if name in columns]
+    if "id" not in shared:
+        return
+    column_list = ", ".join(shared)
+    connection.execute(
+        text(
+            f"INSERT INTO agent_contacts ({column_list}) "
+            f"SELECT {column_list} FROM contacts "
+            "WHERE id NOT IN (SELECT id FROM agent_contacts)"
+        )
+    )
+    connection.execute(text("DROP TABLE contacts"))
+
+
+def _backfill_wecom_contacts(connection) -> None:
+    tables = set(inspect(connection).get_table_names())
+    if "contacts" not in tables or "channel_identities" not in tables:
+        return
+    columns = {column["name"] for column in inspect(connection).get_columns("contacts")}
+    if "kind" not in columns:
+        return
+    rows = connection.execute(
+        text(
+            "SELECT ci.tenant_id, ci.external_user_id, ci.external_account_scope, "
+            "ci.display_name, ci.staffdeck_user_id, ci.created_at, ci.updated_at, "
+            "u.display_name AS user_display_name, u.source AS user_source, "
+            "ep.id AS person_id, ep.name AS person_name "
+            "FROM channel_identities ci "
+            "LEFT JOIN users u ON u.id = ci.staffdeck_user_id "
+            "LEFT JOIN enterprise_people ep ON ep.tenant_id = ci.tenant_id "
+            "AND ep.wecom_userid = ci.external_user_id AND ep.status = 'active' "
+            "WHERE ci.channel = 'wecom' AND ci.external_user_id NOT LIKE 'group:%'"
+        )
+    ).mappings().all()
+    for row in rows:
+        userid = str(row["external_user_id"] or "").strip()
+        if not userid:
+            continue
+        corp = str(row["external_account_scope"] or "")
+        tenant_id = row["tenant_id"]
+        existing = connection.execute(
+            text(
+                "SELECT id FROM contacts WHERE tenant_id = :tenant_id "
+                "AND wecom_userid = :userid AND IFNULL(wecom_corp_id, '') = :corp "
+                "AND merged_into_id IS NULL"
+            ),
+            {"tenant_id": tenant_id, "userid": userid, "corp": corp},
+        ).first()
+        if existing is not None:
+            continue
+        person_id = str(row["person_id"] or "").strip() or None
+        if person_id:
+            held = connection.execute(
+                text(
+                    "SELECT id, wecom_userid, wecom_corp_id, channel_user_id "
+                    "FROM contacts WHERE tenant_id = :tenant_id "
+                    "AND enterprise_person_id = :person_id AND merged_into_id IS NULL"
+                ),
+                {"tenant_id": tenant_id, "person_id": person_id},
+            ).mappings().first()
+            if held is not None:
+                if not str(held["wecom_userid"] or "").strip():
+                    connection.execute(
+                        text(
+                            "UPDATE contacts SET wecom_userid = :userid, "
+                            "wecom_corp_id = COALESCE(NULLIF(wecom_corp_id, ''), :corp), "
+                            "channel_user_id = COALESCE(channel_user_id, :channel_user_id), "
+                            "updated_at = CURRENT_TIMESTAMP WHERE id = :id"
+                        ),
+                        {
+                            "userid": userid,
+                            "corp": corp,
+                            "channel_user_id": row["staffdeck_user_id"],
+                            "id": held["id"],
+                        },
+                    )
+                continue
+        display_name = (
+            str(row["person_name"] or "").strip()
+            or str(row["display_name"] or "").strip()
+            or str(row["user_display_name"] or "").strip()
+            or f"企微用户 {userid[-8:]}"
+        )
+        web_user_id = row["staffdeck_user_id"] if row["user_source"] == "web" else None
+        connection.execute(
+            text(
+                "INSERT INTO contacts ("
+                "id, tenant_id, kind, display_name, status, wecom_corp_id, wecom_userid, "
+                "web_user_id, email, phone, enterprise_person_id, source, merged_into_id, "
+                "channel_user_id, created_at, updated_at"
+                ") VALUES ("
+                ":id, :tenant_id, :kind, :display_name, 'active', :corp, :userid, "
+                ":web_user_id, NULL, NULL, :person_id, 'channel_identity_backfill', NULL, "
+                ":channel_user_id, COALESCE(:created_at, CURRENT_TIMESTAMP), "
+                "COALESCE(:updated_at, CURRENT_TIMESTAMP))"
+            ),
+            {
+                "id": new_id("pcontact"),
+                "tenant_id": tenant_id,
+                "kind": "org" if person_id else "personal",
+                "display_name": display_name,
+                "corp": corp,
+                "userid": userid,
+                "web_user_id": web_user_id,
+                "person_id": person_id,
+                "channel_user_id": row["staffdeck_user_id"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            },
+        )
 
 
 def _migrate_wecom_apps() -> None:
@@ -322,6 +498,11 @@ def _migrate_org_people_schema() -> None:
         person_by_contact: dict[str, str] = {}
         person_by_user: dict[str, str] = {}
         for contact_id in sorted(contact_ids):
+            contact_columns = {
+                column["name"] for column in inspect(connection).get_columns("contacts")
+            }
+            if "name" not in contact_columns:
+                continue
             contact = connection.execute(
                 text(
                     "SELECT id, tenant_id, name, phone, email, primary_user_id, "

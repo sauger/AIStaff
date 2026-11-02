@@ -97,6 +97,7 @@ def find_or_create_channel_session(
     *,
     team_id: str | None = None,
     team_title: str | None = None,
+    contact_id: str | None = None,
 ) -> ChatSession:
     """按 (agent_id, channel, external_conv_id) 锚定渠道会话，无则创建。
 
@@ -120,7 +121,9 @@ def find_or_create_channel_session(
         else:
             if not chat_session.channel_account_key and binding.external_account_key:
                 chat_session.channel_account_key = binding.external_account_key
-                db.add(chat_session)
+            if contact_id and not chat_session.contact_id:
+                chat_session.contact_id = contact_id
+            db.add(chat_session)
             return chat_session
 
     title = team_title or (first_text or "").strip()[:_CHANNEL_TITLE_LIMIT] or None
@@ -135,6 +138,7 @@ def find_or_create_channel_session(
         channel_binding_id=binding.id,
         channel_account_key=binding.external_account_key,
         team_id=team_id,
+        contact_id=contact_id,
     )
     db.add(chat_session)
     try:

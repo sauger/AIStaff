@@ -183,6 +183,7 @@ class MemoryService:
                 metadata_json=metadata,
             )
             self.db.add(record)
+        self._stamp_contact_id(record, session_id)
 
         for duplicate in duplicates:
             if duplicate.id != record.id:
@@ -267,6 +268,7 @@ class MemoryService:
                 "agent_id": agent_id,
                 "turn_count": int((existing.metadata_json or {}).get("turn_count", 0)) + 1,
             }
+            self._stamp_contact_id(existing, session_id)
             self.db.add(existing)
             return existing
         record = MemoryRecord(
@@ -279,8 +281,16 @@ class MemoryService:
             importance=0.8,
             metadata_json={**metadata, "agent_id": agent_id, "turn_count": 1},
         )
+        self._stamp_contact_id(record, session_id)
         self.db.add(record)
         return record
+
+    def _stamp_contact_id(self, record: MemoryRecord, session_id: str | None) -> None:
+        if record.contact_id or not session_id:
+            return
+        session = self.db.get(ChatSession, session_id)
+        if session is not None and session.contact_id:
+            record.contact_id = session.contact_id
 
     def _memory_matches_agent(self, record: MemoryRecord, agent_id: str | None) -> bool:
         if memory_matches_agent(record, agent_id):

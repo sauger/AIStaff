@@ -6,8 +6,10 @@ unresolved: the session may still belong to a group bucket, but that bucket
 is not a person and must not become a Honcho peer.
 
 Enterprise roster names are not part of identity resolution.
-``attach_speaker_roster`` reads EnterprisePerson by this User.id at the
-start of the turn and copies the display name into the model context.
+``attach_speaker_roster`` prefers ``contacts.display_name`` when this turn
+already has a contact, then fills department from the linked enterprise
+person. Sessions without a contact still fall back to EnterprisePerson by
+User.id.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from app.text import single_line
 _SPEAKER_KEYS = (
     "status",
     "user_id",
+    "contact_id",
     "channel",
     "source",
     "reason",
@@ -154,6 +157,9 @@ def speaker_context_payload(speaker: TurnSpeaker | None) -> dict[str, str]:
     user_id = str(speaker.user_id or "").strip()
     if user_id:
         payload["user_id"] = user_id
+    contact_id = str(speaker.contact_id or "").strip()
+    if contact_id:
+        payload["contact_id"] = contact_id
     name = single_line(speaker.roster_name)
     department = single_line(speaker.roster_department)
     if speaker.roster_status == "matched" and name:
@@ -176,24 +182,104 @@ def attach_speaker_roster(db: Session, request: ChatTurnRequest) -> ChatTurnRequ
     if speaker is None or speaker.status != "resolved":
         return request
     user_id = str(speaker.user_id or "").strip()
-    if not user_id:
+    if not user_id and not str(speaker.contact_id or "").strip():
         return request
-    roster = lookup_speaker_roster(
+    name, department = _speaker_name_and_department(
         db,
         tenant_id=request.tenant_id,
         user_id=user_id,
+        contact_id=str(speaker.contact_id or "").strip(),
     )
+    if not name:
+        return request.model_copy(
+            update={
+                "speaker": speaker.model_copy(
+                    update={
+                        "roster_status": "unmatched",
+                        "roster_name": None,
+                        "roster_department": None,
+                    }
+                )
+            }
+        )
     return request.model_copy(
         update={
             "speaker": speaker.model_copy(
                 update={
-                    "roster_status": roster.status,
-                    "roster_name": roster.name or None,
-                    "roster_department": roster.department or None,
+                    "roster_status": "matched",
+                    "roster_name": name,
+                    "roster_department": department or None,
                 }
             )
         }
     )
+
+
+def _speaker_name_and_department(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    contact_id: str,
+) -> tuple[str, str]:
+    """联系人展示名优先。花名册姓名在没有联系人名、或联系人名仍是占位时补上。"""
+
+    from app.contacts.identity import is_placeholder_display_name
+    from app.db.models import PersonContact
+    from app.org.speaker_roster import department_for_person
+
+    contact = db.get(PersonContact, contact_id) if contact_id else None
+    if contact is not None and (
+        contact.tenant_id != tenant_id or contact.merged_into_id or contact.status != "active"
+    ):
+        contact = None
+    if contact is None and user_id:
+        contact = _contact_for_user(db, tenant_id, user_id)
+    roster_name = ""
+    roster_department = ""
+    if user_id:
+        roster = lookup_speaker_roster(db, tenant_id=tenant_id, user_id=user_id)
+        if roster.status == "matched":
+            roster_name = roster.name
+            roster_department = roster.department
+    contact_name = single_line(contact.display_name) if contact is not None else ""
+    department = ""
+    if contact is not None and contact.enterprise_person_id:
+        department = department_for_person(db, tenant_id, contact.enterprise_person_id)
+    if not department:
+        department = roster_department
+    if contact_name and not is_placeholder_display_name(contact_name):
+        return contact_name, department
+    if roster_name:
+        return roster_name, department
+    if contact_name:
+        return contact_name, department
+    return "", ""
+
+
+def _contact_for_user(db: Session, tenant_id: str, user_id: str):
+    from sqlalchemy import or_
+    from sqlmodel import select
+
+    from app.db.models import PersonContact
+
+    matches = list(
+        db.exec(
+            select(PersonContact).where(
+                PersonContact.tenant_id == tenant_id,
+                PersonContact.merged_into_id.is_(None),
+                PersonContact.status == "active",
+                or_(
+                    PersonContact.web_user_id == user_id,
+                    PersonContact.channel_user_id == user_id,
+                ),
+            )
+        ).all()
+    )
+    orgs = [row for row in matches if row.kind == "org"]
+    if len(orgs) == 1:
+        return orgs[0]
+    return matches[0] if len(matches) == 1 else None
 
 
 def speaker_message_metadata(speaker: TurnSpeaker | None) -> dict[str, str]:

@@ -58,6 +58,8 @@ def build_honcho_identity(
     external_user_id: str | None = None,
 ) -> HonchoIdentity:
     workspace_logical = f"{workspace_prefix}{tenant_id}"
+    # TODO(P1): peer 从 user:{User.id} 改为 contact:{contact_id}。P0 只把 contact_id
+    # 挂在会话和本地记忆上，Honcho 仍用 User.id，避免改名打断已有画像。
     user_peer_logical = f"user:{user_id}"
     agent_peer_logical = f"agent:{agent_id}"
     session_logical = f"chat:{session_id}"

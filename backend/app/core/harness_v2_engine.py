@@ -212,7 +212,10 @@ class HarnessV2Engine:
         self._session_lock_id: str | None = None
 
     def run(self, request: ChatTurnRequest) -> ChatTurnResponse:
-        # 阶段提示和 TaskRequirement 都读 request.speaker。先挂花名册，群聊不会进这里的查询。
+        # 阶段提示和 TaskRequirement 都读 request.speaker。先挂联系人，再补花名册部门。
+        from app.contacts.identity import bind_turn_contact
+
+        request = bind_turn_contact(self.db, request)
         request = attach_speaker_roster(self.db, request)
         session_request = _with_recoverable_first_session(request)
         if session_request.session_id:
