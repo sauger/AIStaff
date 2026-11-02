@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time
@@ -14,6 +15,7 @@ from app.channels.service_identity import channel_username
 from app.channels.service_intake import (
     _message_text,
     _session_lock,
+    _stage_notice,
     process_inbound,
 )
 from app.channels.service_intake import (
@@ -1175,3 +1177,270 @@ def test_inbound_with_attachments_passes_them_to_request(monkeypatch) -> None:
     assert len(request.attachments) == 1
     assert request.attachments[0].filename == "img.jpg"
     assert request.attachments[0].sha256 == "abc"
+
+
+def test_stage_notice_skips_existing_idempotency_key(caplog) -> None:
+    """重放同一稳定幂等键时不再 INSERT，避免 UNIQUE 冲突打满连接池。"""
+    engine = _test_engine()
+    binding_id = _seed_binding(engine, channel="wecom")
+    binding = _load_binding(engine, binding_id)
+    target = {"to_user_id": "user_1", "context_token": "ctx_1"}
+    key = "knowledge-proposal-accepted:proposal_1"
+
+    with Session(engine) as db:
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            target,
+            "已确认知识库操作，正在处理；完成后会在这里通知你。",
+            final_for_event=True,
+            idempotency_key=key,
+        )
+        db.commit()
+
+        with caplog.at_level(logging.INFO, logger="app.channels.service_intake"):
+            _stage_notice(
+                db,
+                binding,
+                "conv_1",
+                target,
+                "已确认知识库操作，正在处理；完成后会在这里通知你。",
+                final_for_event=True,
+                idempotency_key=key,
+            )
+            db.commit()
+
+        rows = db.exec(select(ChannelDelivery)).all()
+        assert len(rows) == 1
+        assert rows[0].idempotency_key == key
+        assert rows[0].status == "pending"
+        assert rows[0].target_json.get("reaction_final") is True
+
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            target,
+            "另一条通知",
+            idempotency_key="knowledge-proposal-accepted:proposal_2",
+        )
+        db.commit()
+        assert len(db.exec(select(ChannelDelivery)).all()) == 2
+
+    skip_logs = [record for record in caplog.records if key in record.message]
+    assert skip_logs
+    assert all(record.levelno == logging.INFO for record in skip_logs)
+
+
+def test_stage_notice_insert_unique_conflict_skips_and_keeps_outer_work(
+    monkeypatch, caplog
+) -> None:
+    """SELECT 未命中后的第二次 INSERT 撞 UNIQUE 时跳过，外层事务仍可提交。"""
+    engine = _test_engine()
+    binding_id = _seed_binding(engine, channel="wecom")
+    binding = _load_binding(engine, binding_id)
+    target = {"to_user_id": "user_1", "context_token": "ctx_1"}
+    key = "knowledge-proposal-accepted:proposal_race"
+
+    with Session(engine) as db:
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            target,
+            "已确认知识库操作，正在处理。",
+            idempotency_key=key,
+        )
+        db.commit()
+        winner_id = db.exec(select(ChannelDelivery)).one().id
+
+    real_exec = Session.exec
+    missed = {"done": False}
+
+    def exec_miss_lookup(self, statement, *args, **kwargs):
+        rendered = str(statement)
+        if (
+            not missed["done"]
+            and "WHERE" in rendered.upper()
+            and "idempotency_key" in rendered
+        ):
+            missed["done"] = True
+
+            class _Miss:
+                def first(self):
+                    return None
+
+            return _Miss()
+        return real_exec(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "exec", exec_miss_lookup)
+    with Session(engine) as db:
+        db.add(
+            ChannelDelivery(
+                tenant_id=binding.tenant_id,
+                binding_id=binding.id,
+                session_id="conv:outer",
+                kind="notice",
+                text="外层事务应保留",
+                target_json=dict(target),
+                status="pending",
+                idempotency_key="outer-pending-notice",
+            )
+        )
+        with caplog.at_level(logging.INFO, logger="app.channels.service_intake"):
+            _stage_notice(
+                db,
+                binding,
+                "conv_1",
+                target,
+                "并发重放不应覆盖",
+                final_for_event=True,
+                idempotency_key=key,
+            )
+        db.commit()
+        rows = list(db.exec(select(ChannelDelivery)).all())
+
+    assert missed["done"] is True
+    by_key = {row.idempotency_key: row for row in rows}
+    assert set(by_key) == {key, "outer-pending-notice"}
+    assert by_key[key].id == winner_id
+    assert by_key[key].text == "已确认知识库操作，正在处理。"
+    assert by_key["outer-pending-notice"].text == "外层事务应保留"
+    skip_logs = [record for record in caplog.records if key in record.message]
+    assert skip_logs
+    assert all(record.levelno == logging.INFO for record in skip_logs)
+
+
+def test_stage_notice_concurrent_inserts_skip_unique_conflict(monkeypatch, tmp_path) -> None:
+    """两路同时 miss SELECT 后，后写入的 UNIQUE 不回滚各自的外层事务。"""
+    db_path = tmp_path / "notice-race.db"
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    SQLModel.metadata.create_all(engine)
+    binding_id = _seed_binding(engine, channel="wecom")
+    binding = _load_binding(engine, binding_id)
+    target = {"to_user_id": "user_1", "context_token": "ctx_1"}
+    key = "knowledge-proposal-accepted:proposal_concurrent"
+    start_barrier = threading.Barrier(2)
+    done_barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+    real_exec = Session.exec
+    lookups = {"n": 0}
+    lookup_lock = threading.Lock()
+
+    def exec_release_both_lookups(self, statement, *args, **kwargs):
+        rendered = str(statement)
+        is_lookup = "WHERE" in rendered.upper() and "idempotency_key" in rendered
+        count = 0
+        if is_lookup:
+            with lookup_lock:
+                lookups["n"] += 1
+                count = lookups["n"]
+            if count <= 2:
+                start_barrier.wait(timeout=5)
+        result = real_exec(self, statement, *args, **kwargs)
+        # 两次查询都返回后才允许 INSERT，避免后查的一方看见已提交行而走普通 skip。
+        if is_lookup and count <= 2:
+            done_barrier.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(Session, "exec", exec_release_both_lookups)
+
+    def worker(marker: str) -> None:
+        try:
+            with Session(engine) as db:
+                _stage_notice(
+                    db,
+                    binding,
+                    "conv_race",
+                    target,
+                    "并发确认",
+                    idempotency_key=key,
+                )
+                db.add(
+                    ChannelDelivery(
+                        tenant_id=binding.tenant_id,
+                        binding_id=binding.id,
+                        session_id=f"conv:{marker}",
+                        kind="notice",
+                        text=marker,
+                        target_json=dict(target),
+                        status="pending",
+                        idempotency_key=marker,
+                    )
+                )
+                db.commit()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(f"outer-{index}",)) for index in (1, 2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert lookups["n"] >= 2
+    with Session(engine) as db:
+        rows = list(db.exec(select(ChannelDelivery)).all())
+    by_key = {row.idempotency_key: row for row in rows}
+    assert set(by_key) == {key, "outer-1", "outer-2"}
+    assert by_key[key].text == "并发确认"
+
+
+def test_stage_notice_propagates_non_unique_insert_errors(monkeypatch) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _test_engine()
+    binding_id = _seed_binding(engine, channel="wecom")
+    binding = _load_binding(engine, binding_id)
+    key = "knowledge-proposal-accepted:proposal_not_null"
+    real_flush = Session.flush
+
+    def flush_reject_notice(self, objects=None):
+        if any(getattr(obj, "idempotency_key", None) == key for obj in self.new):
+            raise IntegrityError(
+                "INSERT INTO channel_deliveries",
+                {},
+                Exception("NOT NULL constraint failed: channel_deliveries.tenant_id"),
+            )
+        return real_flush(self, objects)
+
+    monkeypatch.setattr(Session, "flush", flush_reject_notice)
+    with Session(engine) as db, pytest.raises(IntegrityError, match="NOT NULL"):
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            {"to_user_id": "user_1", "context_token": "ctx_1"},
+            "不应吞掉非唯一约束错误",
+            idempotency_key=key,
+        )
+
+
+def test_stage_notice_propagates_idempotency_lookup_errors(monkeypatch) -> None:
+    engine = _test_engine()
+    binding_id = _seed_binding(engine, channel="wecom")
+    binding = _load_binding(engine, binding_id)
+    real_exec = Session.exec
+
+    def exec_raising(self, statement, *args, **kwargs):
+        rendered = str(statement)
+        if "channel_deliveries" in rendered and "idempotency_key" in rendered:
+            raise RuntimeError("delivery lookup failed")
+        return real_exec(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "exec", exec_raising)
+    with Session(engine) as db, pytest.raises(RuntimeError, match="delivery lookup failed"):
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            {"to_user_id": "user_1", "context_token": "ctx_1"},
+            "已确认知识库操作，正在处理。",
+            idempotency_key="knowledge-proposal-accepted:proposal_err",
+        )
