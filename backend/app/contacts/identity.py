@@ -16,6 +16,7 @@ Honcho peer 仍是 ``user:{User.id}``。改为 ``contact:{contact_id}`` 留到 P
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -144,7 +145,7 @@ def ensure_wecom_contact(
     corp = normalize_corp_id(corp_id)
     found = _find_wecom_contact(db, tenant, userid, corp)
     if found is not None:
-        _touch_channel_user(found, user, corp)
+        _touch_channel_user(db, found, user, corp)
         _prefer_display_name(found, display_name)
         db.add(found)
         db.flush()
@@ -156,7 +157,7 @@ def ensure_wecom_contact(
             return contact
     blocked = _blocking_org(db, tenant, wecom_userid=userid, web_user_id=_web_id(user))
     if blocked is not None:
-        _touch_channel_user(blocked, user, corp)
+        _touch_channel_user(db, blocked, user, corp)
         db.add(blocked)
         db.flush()
         return blocked
@@ -184,7 +185,7 @@ def ensure_web_contact(db: Session, user: User) -> PersonContact | None:
         return None
     found = _find_by_web_user(db, tenant, user.id)
     if found is not None:
-        _touch_channel_user(found, user, found.wecom_corp_id or "")
+        _touch_channel_user(db, found, user, found.wecom_corp_id or "")
         _prefer_display_name(found, user.display_name)
         db.add(found)
         db.flush()
@@ -262,6 +263,93 @@ def ensure_email_contact(
         email=normalized,
         user=None,
     )
+
+
+@dataclass(frozen=True)
+class ExplicitWebLinkConflict:
+    """明确的网页登录没能写到这名成员的 org 联系人。"""
+
+    holder_id: str
+    holder_name: str
+    org_contact_id: str | None
+    # taken: 另一个联系人占用了 web_user_id。missing: 没有 org 联系人，或写入冲突。
+    kind: str
+
+
+def apply_explicit_web_user(
+    db: Session,
+    person: EnterprisePerson,
+) -> ExplicitWebLinkConflict | None:
+    """把成员的网页登录同步到 org 联系人。
+
+    主账号是网页用户时写入或改写 ``web_user_id``。这条联系人上已有别的网页账号、
+    且新账号没被占用时，直接改写。新账号已在另一条联系人上时不抢，只记合并建议。
+
+    主账号不是网页用户时清掉 ``web_user_id``。表单清空关联登录后，花名册可能改挂到
+    企微影子；不清的话原网页账号会一直占着唯一键。
+    """
+
+    user = _primary_user(db, person)
+    if user is None or user.source != "web":
+        _release_org_web_user(db, person)
+        return None
+    contact = _find_org_by_person(db, person.tenant_id, person.id)
+    if contact is None:
+        return ExplicitWebLinkConflict(
+            holder_id="",
+            holder_name="",
+            org_contact_id=None,
+            kind="missing",
+        )
+    if contact.web_user_id == user.id:
+        return None
+    holder = _find_by_web_user(db, person.tenant_id, user.id)
+    if holder is not None and holder.id != contact.id:
+        _record_merge_suggestion(db, person.tenant_id, holder, contact, "same_web_user")
+        return ExplicitWebLinkConflict(
+            holder_id=holder.id,
+            holder_name=str(holder.display_name or "").strip() or "未命名联系人",
+            org_contact_id=contact.id,
+            kind="taken",
+        )
+    nested = db.begin_nested()
+    try:
+        contact.web_user_id = user.id
+        contact.updated_at = utc_now()
+        db.add(contact)
+        db.flush()
+    except IntegrityError:
+        nested.rollback()
+        db.expire(contact)
+        holder = _find_by_web_user(db, person.tenant_id, user.id)
+        if holder is not None and holder.id != contact.id:
+            _record_merge_suggestion(db, person.tenant_id, holder, contact, "same_web_user")
+            return ExplicitWebLinkConflict(
+                holder_id=holder.id,
+                holder_name=str(holder.display_name or "").strip() or "未命名联系人",
+                org_contact_id=contact.id,
+                kind="taken",
+            )
+        return ExplicitWebLinkConflict(
+            holder_id="",
+            holder_name="",
+            org_contact_id=contact.id,
+            kind="missing",
+        )
+    nested.commit()
+    return None
+
+
+def _release_org_web_user(db: Session, person: EnterprisePerson) -> None:
+    """主账号不再是网页登录时，放开这条 org 联系人占用的 web_user_id。"""
+
+    contact = _find_org_by_person(db, person.tenant_id, person.id)
+    if contact is None or not contact.web_user_id:
+        return
+    contact.web_user_id = None
+    contact.updated_at = utc_now()
+    db.add(contact)
+    db.flush()
 
 
 def sync_org_contact_from_person(
@@ -408,7 +496,7 @@ def _sync_org_contact_unlocked(
     if person.phone and not contact.phone:
         contact.phone = person.phone
     actor = user or _primary_user(db, person)
-    _touch_channel_user(contact, actor, contact.wecom_corp_id or corp)
+    _touch_channel_user(db, contact, actor, contact.wecom_corp_id or corp)
     contact.updated_at = utc_now()
     db.add(contact)
     return contact
@@ -726,7 +814,12 @@ def _dedupe(rows: list[PersonContact | None]) -> list[PersonContact]:
     return unique
 
 
-def _touch_channel_user(contact: PersonContact, user: User | None, corp: str) -> None:
+def _touch_channel_user(
+    db: Session,
+    contact: PersonContact,
+    user: User | None,
+    corp: str,
+) -> None:
     if user is None:
         return
     stored = contact.wecom_corp_id or ""
@@ -735,7 +828,11 @@ def _touch_channel_user(contact: PersonContact, user: User | None, corp: str) ->
     if contact.channel_user_id is None and compatible:
         contact.channel_user_id = user.id
     if user.source == "web" and contact.web_user_id is None and compatible:
-        contact.web_user_id = user.id
+        holder = _find_by_web_user(db, contact.tenant_id, user.id)
+        if holder is not None and holder.id != contact.id:
+            _record_merge_suggestion(db, contact.tenant_id, holder, contact, "same_web_user")
+        else:
+            contact.web_user_id = user.id
     if stored == "" and incoming and contact.wecom_userid:
         contact.wecom_corp_id = incoming
     contact.updated_at = utc_now()

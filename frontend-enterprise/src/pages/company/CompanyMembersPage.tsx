@@ -420,7 +420,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <div>
               <h3 className="m-0 text-[13px] font-semibold text-[#18181a]">{`已从企微选择 ${wecomSelection.length} 人`}</h3>
               <p className="m-0 mt-1 text-[12px] leading-[1.6] text-[#858b9c]">
-                选择一人并确认后，企微 userid 会自动填入人员表单。多人时再点「填入新建人员」。保存时若已有唯一会话账号，花名册主账号会改挂到该账号。
+                选择一人并确认后，企微 userid 会自动填入人员表单。多人时再点「填入新建人员」。已选择的网页登录账号会保留，不会改挂到企微会话。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -683,7 +683,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
                 mode="single"
                 buttonLabel="选择企微用户"
                 title="选择企微用户"
-                description="选择一人后，企微 userid 会自动填入。保存时若已有唯一会话账号，花名册主账号会改挂到该账号。"
+                description="选择一人后，企微 userid 会自动填入。已选择的网页登录账号会保留，不会改挂到企微会话。"
                 confirmLabel="填入 userid"
                 buttonClassName="h-8 shrink-0 rounded-[10px] px-3 text-[12px]"
                 onOpenChange={setWecomPickerOpen}
@@ -696,7 +696,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             ) : null}
           </div>
           <p className="m-0 text-[11px] leading-[1.6] text-[#858b9c]">
-            若本租户已有该 userid 的唯一企业微信会话账号，保存会把花名册主账号改挂到该账号，包括已经关联的网页账号。不会改绑渠道身份。
+            企微 userid 用来认企微入站。若在下方选择了网页登录账号，保存会保留该账号，并同步到这名成员的组织联系人。不会改绑渠道身份。未选择登录账号时，唯一的企微会话账号仍可作为花名册主账号。
           </p>
           {personDraft?.linkedAccountLabel ? (
             <p className="m-0 text-[11px] text-[#858b9c]">
