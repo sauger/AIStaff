@@ -192,10 +192,6 @@ class WecomOaClient:
             "/oa/gettemplatedetail", {"template_id": template_id}
         )
 
-    def list_template_catalog(self) -> dict[str, Any]:
-        """尝试读取模板目录。公开文档未保证该路径，调用方需处理不存在的情况。"""
-        return self._post_with_token_retry("/oa/gettemplatelist", {})
-
     def list_approval_info(
         self,
         *,

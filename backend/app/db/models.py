@@ -2382,6 +2382,30 @@ class WecomTempIdentityBinding(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class WecomSavedApprovalTemplate(SQLModel, table=True):
+    """管理员核对办公「审批」模板后保存的记录。不依赖企微模板目录。"""
+
+    __tablename__ = "wecom_saved_approval_templates"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "app_id",
+            "template_id",
+            name="uq_wecom_saved_approval_template",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("woatpl"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    app_id: str = Field(index=True)
+    template_id: str
+    name: str
+    control_count: Optional[int] = None
+    created_by_user_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class WecomApprovalIntent(SQLModel, table=True):
     """审批代发意图：确认后不可变快照 + 状态机 + 会话/实例绑定。"""
 

@@ -40,8 +40,11 @@ from app.wecom_oa.directory import (
 from app.wecom_oa.templates import (
     WecomTemplateError,
     assign_approval_template,
+    delete_saved_approval_template,
     load_visible_approval_templates,
     lookup_approval_template,
+    save_approval_template,
+    unassign_approval_template,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,6 +105,16 @@ class ApprovalTemplateLookup(BaseModel):
 class ApprovalTemplateAssign(BaseModel):
     template_id: str
     template_name: str | None = None
+    agent_ids: list[str]
+    scenario_key: str = "default"
+
+
+class ApprovalTemplateSave(BaseModel):
+    template_id: str
+
+
+class ApprovalTemplateUnassign(BaseModel):
+    template_id: str
     agent_ids: list[str]
     scenario_key: str = "default"
 
@@ -329,6 +342,48 @@ def post_approval_template_lookup(
         _raise_template_error(exc)
 
 
+@router.post("/{app_id}/approval-templates/saved")
+def post_saved_approval_template(
+    app_id: str,
+    body: ApprovalTemplateSave,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_admin(tenant_id, current_user)
+    try:
+        return save_approval_template(
+            db,
+            tenant_id=tenant_id,
+            app_id=app_id,
+            template_id=body.template_id,
+            created_by_user_id=current_user.id,
+        )
+    except WecomTemplateError as exc:
+        _raise_template_error(exc)
+
+
+@router.delete("/{app_id}/approval-templates/saved")
+def delete_saved_approval_template_route(
+    app_id: str,
+    template_id: str = Query(...),
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_admin(tenant_id, current_user)
+    try:
+        delete_saved_approval_template(
+            db,
+            tenant_id=tenant_id,
+            app_id=app_id,
+            template_id=template_id,
+        )
+    except WecomTemplateError as exc:
+        _raise_template_error(exc)
+    return {"ok": True}
+
+
 @router.post("/{app_id}/approval-templates/assignments")
 def post_approval_template_assignments(
     app_id: str,
@@ -345,6 +400,31 @@ def post_approval_template_assignments(
             app_id=app_id,
             template_id=body.template_id,
             template_name=body.template_name,
+            agent_ids=body.agent_ids,
+            scenario_key=body.scenario_key,
+        )
+    except WecomTemplateError as exc:
+        _raise_template_error(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"assignments": rows}
+
+
+@router.post("/{app_id}/approval-templates/assignments/remove")
+def post_remove_approval_template_assignments(
+    app_id: str,
+    body: ApprovalTemplateUnassign,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    _require_admin(tenant_id, current_user)
+    try:
+        rows = unassign_approval_template(
+            db,
+            tenant_id=tenant_id,
+            app_id=app_id,
+            template_id=body.template_id,
             agent_ids=body.agent_ids,
             scenario_key=body.scenario_key,
         )
