@@ -74,6 +74,7 @@ from app.session.session_schema import (
     TurnPlan,
 )
 from app.session.turn_speaker import (
+    apply_preferred_name,
     attach_speaker_roster,
     current_speaker_for_requirement,
     portrait_contact_id,
@@ -340,6 +341,12 @@ class HarnessV2Engine:
             self.db,
             request,
             session,
+            memory_context,
+        )
+        # 花名册 name 仍是正式名。preferred_name 要同时进阶段上下文和执行快照。
+        request, execution_request = apply_preferred_name(
+            request,
+            execution_request,
             memory_context,
         )
         conversation_context = stamp_conversation_speaker(

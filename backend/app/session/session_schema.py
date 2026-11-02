@@ -217,6 +217,7 @@ class TurnSpeaker(BaseModel):
 
     roster_* 只在本轮已解析、并查过企业花名册之后填写。姓名进模型上下文，
     不进消息 metadata，也不携带手机号或企微 userid。
+    preferred_name 是本地记忆里的日常称呼，不替代花名册或联系人展示名。
     """
 
     status: Literal["resolved", "unresolved"]
@@ -228,6 +229,7 @@ class TurnSpeaker(BaseModel):
     roster_status: Optional[Literal["matched", "unmatched"]] = None
     roster_name: Optional[str] = None
     roster_department: Optional[str] = None
+    preferred_name: Optional[str] = None
 
 
 class ChatTurnRequest(BaseModel):

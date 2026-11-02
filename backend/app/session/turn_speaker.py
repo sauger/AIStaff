@@ -30,8 +30,10 @@ _SPEAKER_KEYS = (
     "roster_status",
     "name",
     "department",
+    "preferred_name",
 )
 _ROSTER_KEYS = ("user_id", "roster_status", "name", "department")
+_UNRESOLVED_HIDDEN_KEYS = (*_ROSTER_KEYS, "preferred_name")
 
 
 def stable_portrait_user_id(user_id: str | None, external_user_id: str | None = None) -> str:
@@ -203,6 +205,9 @@ def speaker_context_payload(speaker: TurnSpeaker | None) -> dict[str, str]:
             payload["department"] = department
     elif speaker.roster_status in {"matched", "unmatched"}:
         payload["roster_status"] = "unmatched"
+    preferred_name = single_line(speaker.preferred_name)
+    if preferred_name:
+        payload["preferred_name"] = preferred_name
     return payload
 
 
@@ -247,6 +252,49 @@ def attach_speaker_roster(db: Session, request: ChatTurnRequest) -> ChatTurnRequ
             )
         }
     )
+
+
+def attach_speaker_preferred_name(
+    request: ChatTurnRequest,
+    memory_context: list[dict[str, object]] | None,
+) -> ChatTurnRequest:
+    """已解析说话人有 preferred_name 记忆时，挂上日常称呼。
+
+    取值规则与槽位灌入 ``user_name`` 相同：只认 profile/preference/fact 上的
+    ``preferred_name``，同一键保留最新一条。不改花名册或联系人展示名。
+    """
+
+    speaker = request.speaker
+    if speaker is None or speaker.status != "resolved":
+        return request
+    from app.core.slot_hydration_policy import SlotHydrationPolicy
+
+    remembered = SlotHydrationPolicy.memory_values_by_key(list(memory_context or [])).get(
+        "preferred_name"
+    )
+    preferred_name = single_line(remembered)
+    if not preferred_name:
+        return request
+    return request.model_copy(
+        update={"speaker": speaker.model_copy(update={"preferred_name": preferred_name})}
+    )
+
+
+def apply_preferred_name(
+    request: ChatTurnRequest,
+    execution_request: ChatTurnRequest,
+    memory_context: list[dict[str, object]] | None,
+) -> tuple[ChatTurnRequest, ChatTurnRequest]:
+    """把日常称呼挂到本轮请求，并同步到执行快照。
+
+    执行快照在召回记忆之前就复制过。只改原请求的 speaker，TaskRequirement
+    仍只看花名册 name。
+    """
+
+    updated = attach_speaker_preferred_name(request, memory_context)
+    if updated.speaker is execution_request.speaker:
+        return updated, execution_request
+    return updated, execution_request.model_copy(update={"speaker": updated.speaker})
 
 
 def _speaker_name_and_department(
@@ -356,6 +404,6 @@ def current_speaker_for_requirement(speaker: TurnSpeaker | None) -> dict[str, st
         if payload.get(key)
     }
     if cleaned.get("status") != "resolved":
-        for key in _ROSTER_KEYS:
+        for key in _UNRESOLVED_HIDDEN_KEYS:
             cleaned.pop(key, None)
     return cleaned or None
