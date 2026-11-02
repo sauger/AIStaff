@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time
@@ -14,6 +15,7 @@ from app.channels.service_identity import channel_username
 from app.channels.service_intake import (
     _message_text,
     _session_lock,
+    _stage_notice,
     process_inbound,
 )
 from app.channels.service_intake import (
@@ -1175,3 +1177,81 @@ def test_inbound_with_attachments_passes_them_to_request(monkeypatch) -> None:
     assert len(request.attachments) == 1
     assert request.attachments[0].filename == "img.jpg"
     assert request.attachments[0].sha256 == "abc"
+
+
+def test_stage_notice_skips_existing_idempotency_key(caplog) -> None:
+    """重放同一稳定幂等键时不再 INSERT，避免 UNIQUE 冲突打满连接池。"""
+    engine = _test_engine()
+    binding_id = _seed_binding(engine, channel="wecom")
+    binding = _load_binding(engine, binding_id)
+    target = {"to_user_id": "user_1", "context_token": "ctx_1"}
+    key = "knowledge-proposal-accepted:proposal_1"
+
+    with Session(engine) as db:
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            target,
+            "已确认知识库操作，正在处理；完成后会在这里通知你。",
+            final_for_event=True,
+            idempotency_key=key,
+        )
+        db.commit()
+
+        with caplog.at_level(logging.INFO, logger="app.channels.service_intake"):
+            _stage_notice(
+                db,
+                binding,
+                "conv_1",
+                target,
+                "已确认知识库操作，正在处理；完成后会在这里通知你。",
+                final_for_event=True,
+                idempotency_key=key,
+            )
+            db.commit()
+
+        rows = db.exec(select(ChannelDelivery)).all()
+        assert len(rows) == 1
+        assert rows[0].idempotency_key == key
+        assert rows[0].status == "pending"
+        assert rows[0].target_json.get("reaction_final") is True
+
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            target,
+            "另一条通知",
+            idempotency_key="knowledge-proposal-accepted:proposal_2",
+        )
+        db.commit()
+        assert len(db.exec(select(ChannelDelivery)).all()) == 2
+
+    skip_logs = [record for record in caplog.records if key in record.message]
+    assert skip_logs
+    assert all(record.levelno == logging.INFO for record in skip_logs)
+
+
+def test_stage_notice_propagates_idempotency_lookup_errors(monkeypatch) -> None:
+    engine = _test_engine()
+    binding_id = _seed_binding(engine, channel="wecom")
+    binding = _load_binding(engine, binding_id)
+    real_exec = Session.exec
+
+    def exec_raising(self, statement, *args, **kwargs):
+        rendered = str(statement)
+        if "channel_deliveries" in rendered and "idempotency_key" in rendered:
+            raise RuntimeError("delivery lookup failed")
+        return real_exec(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "exec", exec_raising)
+    with Session(engine) as db, pytest.raises(RuntimeError, match="delivery lookup failed"):
+        _stage_notice(
+            db,
+            binding,
+            "conv_1",
+            {"to_user_id": "user_1", "context_token": "ctx_1"},
+            "已确认知识库操作，正在处理。",
+            idempotency_key="knowledge-proposal-accepted:proposal_err",
+        )

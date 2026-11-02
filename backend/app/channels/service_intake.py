@@ -511,12 +511,30 @@ def _stage_notice(
     final_for_event: bool = False,
     idempotency_key: str | None = None,
 ) -> None:
-    """系统提示投递(指令回复/员工下线提示);session_id 用 conv: 前缀占位。"""
+    """系统提示投递(指令回复/员工下线提示);session_id 用 conv: 前缀占位。
+
+    调用方给出稳定 idempotency_key 时，同键投递已存在则跳过。入站守护重放
+    （例如知识库提案确认通知）不得再次 INSERT，否则 UNIQUE 冲突会在提交时
+    失败并把 SQLite 连接池打满。查询失败或其它写入错误继续抛出。
+    """
     if not _valid_notice_target(binding.channel, target):
         return
     delivery_target = dict(target)
     if final_for_event:
         delivery_target["reaction_final"] = True
+    key = idempotency_key or new_id("chnotice")
+    if idempotency_key:
+        existing = db.exec(
+            select(ChannelDelivery).where(ChannelDelivery.idempotency_key == key)
+        ).first()
+        if existing is not None:
+            logger.info(
+                "入站通知幂等键已存在，跳过重复入队 binding=%s idempotency_key=%s delivery=%s",
+                binding.id,
+                key,
+                existing.id,
+            )
+            return
     db.add(
         ChannelDelivery(
             tenant_id=binding.tenant_id,
@@ -528,7 +546,7 @@ def _stage_notice(
             text=text,
             status="pending",
             next_attempt_at=utc_now(),
-            idempotency_key=idempotency_key or new_id("chnotice"),
+            idempotency_key=key,
         )
     )
 
