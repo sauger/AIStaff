@@ -89,7 +89,8 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
         return binding
 
 
-def test_channel_only_attachment_uses_default_message_intent() -> None:
+def test_channel_only_attachment_uses_neutral_handoff_cue() -> None:
+    """仅附件入站应像把文件递给同事，不能指定「读取并一句话概括」。"""
     binding = ChannelBinding(tenant_id="tenant_demo", agent_id="agent_1", channel="wecom")
     image = ChannelInbound(
         channel="wecom",
@@ -111,9 +112,38 @@ def test_channel_only_attachment_uses_default_message_intent() -> None:
             "attachments": [ChannelInboundAttachment(media_id="file", kind="file")],
         }
     )
+    blank = ChannelInbound(
+        **{
+            **image.__dict__,
+            "event_id": "evt-blank",
+            "text": "  \n",
+        }
+    )
+    captioned = ChannelInbound(
+        **{
+            **image.__dict__,
+            "event_id": "evt-caption",
+            "text": "  这份合同你先过一眼  ",
+        }
+    )
+    group_file = ChannelInbound(
+        **{
+            **file.__dict__,
+            "event_id": "evt-group-file",
+            "is_group": True,
+            "group_id": "room-1",
+            "sender_name": "药 李子",
+        }
+    )
 
-    assert _message_text(binding, image) == "请读取并用一句话概括。"
-    assert _message_text(binding, file) == "请读取并用一句话概括。"
+    for inbound in (image, file, blank):
+        text = _message_text(binding, inbound)
+        assert text == "（用户发来了附件）"
+        assert "概括" not in text
+        assert "请读取" not in text
+
+    assert _message_text(binding, captioned) == "这份合同你先过一眼"
+    assert _message_text(binding, group_file) == "[发送者: 药 李子]\n（用户发来了附件）"
 
 
 class RecordingAgentLoop:

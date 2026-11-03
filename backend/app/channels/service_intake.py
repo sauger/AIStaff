@@ -686,10 +686,16 @@ def _inbound_contact_id(
     )
 
 
+# 仅附件、没有正文时的用户消息。必须非空：规划阶段会把空白输入渲染成「（空）」，
+# 执行阶段在本轮消息为空时会退回任务帧上一条用户原话，把这次交文件盖掉。
+# 文案只说明同事发来了文件，不指定阅读或概括方式。
+_ATTACHMENT_ONLY_CUE = "（用户发来了附件）"
+
+
 def _message_text(binding: ChannelBinding, inbound: ChannelInbound) -> str:
     text = inbound.text.strip()
     if not text and inbound.attachments:
-        text = "请读取并用一句话概括。"
+        text = _ATTACHMENT_ONLY_CUE
     if not inbound.is_group:
         return text
     sender_label = inbound.sender_name or external_identity_for_message(
