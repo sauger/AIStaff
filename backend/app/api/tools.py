@@ -43,7 +43,12 @@ from app.security.permissions import (
 )
 from app.security.tenant import ensure_tenant
 from app.tools import ToolExecutor
-from app.tools.http_request import UrlPlaceholderError, prepare_http_request
+from app.tools.http_request import (
+    RequestTransformError,
+    UrlPlaceholderError,
+    prepare_http_request,
+    resolve_request_transforms,
+)
 from app.tools.mcp_client import (
     MCP_APP_MIME_TYPE,
     MCP_APPS_EXTENSION_ID,
@@ -328,10 +333,14 @@ def probe_tool(
     )
     timeout_seconds = _probe_timeout_seconds(request)
     try:
+        probe_config = _tool_config(request.mcp_config, request.execution_policy)
         request_url, request_kwargs = prepare_http_request(
-            request.method, url, request.sample_arguments
+            request.method,
+            url,
+            request.sample_arguments,
+            transforms=resolve_request_transforms(probe_config, request.input_schema),
         )
-    except UrlPlaceholderError as exc:
+    except (UrlPlaceholderError, RequestTransformError) as exc:
         return ToolProbeResponse(
             success=False,
             error=ToolError(code=exc.code, message=str(exc)),
@@ -386,6 +395,7 @@ def _probe_with_auth_config(
         headers_json=request.headers,
         auth_json=request.auth,
         config_json=_tool_config(request.mcp_config, request.execution_policy),
+        input_schema=request.input_schema,
         login_guide_id=request.login_guide_id,
     )
     response = executor.execute_http_with_auth_config(
@@ -822,6 +832,11 @@ def _tool_config(
     config = {
         key: value for key, value in (mcp_config or {}).items() if key != "execution"
     }
+    # HTTP console saves send empty mcp_config; keep durable request transforms.
+    if existing and "request_transforms" not in config:
+        preserved = existing.get("request_transforms")
+        if isinstance(preserved, list):
+            config["request_transforms"] = list(preserved)
     if execution_policy is not None:
         config["execution"] = execution_policy.model_dump(mode="json")
     elif isinstance((existing or {}).get("execution"), dict):
