@@ -119,6 +119,8 @@ class ToolResult(BaseModel):
     tool_name: str
     success: bool
     data: Optional[Any] = None
+    data_status: Literal["empty", "nonempty"] | None = None
+    row_count: int | None = None
     error: Optional[ToolError] = None
     mcp_app: Optional[MCPAppDescriptor] = None
     mcp_metadata: dict[str, Any] = Field(default_factory=dict)

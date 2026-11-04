@@ -358,6 +358,111 @@ def test_execute_http_with_metadata_substitutes_placeholders(monkeypatch) -> Non
     }
 
 
+def test_csv_header_only_response_is_marked_empty(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            return httpx.Response(
+                200,
+                text="\ufeff调用时间,总 Token,消费金额(元)\n",
+                headers={"content-type": "text/csv; charset=utf-8"},
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        tool = Tool(
+            tenant_id="tenant_demo",
+            name="usage.export",
+            method="GET",
+            url="https://gateway.example/usage/export",
+            enabled=True,
+        )
+        response = ToolExecutor(db).execute_http_with_metadata(
+            tool,
+            {"organization_id": "7", "date_from": "2026-10-30"},
+        )
+
+    assert response.result.success is True
+    assert response.result.data_status == "empty"
+    assert response.result.row_count == 0
+
+
+def test_csv_response_counts_data_rows(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            return httpx.Response(
+                200,
+                text="调用时间,总 Token,消费金额(元)\n2026-10-30,123,0.5\n",
+                headers={"content-type": "text/csv"},
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        tool = Tool(
+            tenant_id="tenant_demo",
+            name="usage.export",
+            method="GET",
+            url="https://gateway.example/usage/export",
+            enabled=True,
+        )
+        response = ToolExecutor(db).execute_http_with_metadata(tool, {})
+
+    assert response.result.data_status == "nonempty"
+    assert response.result.row_count == 1
+
+
+def test_csv_header_only_json_string_is_marked_empty(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def request(self, method, url, headers=None, json=None, params=None):
+            return httpx.Response(
+                200,
+                json="\ufeff调用时间,总 Token,消费金额(元)\n",
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    with _test_session() as db:
+        tool = Tool(
+            tenant_id="tenant_demo",
+            name="usage.export",
+            method="GET",
+            url="https://gateway.example/usage/export",
+            enabled=True,
+        )
+        response = ToolExecutor(db).execute_http_with_metadata(tool, {})
+
+    assert response.result.data_status == "empty"
+    assert response.result.row_count == 0
+
+
 def test_execute_rejects_missing_placeholder_without_network(monkeypatch) -> None:
     class FakeClient:
         def __init__(self, *args, **kwargs):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import csv
+import io
 import json
 import os
 import re
@@ -28,6 +30,25 @@ from app.tools.mcp_client import MCPClientError, execute_mcp_tool, execute_mcp_t
 from app.tools.tool_schema import MCPAppDescriptor, ToolCall, ToolError, ToolResult
 
 SECRET_PATTERN = re.compile(r"\$\{secret\.([A-Z0-9_]+)\}")
+
+
+def _http_data_profile(response: httpx.Response, data: Any) -> tuple[str | None, int | None]:
+    content_type = response.headers.get("content-type", "").lower()
+    disposition = response.headers.get("content-disposition", "").lower()
+    is_csv = (
+        "csv" in content_type
+        or ".csv" in disposition
+        or (isinstance(data, str) and data.startswith("\ufeff") and "," in data.splitlines()[0])
+    )
+    if is_csv and isinstance(data, str):
+        rows = [row for row in csv.reader(io.StringIO(data.lstrip("\ufeff"))) if any(row)]
+        count = max(0, len(rows) - 1)
+        return ("nonempty" if count else "empty"), count
+    if isinstance(data, list):
+        return ("nonempty" if data else "empty"), len(data)
+    if data is None or data == "":
+        return "empty", 0
+    return None, None
 
 
 def _json_path(value: Any, path: str) -> Any:
@@ -173,12 +194,7 @@ class ToolExecutor:
                     tool.method.upper(), request_url, headers=headers, **request_kwargs
                 )
                 response.raise_for_status()
-                return ToolResult(
-                    tool_name=tool.name,
-                    success=True,
-                    data=self._response_data(response),
-                    error=None,
-                )
+                return self._http_success_result(tool.name, response)
         except UrlPlaceholderError as exc:
             return self._error(tool.name, exc.code, str(exc))
         except httpx.TimeoutException:
@@ -245,15 +261,11 @@ class ToolExecutor:
                     tool.method.upper(), request_url, headers=headers, **request_kwargs
                 )
                 response.raise_for_status()
+                result = self._http_success_result(tool.name, response)
                 return HttpExecutionResponse(
-                    result=ToolResult(
-                        tool_name=tool.name,
-                        success=True,
-                        data=self._response_data(response),
-                        error=None,
-                    ),
+                    result=result,
                     status_code=response.status_code,
-                    payload=self._response_data(response),
+                    payload=result.data,
                 )
         except UrlPlaceholderError as exc:
             return HttpExecutionResponse(result=self._error(tool.name, exc.code, str(exc)))
@@ -682,6 +694,18 @@ class ToolExecutor:
             return response.json()
         except Exception:
             return response.text
+
+    def _http_success_result(self, tool_name: str, response: httpx.Response) -> ToolResult:
+        data = self._response_data(response)
+        status, row_count = _http_data_profile(response, data)
+        return ToolResult(
+            tool_name=tool_name,
+            success=True,
+            data=data,
+            data_status=status,
+            row_count=row_count,
+            error=None,
+        )
 
     def _resolve_headers(self, headers: dict[str, Any], auth: dict[str, Any]) -> dict[str, str]:
         resolved = {key: self._resolve_secret(str(value)) for key, value in headers.items()}

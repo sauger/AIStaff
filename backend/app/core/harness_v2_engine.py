@@ -353,6 +353,7 @@ class HarnessV2Engine:
             self.owner._conversation_context(session, model_config=model_config),
             request.speaker,
         )
+        persona_prompt = self.owner._get_persona_prompt(request.tenant_id, session.agent_id)
 
         self._renew_session_lease()
         planner_state = self.store.planner_state(session)
@@ -637,6 +638,8 @@ class HarnessV2Engine:
                     *self.store.referenced_session_results(row),
                 ],
                 remaining_turn_actions,
+                conversation_context,
+                persona_prompt,
             )
             remaining_turn_actions = max(
                 0,
@@ -724,7 +727,7 @@ class HarnessV2Engine:
                 last_step_result,
                 None,
                 model_config,
-                self.owner._get_persona_prompt(request.tenant_id, session.agent_id),
+                persona_prompt,
                 memory_context,
                 conversation_context,
                 execution_payloads,
@@ -865,6 +868,8 @@ class HarnessV2Engine:
         memory_context: list[dict[str, object]],
         prior_frame_results: list[dict[str, Any]],
         max_actions: int,
+        conversation_context: dict[str, Any],
+        persona_prompt: str,
     ) -> tuple[TaskExecutionResult, StepAgentResult]:
         self.store.mark_running(row)
         agent_loop = self.store.ensure_agent_loop(row)
@@ -954,6 +959,8 @@ class HarnessV2Engine:
                 out_of_scope_task_intents=_sibling_task_intents(self.db, row),
                 client_timezone=request.client_timezone,
                 current_speaker=current_speaker_for_requirement(request.speaker),
+                conversation_context=conversation_context,
+                employee_identity=persona_prompt,
             )
             if (
                 self.slash_command
@@ -1831,19 +1838,27 @@ def _combine_results(
 
 
 def _single_task_reply(results: list[TaskExecutionResult]) -> str | None:
-    """Use a lone TaskFrame's terminal reply without another model pass.
+    """Use a lone TaskFrame's terminal reply when no structured evidence needs synthesis.
 
-    ``finish`` already asks the Harness model for the user-facing reply.  A
-    response synthesis pass is only useful when several TaskFrames must be
-    reconciled.  Empty replies still fall back to ``ResponseGenerator`` so
-    malformed or legacy execution results keep the existing recovery path.
+    ``finish`` already asks the Harness model for the user-facing reply.
+    Structured results and empty tool responses need the response pass to
+    reconcile the draft with the available evidence. Empty replies also fall
+    back to ``ResponseGenerator`` for the existing recovery path.
     """
 
     if len(results) != 1:
         return None
     result = results[0]
     reply = str(result.reply_fragment or "").strip()
-    if _structured_reply_requires_synthesis(reply, result.structured_result):
+    if any(
+        item.get("data_status") == "empty"
+        for item in result.capability_results
+        if isinstance(item, dict)
+    ):
+        return None
+    if result.structured_result is not None or _structured_reply_requires_synthesis(
+        reply, result.structured_result
+    ):
         return None
     return reply or None
 

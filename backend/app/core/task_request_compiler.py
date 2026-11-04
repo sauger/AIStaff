@@ -64,6 +64,8 @@ class TaskRequirement(BaseModel):
     # 报错但被 `;` 吞掉退出码，后一条命令补上今天的日期，静默给出错答案。
     current_time: str = ""
     source_user_message: str = ""
+    recent_dialogue: list[dict[str, str]] = Field(default_factory=list)
+    employee_identity: str = ""
     out_of_scope_task_intents: list[str] = Field(default_factory=list)
     requirements: list[str] = Field(default_factory=list)
     sop_context: dict[str, Any] = Field(default_factory=dict)
@@ -132,6 +134,8 @@ class TaskRequestCompiler:
         out_of_scope_task_intents: list[str] | None = None,
         client_timezone: str | None = None,
         current_speaker: dict[str, str] | None = None,
+        conversation_context: dict[str, Any] | None = None,
+        employee_identity: str = "",
     ) -> TaskRequirement:
         current_node = _current_node(skill, frame.target_step_id or session.active_step_id)
         expected_fields = _text_list((current_node or {}).get("expected_user_info"))
@@ -191,6 +195,8 @@ class TaskRequestCompiler:
             goal=goal,
             current_time=_current_time_text(client_timezone),
             source_user_message=str(source_user_message or "").strip()[:4_000],
+            recent_dialogue=_recent_dialogue(conversation_context, source_user_message),
+            employee_identity=str(employee_identity or "").strip()[:4_000],
             out_of_scope_task_intents=_unique(
                 [str(item or "") for item in out_of_scope_task_intents or []]
             ),
@@ -260,6 +266,30 @@ def _sanitize_current_speaker(value: dict[str, str] | None) -> dict[str, str] | 
     elif cleaned.get("roster_status") != "unmatched":
         cleaned.pop("roster_status", None)
     return cleaned or None
+
+
+def _recent_dialogue(
+    conversation_context: dict[str, Any] | None,
+    source_user_message: str | None,
+) -> list[dict[str, str]]:
+    messages = (conversation_context or {}).get("messages")
+    if not isinstance(messages, list):
+        return []
+    projected = [
+        {"role": message["role"], "content": str(message["content"]).strip()[:1_000]}
+        for message in messages
+        if isinstance(message, dict)
+        and message.get("role") in {"user", "assistant"}
+        and isinstance(message.get("content"), str)
+        and message["content"].strip()
+    ]
+    if (
+        projected
+        and projected[-1]["role"] == "user"
+        and projected[-1]["content"] == str(source_user_message or "").strip()[:1_000]
+    ):
+        projected.pop()
+    return projected[-6:]
 
 
 def _current_time_text(client_timezone: str | None = None) -> str:
