@@ -973,6 +973,9 @@ def _bounded_capability_result(
         "data": result.get("data"),
         "error": result.get("error"),
     }
+    for key in ("data_status", "row_count"):
+        if result.get(key) is not None:
+            payload[key] = result[key]
     if isinstance(result.get("mcp_app"), dict):
         payload["mcp_app"] = result["mcp_app"]
     serialized = json.dumps(
@@ -990,6 +993,9 @@ def _bounded_capability_result(
         "preview": serialized[:max_chars],
         "error": result.get("error"),
     }
+    for key in ("data_status", "row_count"):
+        if result.get(key) is not None:
+            truncated[key] = result[key]
     if isinstance(result.get("mcp_app"), dict):
         truncated["mcp_app"] = result["mcp_app"]
     return truncated
@@ -1037,7 +1043,9 @@ def _transcript_for_model(
             result = dict(copied["result"])
             receipt: dict[str, Any] = {
                 key: result.get(key)
-                for key in ("tool_name", "success", "error", "truncated")
+                for key in (
+                    "tool_name", "success", "error", "truncated", "data_status", "row_count"
+                )
                 if key in result
             }
             data = result.get("data")

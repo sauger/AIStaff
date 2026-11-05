@@ -490,7 +490,7 @@ def test_single_task_reply_synthesizes_incomplete_structured_projection() -> Non
 
     assert _single_task_reply([incomplete]) is None
     assert _single_task_reply([matching]) is None
-    assert _single_task_reply([markdown]) == "完整结果如下。"
+    assert _single_task_reply([markdown]) is None
 
 
 def test_single_task_reply_rejects_json_even_when_it_matches_structured_result() -> None:
@@ -502,6 +502,45 @@ def test_single_task_reply_rejects_json_even_when_it_matches_structured_result()
         structured_result=payload,
     )
     assert _single_task_reply([matching]) is None
+
+
+def test_single_task_reply_synthesizes_when_text_conflicts_with_structured_result() -> None:
+    result = TaskExecutionResult(
+        task_frame_id="task_amount",
+        status="completed",
+        reply_fragment="总费用 100 元。",
+        structured_result={"total_amount_yuan": 200},
+    )
+
+    assert _single_task_reply([result]) is None
+
+
+def test_single_task_reply_synthesizes_when_tool_data_is_empty() -> None:
+    result = TaskExecutionResult(
+        task_frame_id="task_usage",
+        status="completed",
+        reply_fragment="上周五消耗 0 Token，费用 0 元。",
+        capability_results=[
+            {"tool_name": "usage.export", "success": True, "data_status": "empty", "row_count": 0}
+        ],
+    )
+
+    assert _single_task_reply([result]) is None
+
+
+def test_bounded_capability_result_preserves_empty_data_profile() -> None:
+    result = harness_agent_module._bounded_capability_result(
+        "usage.export",
+        {
+            "success": True,
+            "data": "\ufeff调用时间,总 Token,消费金额(元)\n",
+            "data_status": "empty",
+            "row_count": 0,
+        },
+    )
+
+    assert result["data_status"] == "empty"
+    assert result["row_count"] == 0
 
 
 def test_response_task_payload_keeps_structured_result_for_synthesis() -> None:
@@ -1047,6 +1086,40 @@ def test_task_request_compiler_builds_a_composite_requirement_without_outer_cont
     assert "source_message" not in dumped
     assert "conversation_context" not in dumped
     assert "OUTER_CONTEXT_MUST_NOT_LEAK" not in json.dumps(dumped, ensure_ascii=False)
+
+
+def test_task_request_compiler_keeps_recent_dialogue_and_employee_identity() -> None:
+    session = _chat_session()
+    frame = PlannedTaskFrame(
+        task_id="task-followup",
+        kind="conversation",
+        decision="answer_only",
+        user_intent="查询上周五用量",
+        requirements=["查询上周五用量"],
+        source_message="上周五呢？",
+    )
+
+    requirement = TaskRequestCompiler().compile(
+        frame,
+        session,
+        None,
+        CapabilityManifest(),
+        source_user_message="上周五呢？",
+        conversation_context={
+            "messages": [
+                {"role": "user", "content": "查迅傲测试昨天的用量"},
+                {"role": "assistant", "content": "迅傲测试是企业 ID 7。"},
+                {"role": "user", "content": "上周五呢？"},
+            ]
+        },
+        employee_identity="你是 TokenOp，回答时先给结论。",
+    )
+
+    assert requirement.recent_dialogue == [
+        {"role": "user", "content": "查迅傲测试昨天的用量"},
+        {"role": "assistant", "content": "迅傲测试是企业 ID 7。"},
+    ]
+    assert requirement.employee_identity == "你是 TokenOp，回答时先给结论。"
 
 
 def test_sibling_task_intents_only_returns_other_frames_from_same_turn() -> None:

@@ -1306,6 +1306,9 @@ class HarnessCapabilityInvoker:
             timeout_seconds_override=self._remaining_step_seconds(),
         )
         payload = result.model_dump(mode="json")
+        for key in ("data_status", "row_count"):
+            if payload.get(key) is None:
+                payload.pop(key, None)
         # MCP Apps payloads belong to the host UI, not to the isolated model
         # transcript. Emit a dedicated trace event so the frontend receives
         # the complete descriptor while the model only receives tool data.

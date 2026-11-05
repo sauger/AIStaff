@@ -110,6 +110,33 @@ def test_multi_task_payload_projects_all_results_for_one_final_reply() -> None:
     assert payload["task_results"][1]["step_summary"]["reply"] == "请补充发票"
 
 
+def test_response_payload_preserves_empty_tool_evidence() -> None:
+    generator = ResponseGenerator()
+    payload = generator._payload(
+        "上周五呢？",
+        ChatSession(id="session_test", tenant_id="tenant_demo"),
+        None,
+        RouterDecision(decision="answer_only", user_intent="查询用量"),
+        StepAgentResult(),
+        None,
+        task_results=[
+            {
+                "task": "查询用量",
+                "step_result": {"reply": "费用 0 元"},
+                "tool_result": {
+                    "success": True,
+                    "capability_results": [
+                        {"success": True, "data_status": "empty", "row_count": 0}
+                    ],
+                },
+            }
+        ],
+    )
+
+    tool_result = payload["task_results"][0]["tool_result"]
+    assert tool_result["capability_results"][0]["data_status"] == "empty"
+
+
 def test_clarify_does_not_leak_internal_router_prompt(monkeypatch):
     def fake_init(self, model_config):  # noqa: ANN001
         return None
