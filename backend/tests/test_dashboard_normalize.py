@@ -263,3 +263,13 @@ def test_fixture_oversized_is_truncated_with_warnings() -> None:
     assert result.frames[1].path == "report.detail"
     assert result.frames[1].total_rows == 200
     assert [item.code for item in result.warnings] == ["DEPTH_LIMIT", "TRUNCATED"]
+
+
+def test_blocks_with_a_bare_data_field_stay_a_record_table() -> None:
+    frames = normalize(
+        {"blocks": [{"name": "a", "data": 1}, {"name": "b", "data": 2}]}
+    ).frames
+    assert len(frames) == 1
+    assert frames[0].shape == "records"
+    assert [column.name for column in frames[0].columns] == ["name", "data"]
+    assert frames[0].rows == [["a", 1], ["b", 2]]

@@ -619,8 +619,17 @@ class _Normalizer:
 
 
 def _looks_like_demo_blocks(items: list[Any]) -> bool:
+    """Only blocks that carry a value or a real table; a bare ``data`` field is
+    common in business records and must stay a record table, not a scalar card.
+    """
+
     return any(
-        isinstance(item, dict) and ("value" in item or _is_table(item) or "data" in item)
+        isinstance(item, dict)
+        and (
+            "value" in item
+            or _is_table(item)
+            or (isinstance(item.get("data"), dict) and _is_table(item["data"]))
+        )
         for item in items
     )
 
