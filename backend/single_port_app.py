@@ -501,3 +501,9 @@ def enterprise_app(path: str = "") -> FileResponse:
 @app.get("/workspace/{path:path}", include_in_schema=False)
 def chat_app(path: str = "") -> FileResponse:
     return spa_index_response(ENTERPRISE_DIST / "index.html")
+
+
+@app.get("/s", include_in_schema=False)
+@app.get("/s/{path:path}", include_in_schema=False)
+def shared_dashboard_app(path: str = "") -> FileResponse:
+    return spa_index_response(ENTERPRISE_DIST / "index.html")

@@ -12,7 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, or_, update
@@ -2471,10 +2471,12 @@ def read_dashboard_view(
     tenant_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict:
     """Return one rendered dashboard spec for the conversation that owns it."""
 
     from app.dashboard.service import get_view, is_expired
+    from app.dashboard.share import build_share_url
 
     _ensure_request_tenant(tenant_id, current_user)
     view = get_view(db, tenant_id=tenant_id, view_id=view_id)
@@ -2484,12 +2486,15 @@ def read_dashboard_view(
     if is_expired(view):
         raise HTTPException(status_code=410, detail="Dashboard view expired")
     payload = dict(view.spec_json or {})
+    share_url, share_scope = build_share_url(view.id, request)
     return {
         "id": view.id,
         "title": view.title,
         "spec": payload,
         "created_at": view.created_at.isoformat(),
         "expires_at": view.expires_at.isoformat(),
+        "share_url": share_url,
+        "share_scope": share_scope,
     }
 
 

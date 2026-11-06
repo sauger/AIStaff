@@ -62,6 +62,7 @@ import LoginPage from "./pages/LoginPage";
 import ModelsPage from "./pages/ModelsPage";
 import RuntimeSettingsPage from "./pages/RuntimeSettingsPage";
 import OpenPlatformPage from "./pages/OpenPlatformPage";
+import PublicDashboardPage from "./pages/PublicDashboardPage";
 import PersonaPage from "./pages/PersonaPage";
 import SkillsPage from "./pages/SkillsPage";
 import TeamChatPage from "./pages/TeamChatPage";
@@ -1201,10 +1202,14 @@ export default function App() {
     setAuthChecked(true);
   }
 
+  const isSharedRoute = typeof window !== "undefined"
+    && window.location.pathname.startsWith("/s/");
+
   return (
     <TooltipProvider>
       <BrowserRouter>
         <Routes>
+          <Route path="/s/:token" element={<PublicDashboardPage />} />
           <Route
             path="/*"
             element={
@@ -1220,9 +1225,11 @@ export default function App() {
             }
           />
         </Routes>
-        {auth && authChecked ? <OnboardingGuide /> : null}
-        {auth && authChecked ? <QuickStartGuide isAdmin={isEnterpriseAdmin(auth.user)} /> : null}
-        {auth && authChecked ? <UpdateReminder enabled={guidesCompleted} /> : null}
+        {auth && authChecked && !isSharedRoute ? <OnboardingGuide /> : null}
+        {auth && authChecked && !isSharedRoute ? (
+          <QuickStartGuide isAdmin={isEnterpriseAdmin(auth.user)} />
+        ) : null}
+        {auth && authChecked && !isSharedRoute ? <UpdateReminder enabled={guidesCompleted} /> : null}
       </BrowserRouter>
       <Toaster richColors closeButton position="top-center" />
     </TooltipProvider>

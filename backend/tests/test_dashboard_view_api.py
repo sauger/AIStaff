@@ -190,3 +190,31 @@ def test_stored_v1_spec_is_returned_without_revalidation(db: Session) -> None:
     assert payload["spec"] == legacy
     assert payload["spec"]["spec_version"] == 1
     assert "layout" not in payload["spec"]
+
+
+def test_view_endpoint_returns_a_share_url_from_the_request_host(db: Session) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.chat import router as chat_router
+    from app.db import get_session
+    from app.security.auth import get_current_user
+
+    view = _view(db)
+    user = db.get(User, "user_1")
+    app = FastAPI()
+    app.include_router(chat_router)
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    def override_session():
+        yield db
+
+    app.dependency_overrides[get_session] = override_session
+    with TestClient(app) as client:
+        response = client.get(f"/api/chat/dashboard-views/{view.id}?tenant_id=tenant_demo")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == view.id
+    assert body["share_scope"] == "local"
+    assert body["share_url"].startswith(f"http://testserver/s/{view.id}.")
+    assert body["spec"]["spec_version"] == 1

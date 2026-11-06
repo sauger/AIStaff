@@ -24,6 +24,7 @@ from app.api import (
     mock,
     model_configs,
     persona,
+    public_dashboard,
     scheduled_tasks,
     sessions,
     skills,
@@ -83,6 +84,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    from app.dashboard.share import warn_default_app_secret
+
+    warn_default_app_secret()
     acquire_runtime_instance_lock()
     try:
         start_async_jobs()
@@ -181,6 +185,7 @@ app.include_router(sessions.router)
 app.include_router(traces.router)
 app.include_router(mock.router)
 app.include_router(a2a_router)
+app.include_router(public_dashboard.public_router)
 
 if settings.public_api_enabled:
     app.mount("/api/v1", create_public_api_app())

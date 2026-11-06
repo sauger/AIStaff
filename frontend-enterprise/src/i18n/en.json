@@ -4102,5 +4102,8 @@
   "全屏": "Fullscreen",
   "大屏链接": "Dashboard link",
   "请手动复制链接": "Please copy the link manually",
-  "仅展示前 20 项（共 {1} 项）": "Showing the top 20 of {1}"
+  "仅展示前 20 项（共 {1} 项）": "Showing the top 20 of {1}",
+  "链接已失效": "This link has expired",
+  "该大屏可能已过期，请联系分享者重新生成。": "This dashboard may have expired; ask the person who shared it to regenerate it.",
+  "只读分享 · 有效期至": "Read-only share · expires"
 }
