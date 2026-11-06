@@ -7148,7 +7148,11 @@ body,
   overflow: hidden;
 }
 
-.dash-wall[data-theme="light"],
+.dash-wall[data-theme="light"] {
+  background: #f8fafc;
+  color: #1f2430;
+}
+
 .dash-wall[data-theme="dark"] {
   background: #080f1c;
 }

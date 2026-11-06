@@ -95,7 +95,9 @@ export default function PublicDashboardPage() {
           </button>
         ) : null}
       </header>
-      <DashboardCanvas spec={payload.spec} />
+      <div className={payload.spec.theme === 'light' ? 'rounded-xl bg-white p-3' : ''}>
+        <DashboardCanvas spec={payload.spec} />
+      </div>
       {stageOpen ? <DashboardStage spec={payload.spec} onClose={() => setStageOpen(false)} /> : null}
     </div>
   );
