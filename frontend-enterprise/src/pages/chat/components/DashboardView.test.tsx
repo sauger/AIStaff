@@ -37,6 +37,14 @@ vi.mock('./dashboardEcharts', () => ({
   buildChartOption: () => ({}),
 }));
 
+const notifyMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock('@/components/ui/app-toast', () => ({ notify: notifyMocks }));
+
 const descriptor: DashboardViewDescriptor = {
   view_id: 'dashview_abc',
   tenant_id: 'tenant_demo',
@@ -104,5 +112,53 @@ describe('DashboardView', () => {
     await userEvent.click(screen.getByRole('button', { name: '重试' }));
     await waitFor(() => expect(screen.getByText('销售额')).toBeTruthy());
     expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+const v2Payload = {
+  ...payload,
+  share_url: 'http://localhost:8000/s/dashview_abc.token',
+  share_scope: 'public' as const,
+  spec: {
+    spec_version: 2,
+    title: '经营看板',
+    kpis: [{ id: 'kpi_a', label: '销售额', value: 128 }],
+    charts: [],
+    filters: [],
+    layout: {
+      template: 'overview' as const,
+      grid: { columns: 12, rows: 12, width: 1920, height: 1080 },
+      overflow: 'fit' as const,
+      slots: [{ id: 'kpi_a', kind: 'kpi' as const, region: 'kpi_row' as const, x: 0, y: 1, w: 3, h: 1 }],
+    },
+  },
+};
+
+describe('DashboardView v2 actions', () => {
+  it('copies the share link and opens the fullscreen stage', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    mocks.get.mockResolvedValue(v2Payload);
+    render(<DashboardView descriptor={descriptor} />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '复制链接' })).toBeTruthy());
+    await userEvent.click(screen.getByRole('button', { name: '复制链接' }));
+    expect(writeText).toHaveBeenCalledWith(v2Payload.share_url);
+    expect(notifyMocks.success).toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: '全屏' }));
+    expect(screen.getByRole('dialog', { name: '数据大屏全屏' })).toBeTruthy();
+  });
+
+  it('does not render v2-only actions for a v1 view', async () => {
+    mocks.get.mockResolvedValue(payload);
+    render(<DashboardView descriptor={descriptor} />);
+    await waitFor(() => expect(screen.getByText('销售额')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: '全屏' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '复制链接' })).toBeNull();
   });
 });

@@ -4091,5 +4091,16 @@
   "正在加载大屏…": "Loading dashboard…",
   "数据大屏": "Dashboard",
   "数据大屏 ·": "Dashboard ·",
-  "个图表": "charts"
+  "个图表": "charts",
+  "自动判定": "Auto-selected",
+  "另有 {1} 条提示": "{1} more notices",
+  "数据大屏全屏": "Dashboard fullscreen",
+  "复制失败，请手动复制链接": "Copy failed; please copy the link manually",
+  "链接已复制，7 天内有效": "Link copied; valid for 7 days",
+  "当前为本机地址，仅本机或局域网可打开": "This is a local address; it only opens on this machine or the local network",
+  "复制链接": "Copy link",
+  "全屏": "Fullscreen",
+  "大屏链接": "Dashboard link",
+  "请手动复制链接": "Please copy the link manually",
+  "仅展示前 20 项（共 {1} 项）": "Showing the top 20 of {1}"
 }

@@ -111,3 +111,63 @@ describe('DashboardCanvas', () => {
     expect(screen.getByText(/未标注来源/)).toBeTruthy();
   });
 });
+
+
+const v2Spec: DashboardSpec = {
+  spec_version: 2,
+  title: 'v2 看板',
+  theme: 'tech',
+  kpis: [{ id: 'kpi_a', label: '销售额', value: 128 }],
+  charts: [
+    {
+      id: 'rank',
+      title: '区域排名',
+      type: 'bar',
+      role: 'ranking',
+      orientation: 'horizontal',
+      confidence: 0.4,
+      encoding: { x: 'region', y: 'sales' },
+      data: {
+        columns: [{ name: 'region' }, { name: 'sales', type: 'number' }],
+        rows: [['上海', 10], ['江苏', 8]],
+      },
+      note: '已按金额降序',
+    },
+  ],
+  filters: [],
+  warnings: [{ code: 'TRUNCATED', message: '已省略 2 个块' }],
+  layout: {
+    template: 'overview',
+    grid: { columns: 12, rows: 12, width: 1920, height: 1080 },
+    overflow: 'fit',
+    slots: [
+      { id: 'kpi_a', kind: 'kpi', region: 'kpi_row', x: 0, y: 1, w: 3, h: 1 },
+      { id: 'rank', kind: 'chart', region: 'hero', x: 0, y: 2, w: 12, h: 4 },
+    ],
+  },
+};
+
+describe('DashboardCanvas v2', () => {
+  it('renders v2 slots, warnings and the low-confidence badge', () => {
+    const { container } = render(<DashboardCanvas spec={v2Spec} />);
+    expect(container.querySelector('[data-spec-version="2"]')).toBeTruthy();
+    expect(screen.getByText('已省略 2 个块')).toBeTruthy();
+    expect(screen.getByText('自动判定')).toBeTruthy();
+    expect(container.querySelector('[data-kpi-id="kpi_a"]')).toBeTruthy();
+    expect(container.querySelector('[data-chart-id="rank"]')).toBeTruthy();
+  });
+
+  it('renders wall slots at their absolute grid rectangles', () => {
+    const { container } = render(<DashboardCanvas spec={v2Spec} mode="wall" />);
+    const slot = container.querySelector('[data-slot-id="rank"]') as HTMLElement;
+    expect(slot.style.top).toBe('186px');
+    expect(slot.style.height).toBe('348px');
+    expect(container.querySelector('[data-mode="wall"]')).toBeTruthy();
+  });
+
+  it('keeps the v1 layout when a v2 payload has no layout', () => {
+    const { container } = render(<DashboardCanvas spec={{ ...v2Spec, layout: null }} />);
+    expect(container.querySelector('[data-spec-version="2"]')).toBeNull();
+    expect(screen.getByText('区域排名')).toBeTruthy();
+  });
+});

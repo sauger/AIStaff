@@ -114,15 +114,89 @@ function cartesianSeries(chart: DashboardChart, categories: string[], buckets: M
   });
 }
 
-export function buildChartOption(chart: DashboardChart, dark = false): EChartsCoreOption {
+type ChartOptionOptions = { height?: number };
+
+function truncateLabel(value: string, width = 12): string {
+  return value.length > width ? `${value.slice(0, width)}…` : value;
+}
+
+function horizontalBarOption(chart: DashboardChart, dark: boolean): EChartsCoreOption {
+  const { textColor, splitColor, palette } = themeTokens(dark);
+  const { categories, buckets } = bucketRows(chart);
+  const entries = categories
+    .map((name) => {
+      let total = 0;
+      for (const bucket of buckets.values()) total += bucket.values.get(name) ?? 0;
+      return { name, value: total };
+    })
+    .sort((a, b) => b.value - a.value);
+  const shown = entries.slice(0, 20);
+  const more = entries.length > shown.length;
+  return {
+    color: palette,
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 8, right: 24, top: 8, bottom: 8, containLabel: true },
+    xAxis: {
+      type: 'value',
+      axisLabel: { color: textColor, fontSize: 11 },
+      splitLine: { lineStyle: { color: splitColor } },
+    },
+    yAxis: {
+      type: 'category',
+      inverse: true,
+      data: shown.map((entry) => entry.name),
+      axisLabel: {
+        color: textColor,
+        fontSize: 11,
+        formatter: (value: string) => truncateLabel(value),
+      },
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: splitColor } },
+    },
+    series: [{ type: 'bar', data: shown.map((entry) => entry.value), barMaxWidth: 18 }],
+    ...(more
+      ? {
+          graphic: [
+            {
+              type: 'text',
+              right: 8,
+              bottom: 2,
+              style: {
+                text: `仅展示前 20 项（共 ${entries.length} 项）`,
+                fill: textColor,
+                fontSize: 10,
+              },
+            },
+          ],
+        }
+      : {}),
+  };
+}
+
+export function buildChartOption(
+  chart: DashboardChart,
+  dark = false,
+  opts: ChartOptionOptions = {},
+): EChartsCoreOption {
   const { textColor, splitColor, palette } = themeTokens(dark);
   const { categories, buckets, xIndex, measure } = bucketRows(chart);
+
+  // v1 bars have no orientation and must stay vertical; only v2 ranking blocks
+  // opt into the horizontal form.
+  if (chart.type === 'bar' && chart.orientation === 'horizontal') {
+    return horizontalBarOption(chart, dark);
+  }
 
   if (chart.type === 'pie' || chart.type === 'donut') {
     return {
       color: palette,
       tooltip: { trigger: 'item' },
-      legend: { type: 'scroll', bottom: 0, textStyle: { color: textColor, fontSize: 11 } },
+      legend: {
+        type: 'scroll',
+        bottom: 0,
+        show: opts.height === undefined || opts.height >= 160,
+        textStyle: { color: textColor, fontSize: 11 },
+      },
       series: [
         {
           type: 'pie',
