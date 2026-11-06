@@ -131,10 +131,11 @@ def select_component(
     numeric = numeric_indexes(frame.columns)
     labels = [index for index in range(len(frame.columns)) if index not in numeric]
 
-    if frame.shape in {"scalar", "scalar_group"} or (
-        len(rows) == 1 and len(numeric) == 1 and len(labels) <= 1
-    ):
+    if frame.shape == "scalar" or len(rows) == 1 and len(numeric) == 1 and len(labels) <= 1:
         return Selection("kpi", "kpi", _clamp(0.95 + adjust), "单值数据，按指标卡展示", "kpi", rule=2)
+    if frame.shape == "scalar_group" and numeric:
+        reason = f"{len(numeric)} 个单值指标，按指标卡展示" if len(numeric) > 1 else "单值数据，按指标卡展示"
+        return Selection("kpi", "kpi", _clamp(0.95 + adjust), reason, "kpi", rule=2)
     if len(rows) == 1 and len(numeric) >= 2:
         reason = f"单行 {len(numeric)} 个数值，拆为指标卡"
         return Selection("kpi", "kpi", _clamp(0.90 + adjust), reason, "kpi", rule=3)
@@ -248,7 +249,7 @@ def kpis_from_block(block: Block, *, limit: int = MAX_KPIS) -> list[Kpi]:
         return [
             Kpi(label=_kpi_label(column.name), value=row[index])
             for index, column in enumerate(frame.columns)
-            if index < len(row) and row[index] is not None
+            if index < len(row) and column.type == "number" and _is_number(row[index])
         ][:limit]
     numeric = numeric_indexes(frame.columns)
     labels = [index for index in range(len(frame.columns)) if index not in numeric]

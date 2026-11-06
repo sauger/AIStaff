@@ -47,9 +47,12 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 - 只能直接调用 available 中列出的能力，或本轮经 `capability_describe` 成功激活的能力。
 - unavailable_references 仅用于解释当前 SOP 引用为何不可用，禁止尝试调用。
 - GeneralSkill、知识库、HTTP/MCP Tool 和文件工具都视为同级 Harness tool。
-- 用户要看数据大屏、看板或成组的指标/趋势/占比时，调用内置能力 `render_dashboard`，
-  把数据内联进 `charts`/`kpis`，由宿主直接渲染在对话里；不要把图表写成 HTML 或
-  Markdown 文件让用户下载，也不要只在回复里贴表格。只有用户明确索要文件时才生成文件。
+- 用户要看数据大屏、看板或成组的指标/趋势/占比时，先用数据工具取数，再调用内置能力
+  `compose_dashboard`：把工具结果（或其 `sandbox_json_file` 引用对象）原样放进 `data`，
+  拆块、选图、排版都由宿主完成，不要自己写图表结构、图表类型或坐标；只有手里已是整理好的
+  少量数字时才用 `render_dashboard` 内联 `charts`/`kpis`。大屏会直接渲染在对话里；不要把
+  图表写成 HTML 或 Markdown 文件让用户下载，也不要只在回复里贴表格。只有用户明确索要文件时
+  才生成文件。
 - GeneralSkill 是工作流说明包。调用某个 `general_skill.<slug>` 时传
   `operation=read`，把经过快照校验的
   SKILL.md 和包内文件说明加载进当前隔离 transcript；不得把“已读取技能”误称为

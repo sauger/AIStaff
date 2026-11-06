@@ -572,6 +572,8 @@ class HarnessCapabilityInvoker:
             from app.dashboard.harness import invoke_dashboard_tool
 
             return invoke_dashboard_tool(self, arguments)
+        if name == "compose_dashboard":
+            return self._compose_dashboard(arguments)
         if name == "lark_cli":
             from app.lark_cli.service import invoke_lark_cli
 
@@ -1669,6 +1671,38 @@ class HarnessCapabilityInvoker:
         }
         payload["artifacts"] = [*(payload.get("artifacts") or []), artifact]
         return payload
+
+    def _compose_dashboard(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Resolve result references for ``compose_dashboard`` only, then compose.
+
+        Other internal capabilities never receive resolved data.  The invocation
+        audit row was written from the unresolved arguments before this runs, so
+        it keeps the reference, not the rows.
+        """
+
+        from app.dashboard.harness import invoke_compose_tool
+        from app.dashboard.spec import compose_input_json_schema
+
+        try:
+            resolved = self._resolve_json_tool_result_references(
+                arguments,
+                schema=compose_input_json_schema(),
+            )
+        except HarnessExecutionError as exc:
+            stale = exc.error.code in {
+                "TOOL_RESULT_REFERENCE_UNAVAILABLE",
+                "TOOL_RESULT_REFERENCE_CHANGED",
+            }
+            message = exc.error.message
+            if stale:
+                message = f"{message}请重新调用数据工具获取结果后，再用新的引用调用 compose_dashboard。"
+            return _failure(
+                exc.error.code,
+                message,
+                retryable=stale or exc.error.retryable,
+                details=dict(exc.error.details),
+            )
+        return invoke_compose_tool(self, resolved)
 
     def _resolve_json_tool_result_references(
         self,

@@ -60,6 +60,7 @@ RESERVED_HARNESS_CAPABILITY_NAMES = {
     "login_guide_list",
     "secure_login",
     "render_dashboard",
+    "compose_dashboard",
 }
 
 
@@ -617,6 +618,7 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
             metadata={"provider": "harness", "side_effect": "read"},
         ),
         _dashboard_render_descriptor(),
+        _dashboard_compose_descriptor(),
     ]
 
 
@@ -642,9 +644,43 @@ def _dashboard_render_descriptor() -> CapabilityDescriptor:
             "(trend/compare/composition/detail/kpi) and let the host pick the type; set "
             "`theme: \"tech\"` for a dark operations-wall look and `span: 2` for the hero "
             "chart so the board does not look flat. Only set `type` when the user explicitly "
-            "asks for one."
+            "asks for one. Prefer compose_dashboard when the board should be built from a raw "
+            "data-tool result."
         ),
         input_schema=render_input_json_schema(),
+        metadata={"provider": "dashboard", "side_effect": "view"},
+        read_only=True,
+    )
+
+
+def _dashboard_compose_descriptor() -> CapabilityDescriptor:
+    """Automatic board from a raw tool result: the model names blocks, the host lays out.
+
+    Like ``render_dashboard`` this is a pure view: it only reads data the same
+    TaskFrame already fetched (inline or as a ``sandbox_json_file`` reference).
+    """
+
+    from app.dashboard.spec import compose_input_json_schema
+
+    return CapabilityDescriptor(
+        capability_id="builtin.dashboard.compose",
+        name="compose_dashboard",
+        kind="internal",
+        description=(
+            "Turn one data-tool result into a dashboard in a single call: the host splits the "
+            "JSON into blocks, picks KPI cards, charts or tables and lays them out on a 12x12 "
+            "grid inside the conversation. Pass the tool result unchanged as `data`; when it is "
+            "a sandbox_json_file reference, pass that reference object itself (resolved "
+            "server-side) and never paste, summarise or retype rows. Never write charts, chart "
+            "types or coordinates. Optional `plan` only names blocks: blocks[].path (e.g. "
+            "blocks[0], result.monthly) or label, plus title/role/region; layout.template "
+            "(overview/compare/pulse/detail/stack), layout.order, layout.hero. "
+            "「左边排名右边趋势」 -> template=pulse; 「表格放最下面」 -> template=detail. Call "
+            "with mode=outline first to list block paths when unsure. EMPTY_DATA: explain in "
+            "text, do not retry. TOOL_RESULT_REFERENCE_*: re-run the data tool. After success "
+            "summarise the findings in a few sentences without repeating the data."
+        ),
+        input_schema=compose_input_json_schema(),
         metadata={"provider": "dashboard", "side_effect": "view"},
         read_only=True,
     )
