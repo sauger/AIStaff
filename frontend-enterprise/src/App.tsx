@@ -37,6 +37,7 @@ import {
   employeeProfile,
   preferredEmployeeAgent,
 } from "./employee";
+import AboutPage from "./pages/AboutPage";
 import AccountsPage from "./pages/AccountsPage";
 import CompanyPage from "./pages/company/CompanyPage";
 import WecomAppsPage from "./pages/company/WecomAppsPage";
@@ -899,6 +900,7 @@ function Shell({
                   )
                 }
               />
+              <Route path="/enterprise/about" element={<AboutPage />} />
               <Route
                 path="/enterprise/tools"
                 element={

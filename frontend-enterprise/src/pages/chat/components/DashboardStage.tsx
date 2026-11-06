@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import type { DashboardSpec } from '../dashboardTypes';
 
 import DashboardCanvas from './DashboardCanvas';
 import { gridOf, layoutOf, stageGeometry } from './dashboardLayout';
+
+const DashboardFrame = lazy(() => import('./DashboardFrame'));
 
 type DashboardStageProps = {
   spec: DashboardSpec;
@@ -71,7 +73,15 @@ export default function DashboardStage({ spec, onClose }: DashboardStageProps) {
             transform: `translate(${geometry.offsetX}px, ${geometry.offsetY}px) scale(${geometry.scale})`,
           }}
         >
-          <DashboardCanvas spec={spec} mode="wall" />
+          {spec.theme === 'tech' ? (
+            <Suspense fallback={<DashboardCanvas spec={spec} mode="wall" />}>
+              <DashboardFrame>
+                <DashboardCanvas spec={spec} mode="wall" />
+              </DashboardFrame>
+            </Suspense>
+          ) : (
+            <DashboardCanvas spec={spec} mode="wall" />
+          )}
         </div>
       </div>
       <button

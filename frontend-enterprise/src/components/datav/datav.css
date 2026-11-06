@@ -1,0 +1,150 @@
+/* DataV/DataRoom visual assets, React port. See assets/datav/SOURCE.md. */
+
+.dv-border-box-1,
+.dv-border-box-2,
+.dv-border-box-10,
+.dv-border-box-13,
+.dv-decoration-5,
+.dv-decoration-8,
+.dv-decoration-11 {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.dv-border-box-1 .dv-border {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.dv-border-box-1 .right-top {
+  right: 0;
+  transform: rotateY(180deg);
+}
+
+.dv-border-box-1 .left-bottom {
+  bottom: 0;
+  transform: rotateX(180deg);
+}
+
+.dv-border-box-1 .right-bottom {
+  right: 0;
+  bottom: 0;
+  transform: rotateX(180deg) rotateY(180deg);
+}
+
+.dv-border-box-1 .border-box-content,
+.dv-border-box-2 .border-box-content,
+.dv-border-box-10 .border-box-content,
+.dv-border-box-13 .border-box-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.dv-border-box-2 .dv-border-svg-container,
+.dv-border-box-10 .dv-border-svg-container,
+.dv-border-box-13 .dv-border-svg-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.dv-border-box-10 {
+  border-radius: 6px;
+}
+
+.dv-border-box-10 .right-top {
+  right: 0;
+  transform: rotateY(180deg);
+}
+
+.dv-border-box-10 .left-bottom {
+  bottom: 0;
+  transform: rotateX(180deg);
+}
+
+.dv-border-box-10 .right-bottom {
+  right: 0;
+  bottom: 0;
+  transform: rotateX(180deg) rotateY(180deg);
+}
+
+.dv-decoration-5,
+.dv-decoration-8 {
+  display: flex;
+}
+
+.dv-decoration-11 {
+  display: flex;
+}
+
+.dv-decoration-11 .decoration-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dv-b1-pulse-a {
+  animation: dv-b1-a 0.5s linear infinite;
+}
+
+.dv-b1-pulse-b {
+  animation: dv-b1-b 0.5s linear infinite;
+}
+
+.dv-b1-fade {
+  animation: dv-b1-fade 1s linear infinite;
+}
+
+@keyframes dv-b1-a {
+  0%, 100% { fill: var(--dv-c1); }
+  50% { fill: var(--dv-c2); }
+}
+
+@keyframes dv-b1-b {
+  0%, 100% { fill: var(--dv-c2); }
+  50% { fill: var(--dv-c1); }
+}
+
+@keyframes dv-b1-fade {
+  0% { fill: var(--dv-c1); }
+  50% { fill: var(--dv-c2); }
+  100% { fill: transparent; }
+}
+
+.dv-d5-line {
+  animation-duration: var(--dv-dur, 1.2s);
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.dv-d5-line1 {
+  animation-name: dv-d5-flow-1;
+}
+
+.dv-d5-line2 {
+  animation-name: dv-d5-flow-2;
+}
+
+@keyframes dv-d5-flow-1 {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -1000; }
+}
+
+@keyframes dv-d5-flow-2 {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -1000; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dv-b1-pulse-a,
+  .dv-b1-pulse-b,
+  .dv-b1-fade,
+  .dv-d5-line {
+    animation: none !important;
+  }
+}

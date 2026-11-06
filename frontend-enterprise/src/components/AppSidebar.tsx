@@ -99,6 +99,7 @@ const SYSTEM_NAV: NavItem[] = [
   { route: EnterpriseRoute.Accounts, label: '账号管理', Icon: IconAccounts },
   { route: EnterpriseRoute.Models, label: '模型配置', Icon: IconModels },
   { route: EnterpriseRoute.RuntimeSettings, label: '运行设置', Icon: IconSettings },
+  { route: EnterpriseRoute.About, label: '关于', Icon: IconSettings },
 ];
 
 const COMPANY_NAV_STORAGE_KEY = 'ultrarag_enterprise_company_nav_expanded';

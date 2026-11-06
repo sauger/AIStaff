@@ -7163,3 +7163,25 @@ body,
     animation: none;
   }
 }
+
+/* Tech wall frame (DataRoom border + decoration) */
+.dash-frame {
+  position: absolute;
+  inset: 0;
+}
+
+.dash-frame-inner {
+  position: absolute;
+  inset: 0;
+}
+
+.dash-frame-deco {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  width: 52%;
+  height: 18px;
+  transform: translateX(-50%);
+  opacity: 0.75;
+  pointer-events: none;
+}

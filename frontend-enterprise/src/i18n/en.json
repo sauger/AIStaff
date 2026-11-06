@@ -4105,5 +4105,18 @@
   "仅展示前 20 项（共 {1} 项）": "Showing the top 20 of {1}",
   "链接已失效": "This link has expired",
   "该大屏可能已过期，请联系分享者重新生成。": "This dashboard may have expired; ask the person who shared it to regenerate it.",
-  "只读分享 · 有效期至": "Read-only share · expires"
+  "只读分享 · 有效期至": "Read-only share · expires",
+  "关于": "About",
+  "图表渲染（懒加载）": "Chart rendering (lazy-loaded)",
+  "控制台与公开分享页": "Console and public share page",
+  "大屏边框/装饰的原始视觉资产": "Original dashboard border/decoration assets",
+  "DataV 资产的二次修改与组件目录格式": "DataV asset modifications and component catalogue format",
+  "版本、第三方组件与许可证": "Version, third-party components and licenses",
+  "StaffDeck 数据大屏": "StaffDeck Dashboard",
+  "前端版本：": "Frontend version: ",
+  "本仓自身许可证为 AGPL-3.0；完整文本见仓库根目录 LICENSE 与 THIRD_PARTY_NOTICES.md。": "This repository is licensed under AGPL-3.0; see LICENSE and THIRD_PARTY_NOTICES.md at the repository root.",
+  "第三方组件": "Third-party components",
+  "组件": "Component",
+  "许可证": "License",
+  "用途": "Usage"
 }
