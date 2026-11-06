@@ -161,3 +161,32 @@ def test_trace_line_without_view_id_is_skipped() -> None:
         payload_json={"title": "x"},
     )
     assert _harness_event_trace_line(event) is None
+
+
+def test_stored_v1_spec_is_returned_without_revalidation(db: Session) -> None:
+    from app.db.models import DashboardView, utc_now
+
+    legacy = _spec().model_dump(mode="json")
+    # a phase-1 row the v2 model would refuse: proves the API never re-validates
+    legacy["charts"][0]["legacy_hint"] = "kept verbatim"
+    now = utc_now()
+    db.add(
+        DashboardView(
+            id="dashview_legacy",
+            tenant_id="tenant_demo",
+            session_id="session_1",
+            user_id="user_1",
+            title="经营看板",
+            spec_version=1,
+            spec_json=legacy,
+            spec_hash="legacy",
+            created_at=now,
+            expires_at=now + timedelta(days=1),
+        )
+    )
+    db.commit()
+    user = db.get(User, "user_1")
+    payload = read_dashboard_view("dashview_legacy", tenant_id="tenant_demo", current_user=user, db=db)
+    assert payload["spec"] == legacy
+    assert payload["spec"]["spec_version"] == 1
+    assert "layout" not in payload["spec"]

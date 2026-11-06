@@ -15,7 +15,14 @@ from __future__ import annotations
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 Scalar = str | int | float | bool | None
 
@@ -64,6 +71,33 @@ CHART_TYPES: tuple[str, ...] = (
 Theme = Literal["light", "dark", "tech"]
 CHART_INTENTS: tuple[str, ...] = ("trend", "compare", "composition", "detail", "kpi")
 ENCODING_KEYS = frozenset({"x", "y", "series"})
+
+# --- RenderSpec v2 (compose_dashboard) -------------------------------------
+
+SPEC_VERSION = 2
+GENERATOR_VERSION = "2.0"
+GRID_COLUMNS = 12
+GRID_ROWS = 12
+GRID_WIDTH = 1920
+GRID_HEIGHT = 1080
+MAX_WARNINGS = 20
+MAX_SOURCE_PATH = 200
+MAX_PLAN_BLOCKS = 12
+MAX_PLAN_ORDER = 24
+MAX_COMPOSE_DATA_BYTES = 4 * 1024 * 1024
+# Cells the compose path rewrites instead of rejecting (render_dashboard stays strict).
+SANITIZED_PLACEHOLDER = "（已隐藏）"
+MAX_NESTED_CELL = 120
+
+ChartRole = Literal["kpi", "trend", "composition", "ranking", "detail"]
+ChartOrientation = Literal["vertical", "horizontal", "auto"]
+LayoutTemplate = Literal["overview", "compare", "pulse", "detail", "stack"]
+LayoutRegion = Literal["kpi_row", "hero", "left", "right", "grid", "detail"]
+SlotKind = Literal["kpi", "chart"]
+
+CHART_ROLES: tuple[str, ...] = ("kpi", "trend", "composition", "ranking", "detail")
+LAYOUT_TEMPLATES: tuple[str, ...] = ("overview", "compare", "pulse", "detail", "stack")
+LAYOUT_REGIONS: tuple[str, ...] = ("kpi_row", "hero", "left", "right", "grid", "detail")
 
 
 class DashboardSpecError(ValueError):
@@ -144,6 +178,12 @@ class Chart(BaseModel):
     note: str | None = Field(default=None, max_length=MAX_NOTE)
     # 1 = half row, 2 = full row on the dashboard grid
     span: Literal[1, 2] = 1
+    # v2 provenance; v1 specs never carry these (see RenderSpec serialisation)
+    role: ChartRole | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    source_path: str | None = Field(default=None, max_length=MAX_SOURCE_PATH)
+    # only meaningful for ``bar``; v1 bars have no value and render vertically
+    orientation: ChartOrientation = "auto"
 
     @model_validator(mode="after")
     def _validate_encoding(self) -> Chart:
@@ -173,6 +213,10 @@ class FinalChart(Chart):
 class Kpi(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # slot reference, required once a v2 layout is present
+    id: str | None = Field(
+        default=None, min_length=1, max_length=MAX_CHART_ID, pattern=r"^[A-Za-z0-9_-]+$"
+    )
     label: str = Field(min_length=1, max_length=40)
     value: Scalar = None
     unit: str | None = Field(default=None, max_length=16)
@@ -200,6 +244,7 @@ class RenderMeta(BaseModel):
 
     source: str | None = Field(default=None, max_length=MAX_STRING)
     generated_by: str = Field(default="model", max_length=40)
+    generator_version: str = Field(default=GENERATOR_VERSION, max_length=16)
 
     @model_validator(mode="after")
     def _validate_source(self) -> RenderMeta:
@@ -246,11 +291,149 @@ class RenderInput(BaseModel):
         return sum(len(chart.data.rows) for chart in self.charts if chart.data is not None)
 
 
-class RenderSpec(RenderInput):
-    """Frozen form: every chart has a resolved type."""
+class DashboardWarning(BaseModel):
+    """One trim/downgrade/sanitise notice shown with the board (``warnings[]``)."""
 
-    spec_version: Literal[1] = 1
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=40, pattern=r"^[A-Z][A-Z0-9_]*$")
+    message: str = Field(min_length=1, max_length=MAX_NOTE)
+    path: str | None = Field(default=None, max_length=MAX_SOURCE_PATH)
+
+
+class GridSpec(BaseModel):
+    """Fixed design canvas; stored so the renderer never hard-codes it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    columns: Literal[12] = GRID_COLUMNS
+    rows: Literal[12] = GRID_ROWS
+    width: Literal[1920] = GRID_WIDTH
+    height: Literal[1080] = GRID_HEIGHT
+
+
+class Slot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=MAX_CHART_ID, pattern=r"^[A-Za-z0-9_-]+$")
+    kind: SlotKind
+    region: LayoutRegion
+    x: int = Field(ge=0, lt=GRID_COLUMNS)
+    y: int = Field(ge=0)
+    w: int = Field(ge=1, le=GRID_COLUMNS)
+    h: int = Field(ge=1)
+
+    def overlaps(self, other: Slot) -> bool:
+        return (
+            self.x < other.x + other.w
+            and other.x < self.x + self.w
+            and self.y < other.y + other.h
+            and other.y < self.y + self.h
+        )
+
+
+class LayoutPlan(BaseModel):
+    """Grid placement produced by the layout engine; models never write it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template: LayoutTemplate
+    grid: GridSpec = Field(default_factory=GridSpec)
+    slots: list[Slot] = Field(default_factory=list, max_length=MAX_CHARTS + MAX_KPIS)
+    overflow: Literal["fit", "scroll"] = "fit"
+
+    @model_validator(mode="after")
+    def _validate_slots(self) -> LayoutPlan:
+        seen: set[str] = set()
+        for index, slot in enumerate(self.slots):
+            path = f"layout.slots[{index}]"
+            if slot.id in seen:
+                raise DashboardSpecError(f"槽位 id 重复：{slot.id}", path)
+            seen.add(slot.id)
+            if slot.x + slot.w > self.grid.columns:
+                raise DashboardSpecError(f"槽位 {slot.id} 超出 {self.grid.columns} 列", path)
+            # ``scroll`` is the last-resort wall fallback: rows may run past the fold.
+            if self.overflow == "fit" and slot.y + slot.h > self.grid.rows:
+                raise DashboardSpecError(f"槽位 {slot.id} 超出 {self.grid.rows} 行", path)
+            for other in self.slots[:index]:
+                if slot.overlaps(other):
+                    raise DashboardSpecError(f"槽位 {slot.id} 与 {other.id} 重叠", path)
+        return self
+
+
+_V2_SPEC_KEYS = ("layout", "warnings")
+_V2_CHART_KEYS = ("role", "confidence", "source_path", "orientation")
+_V2_KPI_KEYS = ("id",)
+_V2_META_KEYS = ("generator_version",)
+
+
+def _strip_v2_fields(data: dict[str, Any]) -> dict[str, Any]:
+    for key in _V2_SPEC_KEYS:
+        data.pop(key, None)
+    for chart in data.get("charts") or []:
+        if isinstance(chart, dict):
+            for key in _V2_CHART_KEYS:
+                chart.pop(key, None)
+    for kpi in data.get("kpis") or []:
+        if isinstance(kpi, dict):
+            for key in _V2_KPI_KEYS:
+                kpi.pop(key, None)
+    meta = data.get("meta")
+    if isinstance(meta, dict):
+        for key in _V2_META_KEYS:
+            meta.pop(key, None)
+    return data
+
+
+class RenderSpec(RenderInput):
+    """Frozen form: every chart has a resolved type.
+
+    ``render_dashboard`` stores ``spec_version=1``; ``compose_dashboard`` stores
+    v2, which adds the grid layout, warnings and per-block provenance.  A v1 spec
+    serialises without any v2 key, so phase-1 views and digests stay unchanged.
+    """
+
+    spec_version: int = Field(default=SPEC_VERSION, ge=1, le=SPEC_VERSION)
     charts: list[FinalChart] = Field(default_factory=list, max_length=MAX_CHARTS)
+    layout: LayoutPlan | None = None
+    warnings: list[DashboardWarning] = Field(default_factory=list, max_length=MAX_WARNINGS)
+
+    @model_validator(mode="after")
+    def _validate_layout(self) -> RenderSpec:
+        if self.layout is None:
+            return self
+        if self.spec_version < 2:
+            raise DashboardSpecError("layout 只能出现在 spec_version=2 的大屏中", "layout")
+        expected: dict[str, str] = {}
+        for index, kpi in enumerate(self.kpis):
+            if kpi.id is None:
+                raise DashboardSpecError("v2 布局中的指标卡必须有 id", f"kpis[{index}].id")
+            expected[kpi.id] = "kpi"
+        for chart in self.charts:
+            if chart.id in expected:
+                raise DashboardSpecError(f"指标卡与图表 id 重复：{chart.id}", "charts[].id")
+            expected[chart.id] = "chart"
+        slots = {slot.id: slot for slot in self.layout.slots}
+        for slot in self.layout.slots:
+            kind = expected.get(slot.id)
+            if kind is None:
+                raise DashboardSpecError(f"槽位 {slot.id} 没有对应的指标卡或图表", "layout.slots")
+            if kind != slot.kind:
+                raise DashboardSpecError(f"槽位 {slot.id} 的类型应为 {kind}", "layout.slots")
+        missing = sorted(set(expected) - set(slots))
+        if missing:
+            raise DashboardSpecError(f"缺少槽位：{missing}", "layout.slots")
+        for chart in self.charts:
+            # renderers that only know v1 still get a sensible half/full width
+            chart.span = 2 if slots[chart.id].w >= 8 else 1
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.spec_version >= 2 or not isinstance(data, dict):
+            return data
+        return _strip_v2_fields(data)
 
 
 def render_input_json_schema() -> dict[str, Any]:
@@ -389,5 +572,66 @@ def render_input_json_schema() -> dict[str, Any]:
             },
         },
         "required": ["title"],
+        "additionalProperties": False,
+    }
+
+
+def compose_input_json_schema() -> dict[str, Any]:
+    """Flat model-facing schema for ``compose_dashboard`` (no ``$ref``/``$defs``).
+
+    The model only names blocks; chart types, sizes and coordinates are decided
+    by the host, so nothing here describes a chart.  ``data`` keeps an
+    object/array type so a resolved ``sandbox_json_file`` reference stays JSON.
+    """
+
+    path = {"type": "string", "maxLength": MAX_SOURCE_PATH}
+    block = {
+        "type": "object",
+        "properties": {
+            "path": {**path, "description": "块路径，如 blocks[0]、result.monthly；$ 为根"},
+            "label": {"type": "string", "maxLength": 40, "description": "不知道路径时按块名匹配"},
+            "title": {"type": "string", "maxLength": MAX_TITLE},
+            "role": {"type": "string", "enum": [*CHART_ROLES, "auto"]},
+            "region": {"type": "string", "enum": list(LAYOUT_REGIONS)},
+        },
+        "additionalProperties": False,
+    }
+    plan = {
+        "type": "object",
+        "description": "可选小计划：只点名块，不写图表结构",
+        "properties": {
+            "blocks": {"type": "array", "maxItems": MAX_PLAN_BLOCKS, "items": block},
+            "layout": {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "enum": list(LAYOUT_TEMPLATES)},
+                    "order": {"type": "array", "maxItems": MAX_PLAN_ORDER, "items": path},
+                    "hero": {**path, "description": "主图块路径"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": MAX_TITLE},
+            "data": {
+                "type": ["object", "array", "string"],
+                "description": "数据工具结果原样传入；是 sandbox_json_file 引用时直接传该引用对象",
+            },
+            "subtitle": {"type": "string", "maxLength": MAX_SUBTITLE},
+            "as_of": {"type": "string", "maxLength": MAX_AS_OF, "description": "数据截止时间"},
+            "theme": {"type": "string", "enum": ["light", "dark", "tech"]},
+            "source": {"type": "string", "maxLength": MAX_STRING, "description": "数据来源标识"},
+            "plan": plan,
+            "mode": {
+                "type": "string",
+                "enum": ["render", "outline"],
+                "description": "outline 只返回块清单，不出图",
+            },
+        },
+        "required": ["title", "data"],
         "additionalProperties": False,
     }
