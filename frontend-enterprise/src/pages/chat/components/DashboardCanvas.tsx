@@ -12,7 +12,7 @@ import type {
 
 import { buildChartOption, CHART_HEIGHT } from './dashboardEcharts';
 import {
-  bubbleColumnSpan,
+  bubbleRowSpans,
   gridOf,
   kpiKey,
   layoutOf,
@@ -172,7 +172,9 @@ function Panel({
   wall?: boolean;
 }) {
   const panelClass = wall
-    ? 'relative h-full overflow-hidden border border-cyan-400/25 bg-[#0c1626]/95 p-3'
+    ? dark
+      ? 'relative h-full overflow-hidden border border-cyan-400/25 bg-[#0c1626]/95 p-3'
+      : 'relative h-full overflow-hidden border border-[#e4e8ec] bg-white p-3'
     : dark
       ? 'relative rounded-lg border border-cyan-400/20 bg-[#0c1626]/90 p-3'
       : 'relative rounded-lg border border-[#e4e8ec] bg-white p-3';
@@ -195,7 +197,7 @@ function Panel({
         </>
       ) : null}
       <header className="mb-1 flex items-start justify-between gap-2">
-        <h4 className={`flex items-center gap-1.5 text-[13px] font-medium ${titleClass}`}>
+        <h4 className={`flex items-center gap-1.5 ${wall ? 'text-[15px]' : 'text-[13px]'} font-medium ${titleClass}`}>
           {dark ? <span className="inline-block h-3 w-[3px] rounded bg-cyan-400" /> : null}
           <span className="truncate">{chart.title || chart.id}</span>
           {lowConfidence ? (
@@ -230,7 +232,9 @@ function Panel({
 function KpiCard({ kpi, dark, wall }: { kpi: DashboardKpi; dark: boolean; wall?: boolean }) {
   const delta = typeof kpi.delta === 'number' ? kpi.delta : null;
   const cardClass = wall
-    ? 'relative flex h-full flex-col justify-center overflow-hidden border border-cyan-400/25 bg-gradient-to-br from-cyan-500/10 to-transparent px-3'
+    ? dark
+      ? 'relative flex h-full flex-col justify-center overflow-hidden border border-cyan-400/25 bg-gradient-to-br from-cyan-500/10 to-transparent px-3'
+      : 'relative flex h-full flex-col justify-center overflow-hidden rounded-lg border border-[#e4e8ec] bg-white px-3'
     : dark
       ? 'relative overflow-hidden rounded-lg border border-cyan-400/25 bg-gradient-to-br from-cyan-500/10 to-transparent px-3 py-2.5'
       : 'rounded-lg border border-[#e4e8ec] bg-white px-3 py-2.5';
@@ -400,6 +404,17 @@ function BubbleLayout({ spec, layout, dark }: { spec: DashboardSpec; layout: Das
   const kpis = kpiMap(spec);
   const kpiSlots = orderedSlots(layout, 'kpi');
   const chartSlots = orderedSlots(layout, 'chart');
+  const spans = new Map<string, number>();
+  const rows = new Map<number, DashboardSlot[]>();
+  for (const slot of chartSlots) {
+    const row = rows.get(slot.y) || [];
+    row.push(slot);
+    rows.set(slot.y, row);
+  }
+  for (const row of rows.values()) {
+    const values = bubbleRowSpans(row, width);
+    row.forEach((slot, index) => spans.set(slot.id, values[index]));
+  }
   const placedCharts = new Set(chartSlots.map((slot) => slot.id));
   const extraCharts = spec.charts.filter((chart) => !placedCharts.has(chart.id));
   const shellClass = dark
@@ -436,7 +451,7 @@ function BubbleLayout({ spec, layout, dark }: { spec: DashboardSpec; layout: Das
             const chart = charts.get(slot.id);
             if (!chart) return null;
             return (
-              <div key={slot.id} style={{ gridColumn: `span ${bubbleColumnSpan(slot.w, width)}` }}>
+              <div key={slot.id} style={{ gridColumn: `span ${spans.get(slot.id) ?? bubbleRowSpans([slot], width)[0]}` }}>
                 <Panel chart={chart} dark={dark} height={240} />
               </div>
             );

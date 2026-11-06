@@ -5,6 +5,7 @@ import type { DashboardLayout, DashboardSpec } from '../dashboardTypes';
 import {
   bubbleBreakpoint,
   bubbleColumnSpan,
+  bubbleRowSpans,
   gridOf,
   layoutOf,
   orderedSlots,
@@ -68,6 +69,14 @@ describe('dashboardLayout', () => {
     expect(bubbleColumnSpan(4, 700)).toBe(6);
     expect(bubbleColumnSpan(8, 700)).toBe(12);
     expect(bubbleColumnSpan(4, 1200)).toBe(4);
+  });
+
+  it('folds a pulse 4+8 row into two equal bubble columns', () => {
+    const left = { id: 'left', kind: 'chart' as const, region: 'left' as const, x: 0, y: 2, w: 4, h: 5 };
+    const right = { id: 'right', kind: 'chart' as const, region: 'right' as const, x: 4, y: 2, w: 8, h: 5 };
+    expect(bubbleRowSpans([left, right], 700)).toEqual([6, 6]);
+    expect(bubbleRowSpans([left, right], 500)).toEqual([12, 12]);
+    expect(bubbleRowSpans([right], 700)).toEqual([12]);
   });
 
   it('converts slots to pixels and wall heights', () => {

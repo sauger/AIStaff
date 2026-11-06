@@ -83,6 +83,20 @@ export function bubbleColumnSpan(slotWidth: number, containerWidth: number): num
   return 12;
 }
 
+/**
+ * Spans for slots that share one wall row.  A pulse row is 4+8 on the wall;
+ * below 1100px both fold to 6 so the pair still fits one bubble row instead of
+ * leaving a blank half row.
+ */
+export function bubbleRowSpans(slots: DashboardSlot[], containerWidth: number): number[] {
+  const spans = slots.map((slot) => bubbleColumnSpan(slot.w, containerWidth));
+  if (slots.length === 2 && bubbleBreakpoint(containerWidth) !== 'narrow') {
+    const total = spans[0] + spans[1];
+    if (total > 12) return [6, 6];
+  }
+  return spans;
+}
+
 export function slotRect(slot: DashboardSlot, grid: DashboardGrid = DEFAULT_GRID): SlotRect {
   const cellWidth = grid.width / grid.columns;
   const cellHeight = grid.height / grid.rows;
