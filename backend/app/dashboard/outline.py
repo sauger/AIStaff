@@ -21,10 +21,34 @@ OUTLINE_NOTICE = (
 )
 
 
-def _entry(path: str, title: str, suggest: str, size: str, limit: int) -> dict[str, Any]:
-    entry = {"path": path, "title": title, "suggest": suggest, "size": size}
-    while len(json.dumps(entry, ensure_ascii=False)) > limit and len(entry["title"]) > 4:
-        entry["title"] = entry["title"][:-2] + "…"
+def _entry(
+    path: str,
+    title: str,
+    suggest: str,
+    size: str,
+    limit: int,
+    label: str = "",
+) -> dict[str, Any]:
+    """Keep each entry ≤100 chars.  A path too long to fit is replaced by the
+    block label (``plan.blocks[].label`` resolves it), never by a truncated path.
+    """
+
+    entry: dict[str, Any] = {"path": path, "title": title, "suggest": suggest, "size": size}
+    while len(json.dumps(entry, ensure_ascii=False)) > limit:
+        if len(entry["title"]) > 4:
+            entry["title"] = entry["title"][:-2] + "…"
+            continue
+        if "size" in entry:
+            entry.pop("size")
+            continue
+        if "path" in entry:
+            entry.pop("path")
+            entry["label"] = (label or title)[:40]
+            continue
+        if len(entry.get("label", "")) > 8:
+            entry["label"] = entry["label"][:-2] + "…"
+            continue
+        break
     return entry
 
 
@@ -43,7 +67,16 @@ def build_outline(prepared: _Prepared) -> ComposeResult:
         frame = block.frame
         suggest = selection.component if not selection.role else f"{selection.component}/{selection.role}"
         size = f"{max(frame.total_rows, len(frame.rows))}行×{len(frame.columns)}列"
-        entries.append(_entry(block.path, block.title, suggest, size, MAX_OUTLINE_ENTRY))
+        entries.append(
+            _entry(
+                block.path,
+                block.title,
+                suggest,
+                size,
+                MAX_OUTLINE_ENTRY,
+                block.label or block.title,
+            )
+        )
 
     charts = [item for item in prepared.composed if item.selection.component != "kpi"]
     kpi_blocks = [item for item in prepared.composed if item.selection.component == "kpi"]

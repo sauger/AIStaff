@@ -252,3 +252,38 @@ def test_v1_render_path_is_unchanged() -> None:
     assert dumped["spec_version"] == 1
     assert "orientation" not in dumped["charts"][0]
     assert "layout" not in dumped
+
+
+def test_kpi_unit_and_hint_are_sanitized_like_cell_text() -> None:
+    result = _compose(
+        {
+            "as_of": "2026-09-30",
+            "blocks": [
+                {
+                    "name": "销售额",
+                    "value": 12,
+                    "unit": "http://evil.example/unit",
+                }
+            ],
+        }
+    )
+    assert result.spec.kpis[0].label == "销售额"
+    assert result.spec.kpis[0].unit == SANITIZED_PLACEHOLDER
+    assert "http" not in result.spec.model_dump_json()
+
+
+def test_outline_replaces_an_unfittable_path_with_a_label() -> None:
+    key = "a" * 180
+    outline = _compose(
+        {
+            key: {
+                "columns": [{"name": "k"}, {"name": "v", "type": "number"}],
+                "rows": [["a", 1], ["b", 2], ["c", 3]],
+            }
+        },
+        mode="outline",
+    ).outline
+    entry = outline["blocks"][0]
+    assert len(json.dumps(entry, ensure_ascii=False)) <= 100
+    assert "path" not in entry
+    assert entry["label"].startswith("Aaa")

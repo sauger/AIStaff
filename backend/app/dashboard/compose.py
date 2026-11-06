@@ -335,6 +335,7 @@ def _select_kpis(prepared: _Prepared, used_ids: set[str]) -> tuple[list[Kpi], li
             update={
                 "id": kpi_id,
                 "label": clean_text(card.label, 40) or "指标",
+                "unit": (clean_text(card.unit, 16) or None) if card.unit else None,
                 "hint": (clean_text(card.hint, 40) or None) if card.hint else None,
             }
         )
