@@ -35,8 +35,12 @@ let frameHandle: number | null = null;
 function flushFrameQueue() {
   frameHandle = null;
   const task = frameQueue.shift();
-  if (task) task();
-  if (frameQueue.length > 0) scheduleFrame();
+  try {
+    task?.();
+  } finally {
+    // One broken chart must not stall every chart queued behind it.
+    if (frameQueue.length > 0) scheduleFrame();
+  }
 }
 
 function scheduleFrame() {
@@ -76,20 +80,24 @@ function ChartCanvas({ chart, dark, height = CHART_HEIGHT }: { chart: DashboardC
     // ECharts is heavy and dashboards are occasional: keep it in its own chunk.
     enqueueFrame(() => {
       if (disposed || !containerRef.current) return;
-      void import('./dashboardEchartsRuntime').then(({ echarts }) => {
-        if (disposed || !containerRef.current) return;
-        const instance = echarts.init(containerRef.current, undefined, { renderer: 'canvas' }) as ChartInstance;
-        instanceRef.current = instance;
-        const current = latestRef.current;
-        instance.setOption(
-          buildChartOption(current.chart, current.dark, { height: current.height }),
-          { notMerge: true },
-        );
-        if (typeof ResizeObserver !== 'undefined') {
-          observer = new ResizeObserver(() => instanceRef.current?.resize());
-          observer.observe(containerRef.current);
-        }
-      });
+      void import('./dashboardEchartsRuntime')
+        .then(({ echarts }) => {
+          if (disposed || !containerRef.current) return;
+          const instance = echarts.init(containerRef.current, undefined, { renderer: 'canvas' }) as ChartInstance;
+          instanceRef.current = instance;
+          const current = latestRef.current;
+          instance.setOption(
+            buildChartOption(current.chart, current.dark, { height: current.height }),
+            { notMerge: true },
+          );
+          if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(() => instanceRef.current?.resize());
+            observer.observe(containerRef.current);
+          }
+        })
+        .catch(() => {
+          // Keep the panel chrome; a failed chart must not break the page.
+        });
     });
 
     return () => {

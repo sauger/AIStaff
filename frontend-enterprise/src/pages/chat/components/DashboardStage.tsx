@@ -74,7 +74,7 @@ export default function DashboardStage({ spec, onClose }: DashboardStageProps) {
           }}
         >
           {spec.theme === 'tech' ? (
-            <Suspense fallback={<DashboardCanvas spec={spec} mode="wall" />}>
+            <Suspense fallback={null}>
               <DashboardFrame>
                 <DashboardCanvas spec={spec} mode="wall" />
               </DashboardFrame>

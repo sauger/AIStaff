@@ -6,6 +6,7 @@ import { ApiError, api } from '@/api/client';
 import type { PublicDashboardPayload } from './chat/dashboardTypes';
 
 import DashboardCanvas from './chat/components/DashboardCanvas';
+import DashboardWallView from './chat/components/DashboardWallView';
 import DashboardStage from './chat/components/DashboardStage';
 import { layoutOf } from './chat/components/dashboardLayout';
 
@@ -95,8 +96,8 @@ export default function PublicDashboardPage() {
           </button>
         ) : null}
       </header>
-      <div className={payload.spec.theme === 'light' ? 'rounded-xl bg-white p-3' : ''}>
-        <DashboardCanvas spec={payload.spec} />
+      <div className="rounded-xl bg-[#080f1c]">
+        {isV2 ? <DashboardWallView spec={payload.spec} /> : <DashboardCanvas spec={payload.spec} />}
       </div>
       {stageOpen ? <DashboardStage spec={payload.spec} onClose={() => setStageOpen(false)} /> : null}
     </div>
