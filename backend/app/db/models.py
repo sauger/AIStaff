@@ -2290,3 +2290,31 @@ class WecomApprovalStatusEvent(SQLModel, table=True):
     source: str = Field(default="query")  # query | callback
     payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class DashboardView(SQLModel, table=True):
+    """A rendered data dashboard produced by the dashboard render capability.
+
+    The stored spec is fully materialised (chart types resolved, data inline),
+    so the renderer never needs to query anything.  Message events only carry
+    ``view_id``: a board may hold thousands of cells and must not travel through
+    the agent event transcript.
+    """
+
+    __tablename__ = "dashboard_views"
+    __table_args__ = (
+        Index("ix_dashboard_views_session", "tenant_id", "session_id"),
+        Index("ix_dashboard_views_expiry", "expires_at"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("dashview"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str | None = Field(default=None, index=True)
+    session_id: str = Field(index=True)
+    user_id: str | None = None
+    title: str
+    spec_version: int = 1
+    spec_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    spec_hash: str = Field(index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime = Field(index=True)

@@ -4075,5 +4075,21 @@
   "部门不存在或不在可见范围内（errcode={1}）": "The department does not exist or is outside the visible scope (errcode={1})",
   "部门编号无效": "Invalid department id",
   "仅企业管理员可读取企微通讯录": "Only an enterprise administrator can read the WeCom directory",
-  "企微应用密钥无法解密，请检查服务端密钥配置": "The WeCom app secret could not be decrypted. Check the server key configuration."
+  "企微应用密钥无法解密，请检查服务端密钥配置": "The WeCom app secret could not be decrypted. Check the server key configuration.",
+  "{1} 个指标": "{1} metrics",
+  "{1} 个图表": "{1} charts",
+  "展示数据大屏 {1}": "Show dashboard {1}",
+  "展示数据大屏": "Show dashboard",
+  "数据截止": "Data through",
+  "来源 {1}": "Source {1}",
+  "未标注来源": "Source not labelled",
+  "个指标": "metrics",
+  "大屏加载失败": "Failed to load dashboard",
+  "该大屏已过期，可让智能体重新生成。": "This dashboard has expired; ask the agent to regenerate it.",
+  "大屏加载失败：": "Failed to load dashboard: ",
+  "重试": "Retry",
+  "正在加载大屏…": "Loading dashboard…",
+  "数据大屏": "Dashboard",
+  "数据大屏 ·": "Dashboard ·",
+  "个图表": "charts"
 }

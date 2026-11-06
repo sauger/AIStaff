@@ -59,6 +59,7 @@ RESERVED_HARNESS_CAPABILITY_NAMES = {
     "secret_list",
     "login_guide_list",
     "secure_login",
+    "render_dashboard",
 }
 
 
@@ -114,6 +115,7 @@ class CapabilityManifestBuilder:
                     kind="file",
                     description=spec.description,
                     input_schema=dict(spec.input_schema),
+                    read_only=spec.side_effect == "read",
                     metadata={
                         "provider": ("builtin.command" if is_command else "builtin.fs"),
                         "side_effect": spec.side_effect,
@@ -159,6 +161,7 @@ class CapabilityManifestBuilder:
                     kind="general_skill",
                     capability_scope=scope,
                     description=row.description or row.name,
+                    read_only=True,
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -229,6 +232,11 @@ class CapabilityManifestBuilder:
                     )
                 continue
             invocation_name = _available_invocation_name(row.name, row.id, available)
+            harness_config = _tool_harness_config(row)
+            read_only = _tool_read_only(row, harness_config)
+            required_skill_slug = str(
+                harness_config.get("required_general_skill_slug") or ""
+            ).strip()
             available.append(
                 CapabilityDescriptor(
                     capability_id=row.id,
@@ -237,6 +245,7 @@ class CapabilityManifestBuilder:
                     capability_scope=scope,
                     description=row.description or row.display_name or row.name,
                     input_schema=dict(row.input_schema or {}),
+                    read_only=read_only,
                     metadata={
                         "tool_type": row.tool_type,
                         "method": row.method,
@@ -244,6 +253,11 @@ class CapabilityManifestBuilder:
                         "display_name": row.display_name or row.name,
                         "content_digest": tool_snapshot_digest(self.db, row),
                         "sop_explicitly_allowed": explicitly_allowed,
+                        **(
+                            {"required_general_skill_slug": required_skill_slug}
+                            if required_skill_slug
+                            else {}
+                        ),
                     },
                 )
             )
@@ -294,6 +308,7 @@ class CapabilityManifestBuilder:
                         else "general"
                     ),
                     description="检索当前 TaskFrame 已授权的企业知识库。",
+                    read_only=True,
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -601,7 +616,52 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
             },
             metadata={"provider": "harness", "side_effect": "read"},
         ),
+        _dashboard_render_descriptor(),
     ]
+
+
+def _dashboard_render_descriptor() -> CapabilityDescriptor:
+    """Generic board renderer: pure view, no data access of its own.
+
+    Kept inline (no DB lookup) because rendering is a side-effect-free view:
+    any producer that can build a RenderSpec may use it.
+    """
+
+    from app.dashboard.spec import render_input_json_schema
+
+    return CapabilityDescriptor(
+        capability_id="builtin.dashboard.render",
+        name="render_dashboard",
+        kind="internal",
+        description=(
+            "Render a data dashboard (title, KPI cards, charts and tables) inside the "
+            "conversation. Use it when the user asks for a dashboard/大屏/看板, or when "
+            "several related metrics, trends and breakdowns should be shown together. "
+            "Pass real numbers inline; never invent values. Chart types: line, area, column, "
+            "bar, stacked_column, pie, donut, scatter, gauge, funnel, table. Choose `intent` "
+            "(trend/compare/composition/detail/kpi) and let the host pick the type; set "
+            "`theme: \"tech\"` for a dark operations-wall look and `span: 2` for the hero "
+            "chart so the board does not look flat. Only set `type` when the user explicitly "
+            "asks for one."
+        ),
+        input_schema=render_input_json_schema(),
+        metadata={"provider": "dashboard", "side_effect": "view"},
+        read_only=True,
+    )
+
+
+def _tool_harness_config(tool: Tool) -> dict[str, Any]:
+    config = tool.config_json if isinstance(tool.config_json, dict) else {}
+    harness = config.get("harness") if isinstance(config, dict) else None
+    return dict(harness) if isinstance(harness, dict) else {}
+
+
+def _tool_read_only(tool: Tool, harness_config: dict[str, Any] | None = None) -> bool:
+    config = harness_config if harness_config is not None else _tool_harness_config(tool)
+    explicit = config.get("read_only")
+    if isinstance(explicit, bool):
+        return explicit
+    return str(tool.method or "").strip().upper() == "GET"
 
 
 def tool_snapshot_digest(db: Session, tool: Tool) -> str:

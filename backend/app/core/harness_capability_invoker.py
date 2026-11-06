@@ -136,6 +136,8 @@ class HarnessCapabilityInvoker:
         self.channel_target_json = dict(channel_target_json or {})
         self.channel_is_group = channel_is_group
         self.run_id = str(run_id or new_id("hrun"))
+        # Per-run external tool call counter, used by harness.max_calls_per_turn.
+        self._external_call_counts: dict[str, int] = {}
         self.workspace_root = _workspace_root(
             tenant_id, session.id, task_frame_id, db=self.db
         )
@@ -204,6 +206,21 @@ class HarnessCapabilityInvoker:
                 "CAPABILITY_NOT_ACTIVATED",
                 "该能力尚未在当前 AgentLoop 中展开；请先调用 capability_describe。",
             )
+        required_skill = str(
+            descriptor.metadata.get("required_general_skill_slug") or ""
+        ).strip()
+        if required_skill:
+            expected_skill = (
+                required_skill
+                if required_skill.startswith("general_skill.")
+                else f"general_skill.{required_skill}"
+            )
+            if expected_skill not in self._loaded_general_skill_names:
+                return _failure(
+                    "GENERAL_SKILL_REQUIRED",
+                    f"调用 {name} 前必须先 read {expected_skill}，"
+                    "按技能里的口径和取数流程执行。",
+                )
         current_descriptor = self._currently_authorized_descriptor(descriptor)
         if current_descriptor is None:
             return _failure(
@@ -551,6 +568,10 @@ class HarnessCapabilityInvoker:
             return self._read_published_deliverable(arguments)
         if name == "knowledge_ingest_proposal":
             return self._knowledge_ingest_proposal(arguments)
+        if name == "render_dashboard":
+            from app.dashboard.harness import invoke_dashboard_tool
+
+            return invoke_dashboard_tool(self, arguments)
         if name == "lark_cli":
             from app.lark_cli.service import invoke_lark_cli
 
@@ -1247,7 +1268,49 @@ class HarnessCapabilityInvoker:
             "data": payload,
             "citations": knowledge_citations_from_results([payload]),
         }
-        return self._persist_large_json_result(result, call_id=call_id)
+        return self._persist_large_json_result(
+            result,
+            call_id=call_id,
+            tool_name="knowledge_search",
+            arguments=arguments,
+        )
+
+    def _enforce_call_cap(self, tool: Tool, source_tool_name: str) -> dict[str, Any] | None:
+        """Stop single-entity tools from burning the whole turn budget.
+
+        A tool may declare ``config_json.harness.max_calls_per_turn`` (0/unset =
+        unlimited).  Hitting the cap returns a structured failure instead of
+        executing, so the model is told to switch to a batch tool rather than
+        repeating the same single-entity call.
+        """
+
+        config = tool.config_json if isinstance(tool.config_json, dict) else {}
+        harness = config.get("harness") if isinstance(config, dict) else None
+        if not isinstance(harness, dict):
+            return None
+        raw_limit = harness.get("max_calls_per_turn")
+        if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit <= 0:
+            return None
+        used = self._external_call_counts.get(source_tool_name, 0)
+        if used < raw_limit:
+            self._external_call_counts[source_tool_name] = used + 1
+            return None
+        hint = str(harness.get("call_limit_hint") or "").strip()
+        message = (
+            f"本轮已调用 {source_tool_name} {used} 次，达到单轮上限 {raw_limit}。"
+            "这是单实体接口，请改用批量接口一次取全，不要继续逐条调用。"
+        )
+        if hint:
+            message = f"{message} {hint}"
+        self._emit_trace(
+            "harness_tool_call_capped",
+            {
+                "tool_name": source_tool_name,
+                "calls": used,
+                "limit": raw_limit,
+            },
+        )
+        return _failure("TOOL_CALL_LIMIT_REACHED", message)
 
     def _invoke_external_tool(
         self,
@@ -1279,6 +1342,9 @@ class HarnessCapabilityInvoker:
                 "CAPABILITY_SNAPSHOT_CHANGED",
                 "工具配置在当前 HarnessRun 启动后发生变化，请重新规划。",
             )
+        capped = self._enforce_call_cap(tool, source_tool_name)
+        if capped is not None:
+            return capped
         try:
             resolved_arguments = self._resolve_json_tool_result_references(
                 arguments,
@@ -1316,7 +1382,12 @@ class HarnessCapabilityInvoker:
         a2a_artifacts = self._materialize_a2a_artifacts(payload, call_id=call_id)
         if a2a_artifacts:
             payload["artifacts"] = [*(payload.get("artifacts") or []), *a2a_artifacts]
-        payload = self._persist_large_json_result(payload, call_id=call_id)
+        payload = self._persist_large_json_result(
+            payload,
+            call_id=call_id,
+            tool_name=name,
+            arguments=arguments,
+        )
         if isinstance(app_descriptor, dict) and payload.get("success") is True:
             app_descriptor["initial_result"] = payload.get("data")
             self._emit_trace(
@@ -1390,11 +1461,45 @@ class HarnessCapabilityInvoker:
                 )
         return published
 
+    def _append_result_index(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        relative_path: str,
+        kind: str,
+        size: object,
+        sha256: object,
+    ) -> None:
+        """Keep a workspace-local map from result files back to their tool call."""
+
+        if not tool_name or not relative_path:
+            return
+        path = self.workspace_root / _INTERNAL_TOOL_RESULT_DIRECTORY / "index.jsonl"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "tool_name": tool_name,
+                "arguments": _index_safe_arguments(arguments),
+                "path": relative_path,
+                "kind": kind,
+                "size": size,
+                "sha256": sha256,
+                "created_at": utc_now().isoformat(),
+            }
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            # The result itself is still usable; the summarizer can fall back to glob.
+            return
+
     def _persist_large_json_result(
         self,
         payload: dict[str, Any],
         *,
         call_id: str,
+        tool_name: str = "",
+        arguments: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Keep large tool/knowledge bodies out of the isolated model transcript.
 
@@ -1406,7 +1511,13 @@ class HarnessCapabilityInvoker:
 
         data = payload.get("data")
         if isinstance(data, str):
-            return self._persist_large_text_result(payload, call_id=call_id, text=data)
+            return self._persist_large_text_result(
+                payload,
+                call_id=call_id,
+                text=data,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
         if not isinstance(data, (dict, list)):
             return payload
         try:
@@ -1458,6 +1569,14 @@ class HarnessCapabilityInvoker:
             "sha256": stored_data.get("sha256"),
         }
         payload["data"] = reference
+        self._append_result_index(
+            tool_name=tool_name,
+            arguments=arguments,
+            relative_path=relative_path,
+            kind=_SANDBOX_JSON_FILE_KIND,
+            size=reference.get("size"),
+            sha256=reference.get("sha256"),
+        )
         app_descriptor = payload.get("mcp_app")
         if isinstance(app_descriptor, dict):
             app_descriptor["initial_result"] = dict(reference)
@@ -1469,6 +1588,8 @@ class HarnessCapabilityInvoker:
         *,
         call_id: str,
         text: str,
+        tool_name: str = "",
+        arguments: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if len(text) <= _INLINE_JSON_TOOL_RESULT_MAX_CHARS:
             return payload
@@ -1525,6 +1646,14 @@ class HarnessCapabilityInvoker:
             ),
         }
         payload["data"] = reference
+        self._append_result_index(
+            tool_name=tool_name,
+            arguments=arguments,
+            relative_path=written_path,
+            kind=_SANDBOX_TEXT_FILE_KIND,
+            size=reference.get("size"),
+            sha256=reference.get("sha256"),
+        )
         artifact = {
             "type": "workspace_file",
             "task_frame_id": self.task_frame_id,
@@ -1940,6 +2069,24 @@ def _text_tool_result_extension(text: str) -> tuple[str, str]:
             return "tsv", "text/tab-separated-values; charset=utf-8"
         return "csv", "text/csv; charset=utf-8"
     return "txt", "text/plain; charset=utf-8"
+
+
+_SENSITIVE_ARGUMENT_KEYS = {"authorization", "cookie", "password", "secret", "token", "api_key"}
+
+
+def _index_safe_arguments(arguments: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key, value in arguments.items():
+        lowered = str(key).lower()
+        if any(marker in lowered for marker in _SENSITIVE_ARGUMENT_KEYS):
+            safe[str(key)] = "[redacted]"
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            safe[str(key)] = value
+        else:
+            safe[str(key)] = json.dumps(value, ensure_ascii=False, default=str)[:500]
+    return safe
 
 
 def _sandbox_path(relative_path: str) -> str:

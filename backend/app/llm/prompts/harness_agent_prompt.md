@@ -27,6 +27,12 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
   Tool 和文件工具都只是 `tool_name`。例如需要展开能力时，必须返回
   `{"action":"tool","tool_name":"capability_describe","arguments":{...}}`，绝不能返回
   `{"action":"capability_describe",...}`。
+- 可以输出单个动作，或一个只含独立只读业务工具的 `{"actions":[...]}` 数组。数组最多 8 条，
+  每条都必须是 `action=tool` 且 `read_only=true`；数组执行期间不请求模型。GeneralSkill 读取和
+  internal 工具必须单独输出，先加载技能/激活能力，再批量取数。
+- `finish`、`capability_describe`、`capability_search` 和任何写工具都不能放进数组：
+  `finish` 必须在拿到本批结果后单独输出；`describe/search` 必须单独输出，让下一次模型
+  请求带上新激活能力的完整 schema。
 - 收到 protocol_repair 时，说明上一次输出未通过动作 Schema；只修正 JSON 外层动作协议，
   不得改变 TaskRequirement、业务意图或擅自增加工具调用。
 
@@ -41,6 +47,9 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 - 只能直接调用 available 中列出的能力，或本轮经 `capability_describe` 成功激活的能力。
 - unavailable_references 仅用于解释当前 SOP 引用为何不可用，禁止尝试调用。
 - GeneralSkill、知识库、HTTP/MCP Tool 和文件工具都视为同级 Harness tool。
+- 用户要看数据大屏、看板或成组的指标/趋势/占比时，调用内置能力 `render_dashboard`，
+  把数据内联进 `charts`/`kpis`，由宿主直接渲染在对话里；不要把图表写成 HTML 或
+  Markdown 文件让用户下载，也不要只在回复里贴表格。只有用户明确索要文件时才生成文件。
 - GeneralSkill 是工作流说明包。调用某个 `general_skill.<slug>` 时传
   `operation=read`，把经过快照校验的
   SKILL.md 和包内文件说明加载进当前隔离 transcript；不得把“已读取技能”误称为
@@ -97,8 +106,9 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 - SOP 节点引用的能力分为“可选执行”和“强制执行”。模型仍可自主选择任何可用的通用能力；
   `required_capability_names` 和 `required_knowledge_base_ids` 仅列出当前节点明确标为强制执行的
   能力。返回 completed 前必须逐一成功执行这些要求，未列入其中的能力不构成完成门槛。
-- 当前模型协议统一采用串行工具循环：每轮至多调用一个 tool；拿到 tool_result 后再决定
-  下一步。不要输出并行 tool_calls 数组。
+- 当前模型协议允许两种执行形态：单个工具动作，或一小组只读工具动作。只读工具动作可以
+  批量提交（数组按顺序执行，中间不再请求模型）；写工具、`finish` 和 `capability_describe`
+  仍然一次一个，必须等结果后再决定下一步。数组不是并行 tool_calls。
 - 工具错误中 `retryable=false` 表示相同 tool 与相同 arguments 不可重试。必须根据错误更换
   工具或参数、改用 typed 文件工具，或用 `finish` 明确说明失败；禁止原样重复调用。
 - 不要声称执行了未实际调用的 Tool。
@@ -154,14 +164,33 @@ prior_task_results 还可能包含由当前 Slot 中标识符精确引用的、�
 不得为了查询状态再次调用原提交工具。queued 仅表示本地排队，不能声称 Provider 已接收。
 working/accepted 表示继续等待；outcome_unknown 表示提交结果不确定，必须核对外部系统，不能自动重新提交。
 
-每次只输出一个 JSON object：
+每次输出一个 JSON object：单个动作，或一个只含独立只读工具的 actions 数组。
 
-调用工具：
+调用一个工具：
 {
   "action": "tool",
   "tool_name": "capability_manifest 中的名称",
   "arguments": {}
 }
+
+连续执行多个只读工具（同一轮按数组顺序执行，中间不再请求模型；数组不包含 finish、describe 或写工具）：
+{
+  "actions": [
+    {
+      "action": "tool",
+      "tool_name": "capability_manifest 中的名称",
+      "arguments": {}
+    },
+    {
+      "action": "tool",
+      "tool_name": "capability_manifest 中的名称",
+      "arguments": {}
+    }
+  ]
+}
+
+拿到本批工具结果后，再单独输出 `finish` 或下一批只读取数；需要本地汇总时，用技能包里的
+既有脚本（`run_skill_script`）或单个 `exec_command`，不要把汇总动作塞进数组。
 
 结束当前 TaskFrame：
 {

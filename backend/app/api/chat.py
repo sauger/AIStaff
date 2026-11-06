@@ -9,6 +9,7 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -21,18 +22,33 @@ from starlette.background import BackgroundTask
 from app.agents.branching import model_for_agent, visible_published_skills
 from app.channels.service_outbox import stage_channel_delivery
 from app.core import AgentLoop
+from app.core.artifact_line_editor import (
+    ArtifactLineEditError,
+    is_docx_artifact_path,
+    is_editable_artifact_path,
+    read_docx_artifact_paragraphs,
+    read_editable_artifact_text,
+    replace_source_line,
+    rewrite_artifact_line,
+    source_lines,
+    strip_line_carriage,
+    sync_published_artifact_digests,
+    write_docx_paragraph_edit,
+    write_harness_artifact_text,
+)
 from app.core.cancellation import cancel_chat_turn, is_chat_turn_cancelled
 from app.core.capability_manifest import CapabilityManifestBuilder
 from app.core.harness_session_cleanup import harness_task_workspace_path
 from app.core.harness_turn_store import HarnessTurnStore
+from app.core.response_generator import format_runtime_failure_reply
 from app.core.slash_commands import SlashCommandRead, slash_command_catalog
 from app.db import engine, get_session
 from app.db.models import (
     AgentEvent,
     AgentProfile,
     ChatSession,
-    HarnessTurnRecord,
     HarnessTaskFrameRecord,
+    HarnessTurnRecord,
     HumanHandoffRequest,
     Message,
     MessageFeedback,
@@ -51,6 +67,7 @@ from app.harness import (
     open_harness_artifact,
 )
 from app.llm import LLMClient, LLMError
+from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.observability.session_timings import enrich_turn_traces_with_timings
 from app.observability.spans import (
     bind_span_sink,
@@ -72,12 +89,12 @@ from app.session.cleanup import (
     remove_chat_session_workspace,
 )
 from app.session.helpers import public_session
+from app.session.message_read import message_read
 from app.session.message_visibility import (
     internal_message_turn_ids,
     visible_message_content,
     visible_message_rows,
 )
-from app.session.message_read import message_read
 from app.session.origin import pilotdeck_origin_session_ids
 from app.session.session_schema import (
     ChatAttachmentRead,
@@ -2448,6 +2465,334 @@ def download_harness_artifact(
     )
 
 
+@router.get("/dashboard-views/{view_id}")
+def read_dashboard_view(
+    view_id: str,
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict:
+    """Return one rendered dashboard spec for the conversation that owns it."""
+
+    from app.dashboard.service import get_view, is_expired
+
+    _ensure_request_tenant(tenant_id, current_user)
+    view = get_view(db, tenant_id=tenant_id, view_id=view_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Dashboard view not found")
+    _get_readable_chat_session(db, tenant_id, current_user, view.session_id)
+    if is_expired(view):
+        raise HTTPException(status_code=410, detail="Dashboard view expired")
+    payload = dict(view.spec_json or {})
+    return {
+        "id": view.id,
+        "title": view.title,
+        "spec": payload,
+        "created_at": view.created_at.isoformat(),
+        "expires_at": view.expires_at.isoformat(),
+    }
+
+
+class ArtifactLineEditRequest(BaseModel):
+    tenant_id: str
+    path: str
+    line_number: int
+    original_line: str
+    instruction: str
+    model_config_id: str | None = None
+
+
+def _artifact_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _load_editable_artifact_context(
+    db: Session,
+    *,
+    tenant_id: str,
+    current_user: User,
+    session_id: str,
+    task_frame_id: str,
+    path: str,
+) -> tuple[ChatSession, dict[str, object], Path]:
+    chat_session = _get_readable_chat_session(db, tenant_id, current_user, session_id)
+    frame = db.exec(
+        select(HarnessTaskFrameRecord).where(
+            HarnessTaskFrameRecord.tenant_id == tenant_id,
+            HarnessTaskFrameRecord.session_id == session_id,
+            HarnessTaskFrameRecord.task_id == task_frame_id,
+        )
+    ).first()
+    if frame is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    artifact = _published_workspace_artifact(
+        db,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        task_frame_id=task_frame_id,
+        requested_path=path,
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    workspace = harness_task_workspace_path(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        task_frame_id=task_frame_id,
+        db=db,
+    )
+    return chat_session, artifact, workspace
+
+
+def _ensure_artifact_unchanged(artifact: dict[str, object], digest: str, size: int) -> None:
+    expected_digest = str(artifact.get("sha256") or "").strip().lower()
+    expected_size = artifact.get("size")
+    if (
+        (expected_digest and expected_digest != digest.lower())
+        or (isinstance(expected_size, int) and expected_size != size)
+    ):
+        raise _artifact_error(
+            409,
+            "ARTIFACT_CHANGED",
+            "文档在发布后有改动，请关闭后重新打开再试。",
+        )
+
+
+@router.get("/sessions/{session_id}/artifacts/{task_frame_id}/content")
+def read_harness_artifact_content(
+    session_id: str,
+    task_frame_id: str,
+    tenant_id: str = Query(...),
+    path: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, object]:
+    """Serve one published Markdown/text artifact for the chat document sidebar."""
+
+    _ensure_request_tenant(tenant_id, current_user)
+    _, artifact, workspace = _load_editable_artifact_context(
+        db,
+        tenant_id=tenant_id,
+        current_user=current_user,
+        session_id=session_id,
+        task_frame_id=task_frame_id,
+        path=path,
+    )
+    if not is_editable_artifact_path(path):
+        raise _artifact_error(
+            400,
+            "ARTIFACT_NOT_EDITABLE",
+            "该文件类型暂不支持文档侧栏，可直接下载查看。",
+        )
+    try:
+        if is_docx_artifact_path(path):
+            _, paragraphs, digest, size = read_docx_artifact_paragraphs(workspace, path)
+            content, kind = "\n".join(paragraphs), "docx"
+        else:
+            content, digest, size = read_editable_artifact_text(workspace, path)
+            kind = "text"
+    except ArtifactLineEditError as exc:
+        raise _artifact_error(400, exc.code, exc.detail) from exc
+    except (HarnessArtifactAccessError, OSError):
+        raise HTTPException(status_code=404, detail="Artifact not found") from None
+    _ensure_artifact_unchanged(artifact, digest, size)
+    return {
+        "task_frame_id": task_frame_id,
+        "path": path,
+        "display_name": str(artifact.get("display_name") or path),
+        "content": content,
+        "kind": kind,
+        "sha256": digest,
+        "size": size,
+        "editable": True,
+    }
+
+
+@router.post("/sessions/{session_id}/artifacts/{task_frame_id}/line-edit")
+def edit_harness_artifact_line(
+    session_id: str,
+    task_frame_id: str,
+    request: ArtifactLineEditRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, object]:
+    """Rewrite exactly one published artifact line from a sidebar instruction."""
+
+    _ensure_request_tenant(request.tenant_id, current_user)
+    chat_session = _get_user_chat_session(
+        db, request.tenant_id, current_user.id, session_id
+    )
+    if chat_session.status in {"running", "executing"}:
+        raise _artifact_error(
+            409,
+            "SESSION_BUSY",
+            "数字员工正在处理该会话，请等当前回复结束后再修改文档。",
+        )
+    _, artifact, workspace = _load_editable_artifact_context(
+        db,
+        tenant_id=request.tenant_id,
+        current_user=current_user,
+        session_id=session_id,
+        task_frame_id=task_frame_id,
+        path=request.path,
+    )
+    if not is_editable_artifact_path(request.path):
+        raise _artifact_error(
+            400,
+            "ARTIFACT_NOT_EDITABLE",
+            "该文件类型暂不支持行内编辑。",
+        )
+    instruction = request.instruction.strip()
+    if not instruction:
+        raise _artifact_error(400, "INSTRUCTION_REQUIRED", "请说明要如何修改这一行。")
+    is_docx = is_docx_artifact_path(request.path)
+    try:
+        if is_docx:
+            docx_data, lines, digest, size = read_docx_artifact_paragraphs(
+                workspace, request.path
+            )
+            text = ""
+        else:
+            text, digest, size = read_editable_artifact_text(workspace, request.path)
+            lines = source_lines(text)
+            docx_data = b""
+    except ArtifactLineEditError as exc:
+        raise _artifact_error(400, exc.code, exc.detail) from exc
+    except (HarnessArtifactAccessError, OSError):
+        raise HTTPException(status_code=404, detail="Artifact not found") from None
+    _ensure_artifact_unchanged(artifact, digest, size)
+    if request.line_number < 1 or request.line_number > len(lines):
+        raise _artifact_error(
+            400,
+            "LINE_OUT_OF_RANGE",
+            "该行不存在，请刷新文档后重试。",
+        )
+    current_line = strip_line_carriage(lines[request.line_number - 1])
+    if current_line != strip_line_carriage(request.original_line):
+        raise _artifact_error(
+            409,
+            "LINE_STALE",
+            "这一行的内容已变化，请刷新文档后重试。",
+        )
+
+    display_name = str(artifact.get("display_name") or request.path)
+    model_config = None
+    if request.model_config_id:
+        model_config = resolve_model_config_for_runtime(
+            db, request.tenant_id, request.model_config_id
+        )
+    else:
+        model_config = model_for_agent(db, request.tenant_id, chat_session.agent_id)
+    if model_config is None:
+        raise _artifact_error(
+            503,
+            "MODEL_CONFIG_UNAVAILABLE",
+            "当前租户没有可用的模型配置，请先在模型设置中启用。",
+        )
+
+    try:
+        replacement = rewrite_artifact_line(
+            model_config,
+            display_name=display_name,
+            line_number=request.line_number,
+            original_line=current_line,
+            instruction=instruction,
+        )
+        replacement_lines = replacement.split("\n")
+        if is_docx:
+            next_digest, next_size = write_docx_paragraph_edit(
+                workspace,
+                request.path,
+                docx_data,
+                request.line_number - 1,
+                replacement_lines,
+            )
+            index = request.line_number - 1
+            next_text = "\n".join(lines[:index] + replacement_lines + lines[index + 1:])
+        else:
+            next_text = replace_source_line(text, request.line_number, replacement)
+            next_digest, next_size = write_harness_artifact_text(
+                workspace, request.path, next_text
+            )
+    except ArtifactLineEditError as exc:
+        raise _artifact_error(502, exc.code, exc.detail) from exc
+    except LLMError as exc:
+        raise _artifact_error(
+            502,
+            "LINE_EDIT_MODEL_FAILED",
+            format_runtime_failure_reply(
+                "行内修改未完成", exc, "LLM_ERROR", "文档内容保持原样，请稍后重试。"
+            ),
+        ) from exc
+    except (HarnessArtifactAccessError, OSError) as exc:
+        logger.warning("artifact line edit write failed: %s", exc)
+        raise _artifact_error(
+            500,
+            "ARTIFACT_WRITE_FAILED",
+            "文档写入失败，内容保持原样，请稍后重试。",
+        ) from exc
+
+    sync_published_artifact_digests(
+        db,
+        tenant_id=request.tenant_id,
+        session_id=session_id,
+        task_frame_id=task_frame_id,
+        path=request.path,
+        sha256=next_digest,
+        size=next_size,
+    )
+
+    new_lines = replacement_lines
+    edit_metadata: dict[str, object] = {
+        "task_frame_id": task_frame_id,
+        "path": request.path,
+        "display_name": display_name,
+        "line_number": request.line_number,
+        "original_line": current_line,
+        "instruction": instruction,
+        "replacement": replacement,
+    }
+    now = utc_now()
+    reply = f"已按你的要求修改《{display_name}》第 {request.line_number} 行。"
+    assistant_message = Message(
+        tenant_id=request.tenant_id,
+        session_id=session_id,
+        role="assistant",
+        content=reply,
+        metadata_json={"artifact_line_edit": edit_metadata},
+        created_at=now,
+    )
+    db.add(assistant_message)
+    db.flush()
+    stage_channel_delivery(db, chat_session, assistant_message)
+    db.add(
+        AgentEvent(
+            tenant_id=request.tenant_id,
+            session_id=session_id,
+            event_type="assistant_message_created",
+            payload_json={
+                "message_id": assistant_message.id,
+                "assistant_message_id": assistant_message.id,
+                "reply": reply,
+                "artifact_line_edit": edit_metadata,
+            },
+            created_at=now,
+        )
+    )
+    chat_session.updated_at = now
+    db.add(chat_session)
+    db.commit()
+    db.refresh(assistant_message)
+
+    return {
+        "message": message_read(assistant_message, db=db),
+        "line_number": request.line_number,
+        "new_lines": new_lines,
+        "content": next_text,
+        "sha256": next_digest,
+        "size": next_size,
+    }
+
+
 @router.get("/sessions/{session_id}/events")
 def list_chat_session_events(
     session_id: str,
@@ -3514,6 +3859,31 @@ def _harness_event_trace_line(
             "mcpApp": mcp_app,
             "state": "completed",
         }
+    if event_type == "harness_dashboard_view":
+        view_id = str(payload.get("view_id") or "").strip()
+        if not view_id:
+            return None
+        title = str(payload.get("title") or "").strip()
+        kpi_count = payload.get("kpi_count")
+        chart_count = payload.get("chart_count")
+        counts = [
+            f"{kpi_count} 个指标" if isinstance(kpi_count, int) and kpi_count else "",
+            f"{chart_count} 个图表" if isinstance(chart_count, int) and chart_count else "",
+        ]
+        return {
+            "id": f"harness_dashboard_{frame_id}_{event.id}",
+            "kind": "tool",
+            "text": f"展示数据大屏 {title}" if title else "展示数据大屏",
+            "detail": " · ".join(item for item in counts if item) or None,
+            "dashboard": {
+                "view_id": view_id,
+                "tenant_id": str(payload.get("tenant_id") or ""),
+                "title": title,
+                "kpi_count": kpi_count if isinstance(kpi_count, int) else 0,
+                "chart_count": chart_count if isinstance(chart_count, int) else 0,
+            },
+            "state": "completed",
+        }
     if event_type == "harness_tool_completed":
         success = bool(payload.get("success"))
         error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
@@ -3807,6 +4177,7 @@ def _event_trace_line(
         "task_frame_finished",
         "harness_action_created",
         "harness_mcp_app_view",
+        "harness_dashboard_view",
         "harness_tool_completed",
         "harness_step_timeout",
     }:
