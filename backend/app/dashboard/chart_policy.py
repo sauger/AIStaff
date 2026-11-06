@@ -87,6 +87,12 @@ def _is_temporal_text(value: Any) -> bool:
     return isinstance(value, str) and bool(_TEMPORAL_TEXT.match(value.strip()))
 
 
+def is_temporal_text(value: Any) -> bool:
+    """Public alias used by the compose pipeline (same rule as ``profile``)."""
+
+    return _is_temporal_text(value)
+
+
 def _numeric(value: Any) -> float | None:
     if isinstance(value, bool):
         return None

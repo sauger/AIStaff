@@ -1,0 +1,16 @@
+{
+  "as_of": "2026-09-30",
+  "blocks": [
+    {"name": "销售额", "value": 12840000, "unit": "元", "delta": 0.12},
+    {"name": "订单数", "value": 3821, "unit": "单", "delta": -0.03},
+    {"name": "月度趋势",
+     "columns": [{"name": "month", "type": "date"}, {"name": "sales", "type": "number"}],
+     "rows": [["2026-07", 431], ["2026-08", 452], ["2026-09", 433]]},
+    {"name": "渠道分布",
+     "columns": [{"name": "channel", "type": "string"}, {"name": "amount", "type": "number"}],
+     "rows": [["直营", 310], ["经销", 280], ["线上", 190]]},
+    {"name": "区域排名",
+     "columns": [{"name": "region", "type": "string"}, {"name": "sales", "type": "number"}],
+     "rows": [["上海", 320], ["江苏", 280], ["浙江", 240], ["安徽", 120]]}
+  ]
+}

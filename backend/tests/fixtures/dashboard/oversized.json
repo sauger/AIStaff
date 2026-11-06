@@ -1,0 +1,1854 @@
+{
+ "report": {
+  "summary": {
+   "total_sales": 99880000,
+   "orders": 41230,
+   "customers": 8120,
+   "aov": 2422.5,
+   "refunds": 312,
+   "returns": 140,
+   "visits": 920100
+  },
+  "deep": {
+   "l1": {
+    "l2": {
+     "l3": {
+      "l4": {
+       "l5": {
+        "l6": {
+         "values": [
+          1,
+          2,
+          3
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "detail": [
+   {
+    "store": "门店000",
+    "city": "上海",
+    "amount": 1000
+   },
+   {
+    "store": "门店001",
+    "city": "杭州",
+    "amount": 1001
+   },
+   {
+    "store": "门店002",
+    "city": "南京",
+    "amount": 1002
+   },
+   {
+    "store": "门店003",
+    "city": "上海",
+    "amount": 1003
+   },
+   {
+    "store": "门店004",
+    "city": "杭州",
+    "amount": 1004
+   },
+   {
+    "store": "门店005",
+    "city": "南京",
+    "amount": 1005
+   },
+   {
+    "store": "门店006",
+    "city": "上海",
+    "amount": 1006
+   },
+   {
+    "store": "门店007",
+    "city": "杭州",
+    "amount": 1007
+   },
+   {
+    "store": "门店008",
+    "city": "南京",
+    "amount": 1008
+   },
+   {
+    "store": "门店009",
+    "city": "上海",
+    "amount": 1009
+   },
+   {
+    "store": "门店010",
+    "city": "杭州",
+    "amount": 1010
+   },
+   {
+    "store": "门店011",
+    "city": "南京",
+    "amount": 1011
+   },
+   {
+    "store": "门店012",
+    "city": "上海",
+    "amount": 1012
+   },
+   {
+    "store": "门店013",
+    "city": "杭州",
+    "amount": 1013
+   },
+   {
+    "store": "门店014",
+    "city": "南京",
+    "amount": 1014
+   },
+   {
+    "store": "门店015",
+    "city": "上海",
+    "amount": 1015
+   },
+   {
+    "store": "门店016",
+    "city": "杭州",
+    "amount": 1016
+   },
+   {
+    "store": "门店017",
+    "city": "南京",
+    "amount": 1017
+   },
+   {
+    "store": "门店018",
+    "city": "上海",
+    "amount": 1018
+   },
+   {
+    "store": "门店019",
+    "city": "杭州",
+    "amount": 1019
+   },
+   {
+    "store": "门店020",
+    "city": "南京",
+    "amount": 1020
+   },
+   {
+    "store": "门店021",
+    "city": "上海",
+    "amount": 1021
+   },
+   {
+    "store": "门店022",
+    "city": "杭州",
+    "amount": 1022
+   },
+   {
+    "store": "门店023",
+    "city": "南京",
+    "amount": 1023
+   },
+   {
+    "store": "门店024",
+    "city": "上海",
+    "amount": 1024
+   },
+   {
+    "store": "门店025",
+    "city": "杭州",
+    "amount": 1025
+   },
+   {
+    "store": "门店026",
+    "city": "南京",
+    "amount": 1026
+   },
+   {
+    "store": "门店027",
+    "city": "上海",
+    "amount": 1027
+   },
+   {
+    "store": "门店028",
+    "city": "杭州",
+    "amount": 1028
+   },
+   {
+    "store": "门店029",
+    "city": "南京",
+    "amount": 1029
+   },
+   {
+    "store": "门店030",
+    "city": "上海",
+    "amount": 1030
+   },
+   {
+    "store": "门店031",
+    "city": "杭州",
+    "amount": 1031
+   },
+   {
+    "store": "门店032",
+    "city": "南京",
+    "amount": 1032
+   },
+   {
+    "store": "门店033",
+    "city": "上海",
+    "amount": 1033
+   },
+   {
+    "store": "门店034",
+    "city": "杭州",
+    "amount": 1034
+   },
+   {
+    "store": "门店035",
+    "city": "南京",
+    "amount": 1035
+   },
+   {
+    "store": "门店036",
+    "city": "上海",
+    "amount": 1036
+   },
+   {
+    "store": "门店037",
+    "city": "杭州",
+    "amount": 1037
+   },
+   {
+    "store": "门店038",
+    "city": "南京",
+    "amount": 1038
+   },
+   {
+    "store": "门店039",
+    "city": "上海",
+    "amount": 1039
+   },
+   {
+    "store": "门店040",
+    "city": "杭州",
+    "amount": 1040
+   },
+   {
+    "store": "门店041",
+    "city": "南京",
+    "amount": 1041
+   },
+   {
+    "store": "门店042",
+    "city": "上海",
+    "amount": 1042
+   },
+   {
+    "store": "门店043",
+    "city": "杭州",
+    "amount": 1043
+   },
+   {
+    "store": "门店044",
+    "city": "南京",
+    "amount": 1044
+   },
+   {
+    "store": "门店045",
+    "city": "上海",
+    "amount": 1045
+   },
+   {
+    "store": "门店046",
+    "city": "杭州",
+    "amount": 1046
+   },
+   {
+    "store": "门店047",
+    "city": "南京",
+    "amount": 1047
+   },
+   {
+    "store": "门店048",
+    "city": "上海",
+    "amount": 1048
+   },
+   {
+    "store": "门店049",
+    "city": "杭州",
+    "amount": 1049
+   },
+   {
+    "store": "门店050",
+    "city": "南京",
+    "amount": 1050
+   },
+   {
+    "store": "门店051",
+    "city": "上海",
+    "amount": 1051
+   },
+   {
+    "store": "门店052",
+    "city": "杭州",
+    "amount": 1052
+   },
+   {
+    "store": "门店053",
+    "city": "南京",
+    "amount": 1053
+   },
+   {
+    "store": "门店054",
+    "city": "上海",
+    "amount": 1054
+   },
+   {
+    "store": "门店055",
+    "city": "杭州",
+    "amount": 1055
+   },
+   {
+    "store": "门店056",
+    "city": "南京",
+    "amount": 1056
+   },
+   {
+    "store": "门店057",
+    "city": "上海",
+    "amount": 1057
+   },
+   {
+    "store": "门店058",
+    "city": "杭州",
+    "amount": 1058
+   },
+   {
+    "store": "门店059",
+    "city": "南京",
+    "amount": 1059
+   },
+   {
+    "store": "门店060",
+    "city": "上海",
+    "amount": 1060
+   },
+   {
+    "store": "门店061",
+    "city": "杭州",
+    "amount": 1061
+   },
+   {
+    "store": "门店062",
+    "city": "南京",
+    "amount": 1062
+   },
+   {
+    "store": "门店063",
+    "city": "上海",
+    "amount": 1063
+   },
+   {
+    "store": "门店064",
+    "city": "杭州",
+    "amount": 1064
+   },
+   {
+    "store": "门店065",
+    "city": "南京",
+    "amount": 1065
+   },
+   {
+    "store": "门店066",
+    "city": "上海",
+    "amount": 1066
+   },
+   {
+    "store": "门店067",
+    "city": "杭州",
+    "amount": 1067
+   },
+   {
+    "store": "门店068",
+    "city": "南京",
+    "amount": 1068
+   },
+   {
+    "store": "门店069",
+    "city": "上海",
+    "amount": 1069
+   },
+   {
+    "store": "门店070",
+    "city": "杭州",
+    "amount": 1070
+   },
+   {
+    "store": "门店071",
+    "city": "南京",
+    "amount": 1071
+   },
+   {
+    "store": "门店072",
+    "city": "上海",
+    "amount": 1072
+   },
+   {
+    "store": "门店073",
+    "city": "杭州",
+    "amount": 1073
+   },
+   {
+    "store": "门店074",
+    "city": "南京",
+    "amount": 1074
+   },
+   {
+    "store": "门店075",
+    "city": "上海",
+    "amount": 1075
+   },
+   {
+    "store": "门店076",
+    "city": "杭州",
+    "amount": 1076
+   },
+   {
+    "store": "门店077",
+    "city": "南京",
+    "amount": 1077
+   },
+   {
+    "store": "门店078",
+    "city": "上海",
+    "amount": 1078
+   },
+   {
+    "store": "门店079",
+    "city": "杭州",
+    "amount": 1079
+   },
+   {
+    "store": "门店080",
+    "city": "南京",
+    "amount": 1080
+   },
+   {
+    "store": "门店081",
+    "city": "上海",
+    "amount": 1081
+   },
+   {
+    "store": "门店082",
+    "city": "杭州",
+    "amount": 1082
+   },
+   {
+    "store": "门店083",
+    "city": "南京",
+    "amount": 1083
+   },
+   {
+    "store": "门店084",
+    "city": "上海",
+    "amount": 1084
+   },
+   {
+    "store": "门店085",
+    "city": "杭州",
+    "amount": 1085
+   },
+   {
+    "store": "门店086",
+    "city": "南京",
+    "amount": 1086
+   },
+   {
+    "store": "门店087",
+    "city": "上海",
+    "amount": 1087
+   },
+   {
+    "store": "门店088",
+    "city": "杭州",
+    "amount": 1088
+   },
+   {
+    "store": "门店089",
+    "city": "南京",
+    "amount": 1089
+   },
+   {
+    "store": "门店090",
+    "city": "上海",
+    "amount": 1090
+   },
+   {
+    "store": "门店091",
+    "city": "杭州",
+    "amount": 1091
+   },
+   {
+    "store": "门店092",
+    "city": "南京",
+    "amount": 1092
+   },
+   {
+    "store": "门店093",
+    "city": "上海",
+    "amount": 1093
+   },
+   {
+    "store": "门店094",
+    "city": "杭州",
+    "amount": 1094
+   },
+   {
+    "store": "门店095",
+    "city": "南京",
+    "amount": 1095
+   },
+   {
+    "store": "门店096",
+    "city": "上海",
+    "amount": 1096
+   },
+   {
+    "store": "门店097",
+    "city": "杭州",
+    "amount": 1097
+   },
+   {
+    "store": "门店098",
+    "city": "南京",
+    "amount": 1098
+   },
+   {
+    "store": "门店099",
+    "city": "上海",
+    "amount": 1099
+   },
+   {
+    "store": "门店100",
+    "city": "杭州",
+    "amount": 1100
+   },
+   {
+    "store": "门店101",
+    "city": "南京",
+    "amount": 1101
+   },
+   {
+    "store": "门店102",
+    "city": "上海",
+    "amount": 1102
+   },
+   {
+    "store": "门店103",
+    "city": "杭州",
+    "amount": 1103
+   },
+   {
+    "store": "门店104",
+    "city": "南京",
+    "amount": 1104
+   },
+   {
+    "store": "门店105",
+    "city": "上海",
+    "amount": 1105
+   },
+   {
+    "store": "门店106",
+    "city": "杭州",
+    "amount": 1106
+   },
+   {
+    "store": "门店107",
+    "city": "南京",
+    "amount": 1107
+   },
+   {
+    "store": "门店108",
+    "city": "上海",
+    "amount": 1108
+   },
+   {
+    "store": "门店109",
+    "city": "杭州",
+    "amount": 1109
+   },
+   {
+    "store": "门店110",
+    "city": "南京",
+    "amount": 1110
+   },
+   {
+    "store": "门店111",
+    "city": "上海",
+    "amount": 1111
+   },
+   {
+    "store": "门店112",
+    "city": "杭州",
+    "amount": 1112
+   },
+   {
+    "store": "门店113",
+    "city": "南京",
+    "amount": 1113
+   },
+   {
+    "store": "门店114",
+    "city": "上海",
+    "amount": 1114
+   },
+   {
+    "store": "门店115",
+    "city": "杭州",
+    "amount": 1115
+   },
+   {
+    "store": "门店116",
+    "city": "南京",
+    "amount": 1116
+   },
+   {
+    "store": "门店117",
+    "city": "上海",
+    "amount": 1117
+   },
+   {
+    "store": "门店118",
+    "city": "杭州",
+    "amount": 1118
+   },
+   {
+    "store": "门店119",
+    "city": "南京",
+    "amount": 1119
+   },
+   {
+    "store": "门店120",
+    "city": "上海",
+    "amount": 1120
+   },
+   {
+    "store": "门店121",
+    "city": "杭州",
+    "amount": 1121
+   },
+   {
+    "store": "门店122",
+    "city": "南京",
+    "amount": 1122
+   },
+   {
+    "store": "门店123",
+    "city": "上海",
+    "amount": 1123
+   },
+   {
+    "store": "门店124",
+    "city": "杭州",
+    "amount": 1124
+   },
+   {
+    "store": "门店125",
+    "city": "南京",
+    "amount": 1125
+   },
+   {
+    "store": "门店126",
+    "city": "上海",
+    "amount": 1126
+   },
+   {
+    "store": "门店127",
+    "city": "杭州",
+    "amount": 1127
+   },
+   {
+    "store": "门店128",
+    "city": "南京",
+    "amount": 1128
+   },
+   {
+    "store": "门店129",
+    "city": "上海",
+    "amount": 1129
+   },
+   {
+    "store": "门店130",
+    "city": "杭州",
+    "amount": 1130
+   },
+   {
+    "store": "门店131",
+    "city": "南京",
+    "amount": 1131
+   },
+   {
+    "store": "门店132",
+    "city": "上海",
+    "amount": 1132
+   },
+   {
+    "store": "门店133",
+    "city": "杭州",
+    "amount": 1133
+   },
+   {
+    "store": "门店134",
+    "city": "南京",
+    "amount": 1134
+   },
+   {
+    "store": "门店135",
+    "city": "上海",
+    "amount": 1135
+   },
+   {
+    "store": "门店136",
+    "city": "杭州",
+    "amount": 1136
+   },
+   {
+    "store": "门店137",
+    "city": "南京",
+    "amount": 1137
+   },
+   {
+    "store": "门店138",
+    "city": "上海",
+    "amount": 1138
+   },
+   {
+    "store": "门店139",
+    "city": "杭州",
+    "amount": 1139
+   },
+   {
+    "store": "门店140",
+    "city": "南京",
+    "amount": 1140
+   },
+   {
+    "store": "门店141",
+    "city": "上海",
+    "amount": 1141
+   },
+   {
+    "store": "门店142",
+    "city": "杭州",
+    "amount": 1142
+   },
+   {
+    "store": "门店143",
+    "city": "南京",
+    "amount": 1143
+   },
+   {
+    "store": "门店144",
+    "city": "上海",
+    "amount": 1144
+   },
+   {
+    "store": "门店145",
+    "city": "杭州",
+    "amount": 1145
+   },
+   {
+    "store": "门店146",
+    "city": "南京",
+    "amount": 1146
+   },
+   {
+    "store": "门店147",
+    "city": "上海",
+    "amount": 1147
+   },
+   {
+    "store": "门店148",
+    "city": "杭州",
+    "amount": 1148
+   },
+   {
+    "store": "门店149",
+    "city": "南京",
+    "amount": 1149
+   },
+   {
+    "store": "门店150",
+    "city": "上海",
+    "amount": 1150
+   },
+   {
+    "store": "门店151",
+    "city": "杭州",
+    "amount": 1151
+   },
+   {
+    "store": "门店152",
+    "city": "南京",
+    "amount": 1152
+   },
+   {
+    "store": "门店153",
+    "city": "上海",
+    "amount": 1153
+   },
+   {
+    "store": "门店154",
+    "city": "杭州",
+    "amount": 1154
+   },
+   {
+    "store": "门店155",
+    "city": "南京",
+    "amount": 1155
+   },
+   {
+    "store": "门店156",
+    "city": "上海",
+    "amount": 1156
+   },
+   {
+    "store": "门店157",
+    "city": "杭州",
+    "amount": 1157
+   },
+   {
+    "store": "门店158",
+    "city": "南京",
+    "amount": 1158
+   },
+   {
+    "store": "门店159",
+    "city": "上海",
+    "amount": 1159
+   },
+   {
+    "store": "门店160",
+    "city": "杭州",
+    "amount": 1160
+   },
+   {
+    "store": "门店161",
+    "city": "南京",
+    "amount": 1161
+   },
+   {
+    "store": "门店162",
+    "city": "上海",
+    "amount": 1162
+   },
+   {
+    "store": "门店163",
+    "city": "杭州",
+    "amount": 1163
+   },
+   {
+    "store": "门店164",
+    "city": "南京",
+    "amount": 1164
+   },
+   {
+    "store": "门店165",
+    "city": "上海",
+    "amount": 1165
+   },
+   {
+    "store": "门店166",
+    "city": "杭州",
+    "amount": 1166
+   },
+   {
+    "store": "门店167",
+    "city": "南京",
+    "amount": 1167
+   },
+   {
+    "store": "门店168",
+    "city": "上海",
+    "amount": 1168
+   },
+   {
+    "store": "门店169",
+    "city": "杭州",
+    "amount": 1169
+   },
+   {
+    "store": "门店170",
+    "city": "南京",
+    "amount": 1170
+   },
+   {
+    "store": "门店171",
+    "city": "上海",
+    "amount": 1171
+   },
+   {
+    "store": "门店172",
+    "city": "杭州",
+    "amount": 1172
+   },
+   {
+    "store": "门店173",
+    "city": "南京",
+    "amount": 1173
+   },
+   {
+    "store": "门店174",
+    "city": "上海",
+    "amount": 1174
+   },
+   {
+    "store": "门店175",
+    "city": "杭州",
+    "amount": 1175
+   },
+   {
+    "store": "门店176",
+    "city": "南京",
+    "amount": 1176
+   },
+   {
+    "store": "门店177",
+    "city": "上海",
+    "amount": 1177
+   },
+   {
+    "store": "门店178",
+    "city": "杭州",
+    "amount": 1178
+   },
+   {
+    "store": "门店179",
+    "city": "南京",
+    "amount": 1179
+   },
+   {
+    "store": "门店180",
+    "city": "上海",
+    "amount": 1180
+   },
+   {
+    "store": "门店181",
+    "city": "杭州",
+    "amount": 1181
+   },
+   {
+    "store": "门店182",
+    "city": "南京",
+    "amount": 1182
+   },
+   {
+    "store": "门店183",
+    "city": "上海",
+    "amount": 1183
+   },
+   {
+    "store": "门店184",
+    "city": "杭州",
+    "amount": 1184
+   },
+   {
+    "store": "门店185",
+    "city": "南京",
+    "amount": 1185
+   },
+   {
+    "store": "门店186",
+    "city": "上海",
+    "amount": 1186
+   },
+   {
+    "store": "门店187",
+    "city": "杭州",
+    "amount": 1187
+   },
+   {
+    "store": "门店188",
+    "city": "南京",
+    "amount": 1188
+   },
+   {
+    "store": "门店189",
+    "city": "上海",
+    "amount": 1189
+   },
+   {
+    "store": "门店190",
+    "city": "杭州",
+    "amount": 1190
+   },
+   {
+    "store": "门店191",
+    "city": "南京",
+    "amount": 1191
+   },
+   {
+    "store": "门店192",
+    "city": "上海",
+    "amount": 1192
+   },
+   {
+    "store": "门店193",
+    "city": "杭州",
+    "amount": 1193
+   },
+   {
+    "store": "门店194",
+    "city": "南京",
+    "amount": 1194
+   },
+   {
+    "store": "门店195",
+    "city": "上海",
+    "amount": 1195
+   },
+   {
+    "store": "门店196",
+    "city": "杭州",
+    "amount": 1196
+   },
+   {
+    "store": "门店197",
+    "city": "南京",
+    "amount": 1197
+   },
+   {
+    "store": "门店198",
+    "city": "上海",
+    "amount": 1198
+   },
+   {
+    "store": "门店199",
+    "city": "杭州",
+    "amount": 1199
+   }
+  ],
+  "trend_01": [
+   {
+    "month": "2026-01",
+    "value": 110
+   },
+   {
+    "month": "2026-02",
+    "value": 111
+   },
+   {
+    "month": "2026-03",
+    "value": 112
+   },
+   {
+    "month": "2026-04",
+    "value": 113
+   },
+   {
+    "month": "2026-05",
+    "value": 114
+   },
+   {
+    "month": "2026-06",
+    "value": 115
+   },
+   {
+    "month": "2026-07",
+    "value": 116
+   },
+   {
+    "month": "2026-08",
+    "value": 117
+   },
+   {
+    "month": "2026-09",
+    "value": 118
+   }
+  ],
+  "trend_02": [
+   {
+    "month": "2026-01",
+    "value": 120
+   },
+   {
+    "month": "2026-02",
+    "value": 121
+   },
+   {
+    "month": "2026-03",
+    "value": 122
+   },
+   {
+    "month": "2026-04",
+    "value": 123
+   },
+   {
+    "month": "2026-05",
+    "value": 124
+   },
+   {
+    "month": "2026-06",
+    "value": 125
+   },
+   {
+    "month": "2026-07",
+    "value": 126
+   },
+   {
+    "month": "2026-08",
+    "value": 127
+   },
+   {
+    "month": "2026-09",
+    "value": 128
+   }
+  ],
+  "trend_03": [
+   {
+    "month": "2026-01",
+    "value": 130
+   },
+   {
+    "month": "2026-02",
+    "value": 131
+   },
+   {
+    "month": "2026-03",
+    "value": 132
+   },
+   {
+    "month": "2026-04",
+    "value": 133
+   },
+   {
+    "month": "2026-05",
+    "value": 134
+   },
+   {
+    "month": "2026-06",
+    "value": 135
+   },
+   {
+    "month": "2026-07",
+    "value": 136
+   },
+   {
+    "month": "2026-08",
+    "value": 137
+   },
+   {
+    "month": "2026-09",
+    "value": 138
+   }
+  ],
+  "trend_04": [
+   {
+    "month": "2026-01",
+    "value": 140
+   },
+   {
+    "month": "2026-02",
+    "value": 141
+   },
+   {
+    "month": "2026-03",
+    "value": 142
+   },
+   {
+    "month": "2026-04",
+    "value": 143
+   },
+   {
+    "month": "2026-05",
+    "value": 144
+   },
+   {
+    "month": "2026-06",
+    "value": 145
+   },
+   {
+    "month": "2026-07",
+    "value": 146
+   },
+   {
+    "month": "2026-08",
+    "value": 147
+   },
+   {
+    "month": "2026-09",
+    "value": 148
+   }
+  ],
+  "trend_05": [
+   {
+    "month": "2026-01",
+    "value": 150
+   },
+   {
+    "month": "2026-02",
+    "value": 151
+   },
+   {
+    "month": "2026-03",
+    "value": 152
+   },
+   {
+    "month": "2026-04",
+    "value": 153
+   },
+   {
+    "month": "2026-05",
+    "value": 154
+   },
+   {
+    "month": "2026-06",
+    "value": 155
+   },
+   {
+    "month": "2026-07",
+    "value": 156
+   },
+   {
+    "month": "2026-08",
+    "value": 157
+   },
+   {
+    "month": "2026-09",
+    "value": 158
+   }
+  ],
+  "trend_06": [
+   {
+    "month": "2026-01",
+    "value": 160
+   },
+   {
+    "month": "2026-02",
+    "value": 161
+   },
+   {
+    "month": "2026-03",
+    "value": 162
+   },
+   {
+    "month": "2026-04",
+    "value": 163
+   },
+   {
+    "month": "2026-05",
+    "value": 164
+   },
+   {
+    "month": "2026-06",
+    "value": 165
+   },
+   {
+    "month": "2026-07",
+    "value": 166
+   },
+   {
+    "month": "2026-08",
+    "value": 167
+   },
+   {
+    "month": "2026-09",
+    "value": 168
+   }
+  ],
+  "trend_07": [
+   {
+    "month": "2026-01",
+    "value": 170
+   },
+   {
+    "month": "2026-02",
+    "value": 171
+   },
+   {
+    "month": "2026-03",
+    "value": 172
+   },
+   {
+    "month": "2026-04",
+    "value": 173
+   },
+   {
+    "month": "2026-05",
+    "value": 174
+   },
+   {
+    "month": "2026-06",
+    "value": 175
+   },
+   {
+    "month": "2026-07",
+    "value": 176
+   },
+   {
+    "month": "2026-08",
+    "value": 177
+   },
+   {
+    "month": "2026-09",
+    "value": 178
+   }
+  ],
+  "trend_08": [
+   {
+    "month": "2026-01",
+    "value": 180
+   },
+   {
+    "month": "2026-02",
+    "value": 181
+   },
+   {
+    "month": "2026-03",
+    "value": 182
+   },
+   {
+    "month": "2026-04",
+    "value": 183
+   },
+   {
+    "month": "2026-05",
+    "value": 184
+   },
+   {
+    "month": "2026-06",
+    "value": 185
+   },
+   {
+    "month": "2026-07",
+    "value": 186
+   },
+   {
+    "month": "2026-08",
+    "value": 187
+   },
+   {
+    "month": "2026-09",
+    "value": 188
+   }
+  ],
+  "trend_09": [
+   {
+    "month": "2026-01",
+    "value": 190
+   },
+   {
+    "month": "2026-02",
+    "value": 191
+   },
+   {
+    "month": "2026-03",
+    "value": 192
+   },
+   {
+    "month": "2026-04",
+    "value": 193
+   },
+   {
+    "month": "2026-05",
+    "value": 194
+   },
+   {
+    "month": "2026-06",
+    "value": 195
+   },
+   {
+    "month": "2026-07",
+    "value": 196
+   },
+   {
+    "month": "2026-08",
+    "value": 197
+   },
+   {
+    "month": "2026-09",
+    "value": 198
+   }
+  ],
+  "trend_10": [
+   {
+    "month": "2026-01",
+    "value": 200
+   },
+   {
+    "month": "2026-02",
+    "value": 201
+   },
+   {
+    "month": "2026-03",
+    "value": 202
+   },
+   {
+    "month": "2026-04",
+    "value": 203
+   },
+   {
+    "month": "2026-05",
+    "value": 204
+   },
+   {
+    "month": "2026-06",
+    "value": 205
+   },
+   {
+    "month": "2026-07",
+    "value": 206
+   },
+   {
+    "month": "2026-08",
+    "value": 207
+   },
+   {
+    "month": "2026-09",
+    "value": 208
+   }
+  ],
+  "trend_11": [
+   {
+    "month": "2026-01",
+    "value": 210
+   },
+   {
+    "month": "2026-02",
+    "value": 211
+   },
+   {
+    "month": "2026-03",
+    "value": 212
+   },
+   {
+    "month": "2026-04",
+    "value": 213
+   },
+   {
+    "month": "2026-05",
+    "value": 214
+   },
+   {
+    "month": "2026-06",
+    "value": 215
+   },
+   {
+    "month": "2026-07",
+    "value": 216
+   },
+   {
+    "month": "2026-08",
+    "value": 217
+   },
+   {
+    "month": "2026-09",
+    "value": 218
+   }
+  ],
+  "trend_12": [
+   {
+    "month": "2026-01",
+    "value": 220
+   },
+   {
+    "month": "2026-02",
+    "value": 221
+   },
+   {
+    "month": "2026-03",
+    "value": 222
+   },
+   {
+    "month": "2026-04",
+    "value": 223
+   },
+   {
+    "month": "2026-05",
+    "value": 224
+   },
+   {
+    "month": "2026-06",
+    "value": 225
+   },
+   {
+    "month": "2026-07",
+    "value": 226
+   },
+   {
+    "month": "2026-08",
+    "value": 227
+   },
+   {
+    "month": "2026-09",
+    "value": 228
+   }
+  ],
+  "share_01": [
+   {
+    "channel": "直营",
+    "amount": 51
+   },
+   {
+    "channel": "经销",
+    "amount": 58
+   },
+   {
+    "channel": "线上",
+    "amount": 65
+   }
+  ],
+  "share_02": [
+   {
+    "channel": "直营",
+    "amount": 52
+   },
+   {
+    "channel": "经销",
+    "amount": 59
+   },
+   {
+    "channel": "线上",
+    "amount": 66
+   }
+  ],
+  "share_03": [
+   {
+    "channel": "直营",
+    "amount": 53
+   },
+   {
+    "channel": "经销",
+    "amount": 60
+   },
+   {
+    "channel": "线上",
+    "amount": 67
+   }
+  ],
+  "share_04": [
+   {
+    "channel": "直营",
+    "amount": 54
+   },
+   {
+    "channel": "经销",
+    "amount": 61
+   },
+   {
+    "channel": "线上",
+    "amount": 68
+   }
+  ],
+  "share_05": [
+   {
+    "channel": "直营",
+    "amount": 55
+   },
+   {
+    "channel": "经销",
+    "amount": 62
+   },
+   {
+    "channel": "线上",
+    "amount": 69
+   }
+  ],
+  "share_06": [
+   {
+    "channel": "直营",
+    "amount": 56
+   },
+   {
+    "channel": "经销",
+    "amount": 63
+   },
+   {
+    "channel": "线上",
+    "amount": 70
+   }
+  ],
+  "share_07": [
+   {
+    "channel": "直营",
+    "amount": 57
+   },
+   {
+    "channel": "经销",
+    "amount": 64
+   },
+   {
+    "channel": "线上",
+    "amount": 71
+   }
+  ],
+  "share_08": [
+   {
+    "channel": "直营",
+    "amount": 58
+   },
+   {
+    "channel": "经销",
+    "amount": 65
+   },
+   {
+    "channel": "线上",
+    "amount": 72
+   }
+  ],
+  "rank_01": [
+   {
+    "region": "上海",
+    "sales": 499
+   },
+   {
+    "region": "江苏",
+    "sales": 459
+   },
+   {
+    "region": "浙江",
+    "sales": 419
+   },
+   {
+    "region": "安徽",
+    "sales": 379
+   },
+   {
+    "region": "福建",
+    "sales": 339
+   },
+   {
+    "region": "山东",
+    "sales": 299
+   },
+   {
+    "region": "广东",
+    "sales": 259
+   },
+   {
+    "region": "北京",
+    "sales": 219
+   },
+   {
+    "region": "天津",
+    "sales": 179
+   },
+   {
+    "region": "重庆",
+    "sales": 139
+   }
+  ],
+  "rank_02": [
+   {
+    "region": "上海",
+    "sales": 498
+   },
+   {
+    "region": "江苏",
+    "sales": 458
+   },
+   {
+    "region": "浙江",
+    "sales": 418
+   },
+   {
+    "region": "安徽",
+    "sales": 378
+   },
+   {
+    "region": "福建",
+    "sales": 338
+   },
+   {
+    "region": "山东",
+    "sales": 298
+   },
+   {
+    "region": "广东",
+    "sales": 258
+   },
+   {
+    "region": "北京",
+    "sales": 218
+   },
+   {
+    "region": "天津",
+    "sales": 178
+   },
+   {
+    "region": "重庆",
+    "sales": 138
+   }
+  ],
+  "rank_03": [
+   {
+    "region": "上海",
+    "sales": 497
+   },
+   {
+    "region": "江苏",
+    "sales": 457
+   },
+   {
+    "region": "浙江",
+    "sales": 417
+   },
+   {
+    "region": "安徽",
+    "sales": 377
+   },
+   {
+    "region": "福建",
+    "sales": 337
+   },
+   {
+    "region": "山东",
+    "sales": 297
+   },
+   {
+    "region": "广东",
+    "sales": 257
+   },
+   {
+    "region": "北京",
+    "sales": 217
+   },
+   {
+    "region": "天津",
+    "sales": 177
+   },
+   {
+    "region": "重庆",
+    "sales": 137
+   }
+  ],
+  "rank_04": [
+   {
+    "region": "上海",
+    "sales": 496
+   },
+   {
+    "region": "江苏",
+    "sales": 456
+   },
+   {
+    "region": "浙江",
+    "sales": 416
+   },
+   {
+    "region": "安徽",
+    "sales": 376
+   },
+   {
+    "region": "福建",
+    "sales": 336
+   },
+   {
+    "region": "山东",
+    "sales": 296
+   },
+   {
+    "region": "广东",
+    "sales": 256
+   },
+   {
+    "region": "北京",
+    "sales": 216
+   },
+   {
+    "region": "天津",
+    "sales": 176
+   },
+   {
+    "region": "重庆",
+    "sales": 136
+   }
+  ],
+  "rank_05": [
+   {
+    "region": "上海",
+    "sales": 495
+   },
+   {
+    "region": "江苏",
+    "sales": 455
+   },
+   {
+    "region": "浙江",
+    "sales": 415
+   },
+   {
+    "region": "安徽",
+    "sales": 375
+   },
+   {
+    "region": "福建",
+    "sales": 335
+   },
+   {
+    "region": "山东",
+    "sales": 295
+   },
+   {
+    "region": "广东",
+    "sales": 255
+   },
+   {
+    "region": "北京",
+    "sales": 215
+   },
+   {
+    "region": "天津",
+    "sales": 175
+   },
+   {
+    "region": "重庆",
+    "sales": 135
+   }
+  ],
+  "rank_06": [
+   {
+    "region": "上海",
+    "sales": 494
+   },
+   {
+    "region": "江苏",
+    "sales": 454
+   },
+   {
+    "region": "浙江",
+    "sales": 414
+   },
+   {
+    "region": "安徽",
+    "sales": 374
+   },
+   {
+    "region": "福建",
+    "sales": 334
+   },
+   {
+    "region": "山东",
+    "sales": 294
+   },
+   {
+    "region": "广东",
+    "sales": 254
+   },
+   {
+    "region": "北京",
+    "sales": 214
+   },
+   {
+    "region": "天津",
+    "sales": 174
+   },
+   {
+    "region": "重庆",
+    "sales": 134
+   }
+  ]
+ }
+}
