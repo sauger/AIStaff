@@ -11,7 +11,10 @@ from sqlmodel import select
 
 from app.config import get_settings
 from app.core.cancellation import is_chat_turn_cancelled
-from app.core.capability_discovery import project_capability_manifest
+from app.core.capability_discovery import (
+    project_capability_manifest,
+    warm_capability_manifest,
+)
 from app.core.capability_manifest import CapabilityManifestBuilder
 from app.core.harness_agent import (
     HarnessExecutionCancelled,
@@ -858,6 +861,7 @@ class HarnessV2Engine:
         self.store.mark_running(row)
         agent_loop = self.store.ensure_agent_loop(row)
         loop_checkpoint = dict(agent_loop.checkpoint_json or {})
+        warm_capabilities = _warm_capability_names(loop_checkpoint)
         self.active_frame_id = row.id
         self.active_frame_lease_owner = row.lease_owner
         self.active_frame_attempt_no = row.attempt_no
@@ -931,7 +935,11 @@ class HarnessV2Engine:
             # Keep the complete frozen manifest server-side for authorization,
             # while compiling the TaskRequirement only from the safe model
             # projection. capability_describe can activate schemas later.
-            model_manifest = project_capability_manifest(manifest)
+            model_manifest = warm_capability_manifest(
+                project_capability_manifest(manifest),
+                manifest,
+                warm_capabilities,
+            )
             requirement = self.compiler.compile(
                 frame,
                 session,
@@ -1108,6 +1116,11 @@ class HarnessV2Engine:
             loop_checkpoint = dict(result.loop_checkpoint or {})
             _merge_discovered_artifacts(result, invoker.discover_artifacts())
             loop_checkpoint["artifacts"] = list(result.artifacts)
+            warm_capabilities = _merge_warm_capabilities(
+                warm_capabilities,
+                result.capability_results,
+            )
+            loop_checkpoint["warm_capabilities"] = warm_capabilities
             self.store.save_agent_loop_checkpoint(
                 agent_loop,
                 loop_checkpoint,
@@ -1669,6 +1682,59 @@ def _step_result(result: TaskExecutionResult) -> StepAgentResult:
         handoff=result.status == "handoff",
         structured_result=result.structured_result,
     )
+
+
+_WARM_CAPABILITY_SKIP = {
+    "capability_describe",
+    "capability_search",
+    "finish",
+    "harness_requirement_check",
+}
+
+
+def _warm_capability_names(
+    checkpoint: dict[str, Any],
+    *,
+    limit: int = 40,
+) -> list[str]:
+    """Read the capabilities that were useful on earlier turns."""
+
+    raw = checkpoint.get("warm_capabilities")
+    if not isinstance(raw, list):
+        return []
+    names: list[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names[-limit:]
+
+
+def _merge_warm_capabilities(
+    existing: list[str],
+    capability_results: list[dict[str, Any]] | None,
+    *,
+    limit: int = 40,
+) -> list[str]:
+    """Record the capabilities actually invoked, newest last."""
+
+    merged = [
+        str(name).strip()
+        for name in existing
+        if str(name or "").strip() and str(name).strip() not in _WARM_CAPABILITY_SKIP
+    ]
+    for entry in capability_results or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("tool_name") or "").strip()
+        if not name or name in _WARM_CAPABILITY_SKIP:
+            continue
+        if name in merged:
+            merged.remove(name)
+        merged.append(name)
+    # Store sorted so the persisted checkpoint stays byte-stable between turns
+    # even when two capabilities were used within the same turn.
+    return sorted(merged[-limit:])
 
 
 def _turn_budget_seconds() -> float | None:

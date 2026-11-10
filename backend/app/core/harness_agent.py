@@ -14,6 +14,7 @@ from app.core.harness_attachments import (
     ValidatedTaskImagePayload,
     isolated_attachment_context,
 )
+from app.core.result_summary import summarize_capability_result
 from app.core.task_request_compiler import (
     CapabilityDescriptor,
     TaskExecutionResult,
@@ -1034,33 +1035,7 @@ def _transcript_for_model(
             projected.append((index, copied))
             continue
         if copied.get("role") == "tool" and isinstance(copied.get("result"), dict):
-            result = dict(copied["result"])
-            receipt: dict[str, Any] = {
-                key: result.get(key)
-                for key in ("tool_name", "success", "error", "truncated")
-                if key in result
-            }
-            data = result.get("data")
-            if isinstance(data, dict):
-                receipt["data"] = {
-                    key: data.get(key)
-                    for key in (
-                        "path",
-                        "source_path",
-                        "destination_path",
-                        "sha256",
-                        "size",
-                        "offset",
-                        "next_offset",
-                        "continuation_token",
-                        "eof",
-                        "status",
-                        "exit_code",
-                    )
-                    if data.get(key) is not None
-                }
-            receipt["history_receipt"] = _history_receipt(result)
-            copied["result"] = receipt
+            copied["result"] = summarize_capability_result(dict(copied["result"]))
         elif copied.get("role") == "assistant":
             arguments = copied.get("arguments")
             if isinstance(arguments, dict):

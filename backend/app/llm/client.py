@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator, Mapping
 import copy
 import hashlib
 import json
 import math
 import re
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from openai import OpenAI
 from anthropic import Anthropic
+from openai import OpenAI
 
 from app.config import get_settings
 from app.db.models import ModelConfig
+from app.llm.call_policy import policy_for
 from app.llm.model_protocols import ModelApiProtocol
 from app.llm.output_policy import (
     operation_empty_response_retries,
@@ -30,7 +32,6 @@ from app.llm.protocol_drivers import (
     ProtocolCallError,
     _protocol_call_error,
 )
-from app.llm.call_policy import policy_for
 from app.llm.stage_protocol import (
     STAGE_PROTOCOL_KEY,
     TURN_STAGE_MESSAGES_KEY,
@@ -95,6 +96,26 @@ def _provider_max_retries() -> int:
 
 class _CurrentStageText(str):
     pass
+
+
+
+class ToolCallingUnsupported(LLMError):
+    """Raised when the configured protocol/provider cannot return tool calls."""
+
+
+@dataclass(frozen=True)
+class ToolCallRecord:
+    """One provider-issued tool call.
+
+    ``arguments`` keeps the raw JSON string the provider produced; the decoded
+    mapping is available as ``parsed_arguments`` so callers do not each have to
+    re-implement tolerant decoding.
+    """
+
+    id: str
+    name: str
+    arguments: str
+    parsed_arguments: dict[str, Any] = field(default_factory=dict)
 
 
 class LLMClient:
@@ -329,6 +350,110 @@ class LLMClient:
                 raise _llm_error_from_protocol(self, exc) from exc
             protocol_error = _protocol_call_error(exc)
             raise _llm_error_from_protocol(self, protocol_error) from exc
+
+    def generate_tool_calls(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any] | str,
+        *,
+        tools: list[dict[str, Any]],
+        tool_choice: str | dict[str, Any] = "auto",
+        parallel_tool_calls: bool = False,
+        cancellation: CancellationToken | None = None,
+    ) -> list[ToolCallRecord]:
+        """Ask the provider to pick tools and fill their arguments.
+
+        Unlike ``generate_text`` the provider enforces the protocol: the model
+        answers through ``tool_calls`` instead of imitating a JSON envelope.
+        Raises :class:`ToolCallingUnsupported` when the protocol cannot express
+        tool calls, so callers can fall back to the JSON action loop.
+        """
+
+        if not tools:
+            return []
+        operation = current_llm_operation()
+        policy = policy_for(operation)
+        max_output_tokens = operation_output_tokens(operation, self.max_output_tokens)
+        thinking_mode = (
+            policy.thinking
+            if policy is not None and policy.thinking
+            else getattr(self, "thinking_mode", "")
+        )
+        context_messages, serialized = _prepare_user_input(user_payload)
+        request_messages = _fit_request_messages(
+            _request_messages(system_prompt, context_messages, serialized)
+        )
+        request_shape = _request_shape_metrics(
+            system_prompt, context_messages, serialized, request_messages
+        )
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": request_messages,
+            "temperature": self.temperature,
+            "max_tokens": max_output_tokens,
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+        if parallel_tool_calls:
+            request["parallel_tool_calls"] = True
+        if cancellation is not None:
+            request["_cancellation"] = cancellation
+        request.update(
+            _thinking_request_kwargs(
+                thinking_mode,
+                getattr(self, "extra_body", {}),
+            )
+        )
+        if policy is not None and policy.timeout_seconds:
+            request["_timeout"] = policy.timeout_seconds
+        driver = self._protocol_driver()
+        span = start_llm_call(
+            model=self.model,
+            model_name=getattr(self, "model_config_name", "") or self.model,
+            endpoint=_endpoint_label(getattr(self, "base_url", "")),
+            request_kind=driver.request_kind,
+            stream=False,
+            attempt=1,
+            retry_count=0,
+            max_attempts=1,
+            max_output_tokens=max_output_tokens,
+            thinking_mode=thinking_mode or "provider_default",
+            request_messages=_observable_messages(request_messages),
+            request_parameters=_observable_request_parameters(
+                temperature=self.temperature,
+                max_output_tokens=max_output_tokens,
+                response_format=None,
+                stream=False,
+            ),
+            request_payload=_observable_value(
+                _driver_observable_request(driver, request, stream=False)
+            ),
+            **request_shape,
+        )
+        try:
+            completion = driver.complete(request)
+        except BaseException as exc:
+            span.fail(
+                exc,
+                response_text="",
+                **_completion_span_metrics(None),
+            )
+            if _tool_calling_unsupported(exc):
+                raise ToolCallingUnsupported(str(exc)) from exc
+            if isinstance(exc, ProtocolCallError):
+                raise _llm_error_from_protocol(self, exc) from exc
+            raise
+        records = _tool_calls_from_completion(completion)
+        span.finish(
+            ttft_ms=span.elapsed_ms(),
+            output_chars=sum(len(record.arguments) for record in records),
+            response_text="",
+            response_message=_observable_completion_message(completion),
+            response_payload=_observable_provider_payload(completion),
+            status="success" if records else "empty",
+            **_completion_span_metrics(completion),
+        )
+        return records
 
     def generate_text_stream(
         self,
@@ -725,6 +850,97 @@ class LLMClient:
             if _empty_response(message):
                 return call_generate_text(system_prompt, user_payload)
             raise
+
+
+def _tool_calls_from_completion(completion: Any) -> list[ToolCallRecord]:
+    """Normalize provider tool calls across chat/responses/anthropic shapes."""
+
+    records: list[ToolCallRecord] = []
+    for choice in getattr(completion, "choices", None) or []:
+        message = getattr(choice, "message", None)
+        for call in getattr(message, "tool_calls", None) or []:
+            function = getattr(call, "function", None)
+            raw = str(getattr(function, "arguments", "") or "")
+            records.append(
+                ToolCallRecord(
+                    id=str(getattr(call, "id", "") or ""),
+                    name=str(getattr(function, "name", "") or ""),
+                    arguments=raw,
+                    parsed_arguments=_decode_tool_arguments(raw),
+                )
+            )
+    if records:
+        return records
+    if getattr(completion, "choices", None):
+        # A plain assistant answer is a valid outcome, not a protocol failure.
+        return []
+    for item in getattr(completion, "output", None) or []:
+        if str(getattr(item, "type", "")) != "function_call":
+            continue
+        raw = str(getattr(item, "arguments", "") or "")
+        records.append(
+            ToolCallRecord(
+                id=str(getattr(item, "call_id", "") or getattr(item, "id", "") or ""),
+                name=str(getattr(item, "name", "") or ""),
+                arguments=raw,
+                parsed_arguments=_decode_tool_arguments(raw),
+            )
+        )
+    if records:
+        return records
+    if isinstance(getattr(completion, "output", None), list):
+        return []
+    blocks = getattr(completion, "content", None)
+    if isinstance(blocks, list):
+        for block in blocks:
+            if str(getattr(block, "type", "")) != "tool_use":
+                continue
+            arguments = getattr(block, "input", None)
+            records.append(
+                ToolCallRecord(
+                    id=str(getattr(block, "id", "") or ""),
+                    name=str(getattr(block, "name", "") or ""),
+                    arguments=_serialize_tool_arguments(arguments),
+                    parsed_arguments=(
+                        dict(arguments) if isinstance(arguments, dict) else {}
+                    ),
+                )
+            )
+        return records
+    raise ToolCallingUnsupported("当前模型协议没有返回工具调用（tool_calls）。")
+
+
+def _decode_tool_arguments(raw: str) -> dict[str, Any]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        decoded = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _serialize_tool_arguments(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return "" if value is None else str(value)
+
+
+def _tool_calling_unsupported(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    if "tool" not in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "not support",
+            "unsupported",
+            "unknown parameter",
+            "unrecognized",
+            "invalid_request_error",
+        )
+    )
 
 
 def _completion_message_content(completion: Any) -> str:

@@ -74,6 +74,56 @@ def project_capability_manifest(
     )
 
 
+def warm_capability_manifest(
+    projected: CapabilityManifest,
+    full_manifest: CapabilityManifest,
+    warm_names: Iterable[str],
+    *,
+    limit: int = 40,
+) -> CapabilityManifest:
+    """Promote previously used capabilities into the model-visible projection.
+
+    A capability that already ran in an earlier turn keeps its full schema
+    available, so the model does not need a second ``capability_describe``
+    round trip before reusing it.  Authorization still comes from the frozen
+    manifest; this only changes what is rendered into the prompt.
+    """
+
+    names = [
+        str(name).strip() for name in warm_names if str(name or "").strip()
+    ]
+    if not names:
+        return projected
+    wanted = set(names[-max(1, int(limit)):])
+    already = {item.capability_id for item in projected.available}
+    promoted: list[CapabilityDescriptor] = []
+    promoted_names: set[str] = set()
+    for descriptor in sorted(
+        full_manifest.available,
+        key=lambda item: (item.name, item.capability_id),
+    ):
+        if len(promoted) >= limit:
+            break
+        if (
+            descriptor.name not in wanted
+            or not descriptor.available
+            or descriptor.capability_id in already
+        ):
+            continue
+        promoted.append(model_descriptor(descriptor))
+        promoted_names.add(descriptor.name)
+    if not promoted:
+        return projected
+    catalog = [entry for entry in projected.catalog if entry.name not in promoted_names]
+    return projected.model_copy(
+        update={
+            "available": [*projected.available, *promoted],
+            "catalog": catalog,
+            "catalog_total": max(0, projected.catalog_total - len(promoted)),
+        }
+    )
+
+
 def search_capability_descriptors(
     descriptors: Iterable[CapabilityDescriptor],
     query: str,
