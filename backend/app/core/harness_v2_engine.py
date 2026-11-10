@@ -911,6 +911,13 @@ class HarnessV2Engine:
             },
         )
         remaining_actions = max_actions
+        settings = get_settings()
+        native_full_surface = (
+            str(getattr(settings, "agent_action_protocol", "") or "").strip()
+            == "tool_calls"
+            and str(getattr(settings, "agent_native_tool_surface", "") or "").strip()
+            == "full"
+        )
         results: list[TaskExecutionResult] = []
         last_step_result = StepAgentResult()
         run: HarnessRunRecord | None = None
@@ -1034,7 +1041,9 @@ class HarnessV2Engine:
                 agent_id=session.agent_id,
                 run_id=run.id,
                 initially_activated_names=(
-                    requirement.capability_manifest.allowed_names()
+                    manifest.allowed_names()
+                    if native_full_surface
+                    else requirement.capability_manifest.allowed_names()
                 ),
                 is_cancelled=lambda: self._is_cancelled(request, session),
                 ensure_execution_lease=lambda: self._renew_execution_leases(
@@ -1064,6 +1073,7 @@ class HarnessV2Engine:
                 step_deadline_monotonic=step_deadline_monotonic,
                 step_timeout_seconds=step_timeout_seconds,
                 checkpoint=loop_checkpoint,
+                tool_manifest=manifest if native_full_surface else None,
             )
             result = _apply_turn_budget_exhausted(
                 result,

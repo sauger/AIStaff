@@ -19,6 +19,7 @@ from app.core.harness_attachments import (
 from app.core.result_summary import summarize_capability_result
 from app.core.task_request_compiler import (
     CapabilityDescriptor,
+    CapabilityManifest,
     TaskExecutionResult,
     TaskRequirement,
     dump_task_requirement,
@@ -73,6 +74,7 @@ class HarnessTaskAgent:
         step_deadline_monotonic: float | None = None,
         step_timeout_seconds: int | None = None,
         checkpoint: dict[str, Any] | None = None,
+        tool_manifest: CapabilityManifest | None = None,
     ) -> TaskExecutionResult:
         max_actions = max(1, min(int(max_actions), 100))
         checkpoint = dict(checkpoint or {})
@@ -133,12 +135,18 @@ class HarnessTaskAgent:
         non_retryable_action_signatures: set[str] = set()
         # 强制能力从未尝试就 finish(failed) 只拦一次，避免与固执模型互相死锁。
         failed_finish_without_attempt_blocked = False
-        allowed_names = requirement.capability_manifest.allowed_names()
+        allowed_names = (
+            tool_manifest.allowed_names()
+            if tool_manifest is not None
+            else requirement.capability_manifest.allowed_names()
+        )
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8").strip()
-        tool_specs, tool_names = _harness_tool_specs(requirement)
+        tool_specs, tool_names = _harness_tool_specs(requirement, tool_manifest)
         native_tools = bool(tool_specs)
         if native_tools:
-            system_prompt = _with_tool_protocol(system_prompt)
+            system_prompt = _with_tool_protocol(
+                system_prompt, full_surface=tool_manifest is not None
+            )
             if trace_sink:
                 trace_sink(
                     "harness_tool_protocol_enabled",
@@ -225,7 +233,9 @@ class HarnessTaskAgent:
                     action = pending_actions.pop(0)
                 else:
                     if native_tools:
-                        tool_specs, tool_names = _harness_tool_specs(requirement)
+                        tool_specs, tool_names = _harness_tool_specs(
+                            requirement, tool_manifest
+                        )
                     for protocol_attempt in range(2):
                         # Persist a stable link between this LLM span and the Harness
                         # iteration that consumes it.  Timing projections must not
@@ -900,6 +910,203 @@ def _actions_from_tool_calls(calls: list[Any], names: dict[str, str]) -> dict[st
             }
         )
     return {"actions": actions}
+
+
+_HARNESS_FINISH_TOOL_NAME = "finish"
+_HARNESS_FINISH_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": _HARNESS_FINISH_TOOL_NAME,
+        "description": "结束当前任务并给出给用户的最终回复。无需更多工具调用时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reply": {"type": "string", "description": "给用户的最终回复"},
+                "status": {
+                    "type": "string",
+                    "enum": ["completed", "awaiting_user", "handoff", "failed"],
+                    "description": "任务结束状态；需要用户补充信息时用 awaiting_user",
+                },
+            },
+            "required": ["reply"],
+        },
+    },
+}
+
+_NATIVE_DISCOVERY_CAPABILITIES = {"capability_search", "capability_describe"}
+
+_HARNESS_FULL_SURFACE_PROMPT = """## 原生工具调用协议
+本次任务通过平台原生 tools 调用能力，全部已授权能力都在工具列表里：
+- 每个能力对应一个工具函数；参数按该工具的参数 schema 填写。
+- 需要数据或执行动作时，直接调用对应工具，不要输出 JSON 动作文本。
+- 工具结果会以下一条消息注入；不要编造未返回的结果。
+- 任务完成或需要用户补充信息时，调用 finish 工具；finish 必须是本次响应里唯一的工具调用。"""
+
+
+_HARNESS_TOOL_PROTOCOL_PROMPT = """## 原生工具调用协议
+本次任务通过平台原生 tools 调用能力：
+- 每个已授权能力对应一个工具函数；参数按该工具的参数 schema 填写。
+- capability_search / capability_describe 只用于发现尚未出现在工具列表里的能力；目标能力已在 tools 里时直接调用。
+- 最多调用一次 capability_search；确定能力名后调用 capability_describe，该能力会从下一轮起出现在 tools 里，下一轮必须直接调用它，不要重复搜索或描述。
+- 在完成用户请求之前不要调用 finish；只有确实无法推进时才用 status=awaiting_user 并向用户说明。
+- 需要读取或执行能力时，直接调用对应工具，不要输出 JSON 动作文本。
+- 工具结果会以下一条消息注入；不要编造未返回的结果。
+- 任务完成或需要用户补充信息时，调用 finish 工具；finish 必须是本次响应里唯一的工具调用。"""
+
+
+def _harness_tool_specs(
+    requirement: TaskRequirement,
+    tool_manifest: CapabilityManifest | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Build native tool specs from the frame's authorized capabilities.
+
+    Returns ``([], {})`` when the protocol is disabled, so callers keep using the
+    legacy JSON action loop without extra branching.
+    """
+
+    protocol = str(getattr(get_settings(), "agent_action_protocol", "tool_calls") or "").strip()
+    if protocol != "tool_calls":
+        return [], {}
+    manifest = tool_manifest or requirement.capability_manifest
+    tools, names = build_tool_specs(manifest, activated=manifest.allowed_names())
+    if tool_manifest is not None:
+        # 全量工具面下发现类内置能力不再是唯一入口，保留它们只会诱发
+        # “反复搜索—无法调用”的空转（真实案例：11 次 capability_search）。
+        tools = [
+            item
+            for item in tools
+            if names.get(str(item.get("function", {}).get("name") or ""))
+            not in _NATIVE_DISCOVERY_CAPABILITIES
+        ]
+        names = {
+            key: value
+            for key, value in names.items()
+            if value not in _NATIVE_DISCOVERY_CAPABILITIES
+        }
+    if not tools:
+        return [], {}
+    if not any(str(item.get("function", {}).get("name") or "") == _HARNESS_FINISH_TOOL_NAME for item in tools):
+        tools = [*tools, _HARNESS_FINISH_TOOL]
+    return tools, names
+
+
+def _with_tool_protocol(system_prompt: str, *, full_surface: bool = False) -> str:
+    prompt = (
+        _HARNESS_FULL_SURFACE_PROMPT if full_surface else _HARNESS_TOOL_PROTOCOL_PROMPT
+    )
+    return f"{system_prompt}\n\n{prompt}"
+
+
+def _generate_harness_tool_calls(
+    client: LLMClient,
+    system_prompt: str,
+    payload: dict[str, Any],
+    tools: list[dict[str, Any]],
+) -> list[Any]:
+    generator = getattr(client, "generate_tool_calls", None)
+    if not callable(generator):
+        return []
+    return list(generator(system_prompt, payload, tools=tools, tool_choice="auto") or [])
+
+
+def _actions_from_tool_calls(calls: list[Any], names: dict[str, str]) -> dict[str, Any]:
+    """Map provider tool calls back to Harness actions.
+
+    ``names`` maps the sanitized model-facing function name back to the real
+    capability name; ``finish`` becomes the control action with a reply fragment.
+    """
+
+    actions: list[dict[str, Any]] = []
+    for call in calls:
+        name = str(getattr(call, "name", "") or "").strip()
+        parsed = dict(getattr(call, "parsed_arguments", None) or {})
+        if name == _HARNESS_FINISH_TOOL_NAME:
+            actions.append(
+                {
+                    "action": "finish",
+                    "status": str(parsed.get("status") or "completed"),
+                    "reply_fragment": str(parsed.get("reply") or ""),
+                }
+            )
+            continue
+        actions.append(
+            {
+                "action": "tool",
+                "tool_name": names.get(name, name),
+                "arguments": parsed,
+            }
+        )
+    return {"actions": actions}
+
+
+_READ_ONLY_ACTION_BATCH_LIMIT = 8
+_DISCOVERY_CAPABILITIES = {"capability_search", "capability_describe"}
+
+
+def _capability_is_read_only(descriptor: CapabilityDescriptor) -> bool:
+    if descriptor.read_only:
+        return True
+    if str(descriptor.metadata.get("side_effect") or "") == "read":
+        return True
+    if descriptor.kind in {"general_skill", "knowledge"}:
+        return True
+    return (
+        descriptor.kind == "tool"
+        and str(descriptor.metadata.get("method") or "").strip().upper() == "GET"
+    )
+
+
+def _validate_action_batch(
+    actions: list[HarnessAction],
+    requirement: TaskRequirement,
+    allowed_names: set[str],
+) -> None:
+    """Keep multi-action batches independent, read-only and schema-stable.
+
+    A batch is executed without an intermediate model request.  Allowing writes
+    there would execute external side effects before the model sees the first
+    result, and allowing a describe would let the model call a capability whose
+    full schema it has not received yet.  Both invariants are enforced here,
+    not only in the prompt.
+    """
+
+    if len(actions) <= 1:
+        return
+    if len(actions) > _READ_ONLY_ACTION_BATCH_LIMIT:
+        raise ValueError(
+            f"A Harness action sequence may contain at most "
+            f"{_READ_ONLY_ACTION_BATCH_LIMIT} actions."
+        )
+    descriptors = {
+        item.name: item for item in requirement.capability_manifest.available
+    }
+    for item in actions:
+        if item.action != "tool":
+            raise ValueError(
+                "A multi-action sequence may contain only read-only tool actions; "
+                "finish must be emitted as a standalone action after tool results."
+            )
+        name = str(item.tool_name or "").strip()
+        if name in _DISCOVERY_CAPABILITIES:
+            raise ValueError(
+                "capability_describe/capability_search must be emitted alone so the "
+                "next model request can include every newly activated schema."
+            )
+        descriptor = descriptors.get(name)
+        if descriptor is not None and descriptor.kind in {"general_skill", "internal"}:
+            raise ValueError(
+                "GeneralSkill/internal actions must be emitted alone; load the skill "
+                "instruction before batching business read-only tools."
+            )
+        if name not in allowed_names or descriptor is None:
+            raise ValueError(
+                f"{name or '<empty>'} is not an authorized capability in this TaskFrame."
+            )
+        if not _capability_is_read_only(descriptor):
+            raise ValueError(
+                f"{name} is not read-only and cannot be batched; call it as a "
+                "standalone action."
+            )
 
 
 def _harness_actions_from_raw(raw: object) -> list[HarnessAction]:

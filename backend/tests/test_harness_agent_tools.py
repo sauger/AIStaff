@@ -192,6 +192,31 @@ def test_harness_agent_falls_back_to_json_when_tools_unsupported(monkeypatch) ->
     assert "harness_tool_protocol_fallback" in trace_events
 
 
+
+def test_harness_tool_specs_full_surface_covers_catalog_capabilities(monkeypatch) -> None:
+    _enable_native_protocol(monkeypatch)
+    frame_tool = _descriptor("tokenop.list_platform_organizations")
+    catalog_tool = _descriptor("tokenop.get_platform_consumption_bill")
+    discovery = _descriptor("capability_search")
+    requirement = _requirement(frame_tool, discovery)
+    full_manifest = CapabilityManifest(available=[frame_tool, catalog_tool, discovery])
+
+    tools, names = harness_agent_module._harness_tool_specs(requirement, full_manifest)
+    tool_names = [item["function"]["name"] for item in tools]
+
+    assert "tokenop__get_platform_consumption_bill" in tool_names
+    assert "capability_search" not in tool_names
+    assert names["tokenop__get_platform_consumption_bill"] == (
+        "tokenop.get_platform_consumption_bill"
+    )
+    assert "finish" in tool_names
+
+    frame_tools, _ = harness_agent_module._harness_tool_specs(requirement)
+    frame_names = [item["function"]["name"] for item in frame_tools]
+    assert "tokenop__get_platform_consumption_bill" not in frame_names
+    assert "capability_search" in frame_names
+
+
 def test_harness_agent_skips_tools_when_protocol_is_json(monkeypatch) -> None:
     settings = SimpleNamespace(
         agent_action_protocol="json",
