@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
@@ -26,7 +27,6 @@ from app.core.harness_attachments import (
     validated_task_image_payloads,
 )
 from app.core.harness_capability_invoker import HarnessCapabilityInvoker
-from app.core.published_deliverables import list_published_deliverables
 from app.core.harness_session_lease import (
     HarnessSessionLeaseLost,
     HarnessSessionLeaseStore,
@@ -37,6 +37,10 @@ from app.core.harness_session_lock import (
     release_harness_session,
 )
 from app.core.harness_turn_store import HarnessTurnStore
+from app.core.plan_compiler import PlanCompiler, PlanNode, build_compiled_tools
+from app.core.plan_executor import PlanExecutor, synthesize_reply
+from app.core.plan_synthesizer import PlanSynthesizer
+from app.core.published_deliverables import list_published_deliverables
 from app.core.slash_commands import (
     SlashCommandError,
     SlashCommandSelection,
@@ -911,12 +915,20 @@ class HarnessV2Engine:
             },
         )
         remaining_actions = max_actions
+        # 原生工具 + 全量工具面：把完整清单里已授权的能力一次性交给模型，
+        # 不再依赖 capability_describe 的懒加载往返。
         settings = get_settings()
         native_full_surface = (
             str(getattr(settings, "agent_action_protocol", "") or "").strip()
             == "tool_calls"
             and str(getattr(settings, "agent_native_tool_surface", "") or "").strip()
             == "full"
+        )
+        # Compiled execution plans against the frozen manifest, so every
+        # authorized capability must already be activated in the invoker.
+        compiled_surface = (
+            str(getattr(settings, "agent_execution_mode", "react") or "react").strip().lower()
+            in {"compiled", "shadow"}
         )
         results: list[TaskExecutionResult] = []
         last_step_result = StepAgentResult()
@@ -1042,7 +1054,7 @@ class HarnessV2Engine:
                 run_id=run.id,
                 initially_activated_names=(
                     manifest.allowed_names()
-                    if native_full_surface
+                    if (native_full_surface or compiled_surface)
                     else requirement.capability_manifest.allowed_names()
                 ),
                 is_cancelled=lambda: self._is_cancelled(request, session),
@@ -1062,7 +1074,19 @@ class HarnessV2Engine:
                 str(getattr(request, "inbound_mail_message_id", "") or "").strip() or None
             )
 
-            result = self.task_agent.run(
+            compiled_result = _compiled_frame_result(
+                requirement=requirement,
+                manifest=manifest,
+                invoker=invoker,
+                model_config=model_config,
+                trace=trace,
+                remaining_actions=remaining_actions,
+                is_cancelled=lambda: self._is_cancelled(request, session),
+                budget_deadline=step_deadline_monotonic,
+                frame_kind=frame.kind,
+                slash_command=self.slash_command,
+            )
+            result = compiled_result if compiled_result is not None else self.task_agent.run(
                 requirement,
                 model_config,
                 invoker.invoke,
@@ -1745,6 +1769,205 @@ def _merge_warm_capabilities(
     # Store sorted so the persisted checkpoint stays byte-stable between turns
     # even when two capabilities were used within the same turn.
     return sorted(merged[-limit:])
+
+
+def _ensure_skill_load_nodes(plan: Any, manifest: Any) -> Any:
+    """Some capabilities require loading their general skill first in the run.
+
+    The planner is told about this too, but enforce it locally so a forgotten
+    node cannot fail every invocation with GENERAL_SKILL_REQUIRED.
+    """
+    descriptors = {
+        str(getattr(item, "name", "") or ""): item
+        for item in getattr(manifest, "available", []) or []
+    }
+    allowed = set(getattr(manifest, "allowed_names", lambda: set())() or set())
+    planned = {node.tool for node in plan.nodes}
+    injected: list[PlanNode] = []
+    for node in plan.nodes:
+        descriptor = descriptors.get(node.tool)
+        metadata = getattr(descriptor, "metadata", None) or {}
+        slug = str(metadata.get("required_general_skill_slug") or "").strip()
+        if not slug:
+            continue
+        skill_name = slug if slug.startswith("general_skill.") else f"general_skill.{slug}"
+        if skill_name in planned or skill_name in {item.tool for item in injected}:
+            continue
+        if skill_name not in allowed:
+            continue
+        injected.append(
+            PlanNode(
+                id=f"sk{len(injected) + 1}",
+                tool=skill_name,
+                purpose="加载技能口径",
+            )
+        )
+    if not injected:
+        return plan
+    for node in plan.nodes:
+        node.deps = list(dict.fromkeys([item.id for item in injected] + list(node.deps)))
+    plan.nodes = injected + list(plan.nodes)
+    return plan
+
+
+def _compiled_frame_result(
+    *,
+    requirement: Any,
+    manifest: Any,
+    invoker: Any,
+    model_config: Any,
+    trace: Callable[[str, dict[str, Any]], None],
+    remaining_actions: int,
+    is_cancelled: Callable[[], bool],
+    budget_deadline: float | None,
+    frame_kind: str,
+    slash_command: str | None,
+) -> TaskExecutionResult | None:
+    """Run the compiled path once; ``None`` means fall back to ReAct."""
+    settings = get_settings()
+    mode = str(getattr(settings, "agent_execution_mode", "react") or "react").strip().lower()
+    if mode not in {"compiled", "shadow"} or frame_kind != "conversation" or slash_command:
+        return None
+    if remaining_actions <= 0:
+        return None
+    max_nodes = max(
+        1,
+        min(int(getattr(settings, "agent_plan_max_nodes", 12) or 12), remaining_actions),
+    )
+    tools = build_compiled_tools(
+        manifest,
+        max_description_chars=int(
+            getattr(settings, "agent_tools_max_description_chars", 300) or 300
+        ),
+        schema_budget_chars=int(
+            getattr(settings, "agent_tools_schema_budget_chars", 2000) or 2000
+        ),
+    )
+    if not tools:
+        trace("plan_fallback", {"reason": "NO_TOOLS"})
+        return None
+    compile_started = time.monotonic()
+    decision = PlanCompiler(max_nodes=max_nodes).compile(
+        requirement=requirement,
+        model_config=model_config,
+        tools=tools,
+        state={"goal": dict(requirement.known_slots or {})},
+    )
+    trace(
+        "plan_compiled",
+        {
+            "mode": mode,
+            "valid": decision.plan is not None,
+            "nodes": len(decision.plan.nodes) if decision.plan else 0,
+            "tools": [node.tool for node in (decision.plan.nodes if decision.plan else [])],
+            "plan_nodes": [
+                {"id": node.id, "tool": node.tool, "deps": list(node.deps)}
+                for node in (decision.plan.nodes if decision.plan else [])
+            ],
+            "compile_ms": int((time.monotonic() - compile_started) * 1000),
+            "repair_used": decision.repair_used,
+            "error": decision.error,
+            "shadow": mode == "shadow",
+        },
+    )
+    if mode == "shadow":
+        return None
+    if decision.plan is None:
+        trace("plan_fallback", {"reason": "COMPILE_FAILED", "error": decision.error})
+        return None
+    plan = _ensure_skill_load_nodes(decision.plan, manifest)
+    executor = PlanExecutor(
+        invoker.invoke,
+        trace=trace,
+        is_cancelled=is_cancelled,
+        node_timeout=float(
+            getattr(settings, "agent_plan_node_timeout_seconds", 30) or 30
+        ),
+        budget_deadline=budget_deadline,
+        read_reference=getattr(invoker, "read_tool_result_reference", None),
+    )
+    run = executor.run(plan, {"goal": dict(requirement.known_slots or {})})
+    if run.succeeded == 0:
+        trace(
+            "plan_fallback",
+            {
+                "reason": "NO_NODE_SUCCEEDED",
+                "errors": [outcome.error for outcome in run.outcomes][:4],
+            },
+        )
+        return None
+    trace(
+        "plan_outcomes",
+        {
+            "outcomes": [
+                {
+                    "node_id": item.node_id,
+                    "status": item.status,
+                    "data_keys": sorted(item.result.get("data", {}).keys())[:8]
+                    if isinstance(item.result, dict) and isinstance(item.result.get("data"), dict)
+                    else type(item.result).__name__,
+                }
+                for item in run.outcomes
+            ]
+        },
+    )
+    reply = synthesize_reply(plan, run.outcomes)
+    synthesized = False
+    if plan.answer.mode == "synthesize" or not reply.strip():
+        reply = (
+            PlanSynthesizer().synthesize(
+                requirement=requirement,
+                model_config=model_config,
+                outcomes=run.outcomes,
+                reply_hint=plan.answer.hint,
+            )
+            or reply
+        )
+        synthesized = bool(reply.strip()) and plan.answer.mode == "synthesize"
+    if not reply.strip():
+        trace("plan_fallback", {"reason": "EMPTY_REPLY"})
+        return None
+    capability_results = [
+        {
+            "tool_name": outcome.tool,
+            "success": outcome.status == "ok",
+            "data": (outcome.result or {}).get("data"),
+            "error": outcome.error,
+        }
+        for outcome in run.outcomes
+        if outcome.status == "ok"
+    ]
+    trace(
+        "plan_synthesized",
+        {
+            "mode": "synthesize" if synthesized else "direct",
+            "nodes": len(plan.nodes),
+            "succeeded": run.succeeded,
+            "reply_chars": len(reply),
+        },
+    )
+    return TaskExecutionResult(
+        task_frame_id=requirement.task_frame_id,
+        status="completed",
+        reply_fragment=reply,
+        task_summary=f"编译执行完成，共 {run.succeeded} 个节点。",
+        capability_results=capability_results,
+        action_count=run.succeeded,
+        structured_result={
+            "execution_mode": "compiled",
+            "plan": plan.model_dump(mode="json"),
+            "outcomes": [
+                {
+                    "node_id": outcome.node_id,
+                    "tool": outcome.tool,
+                    "status": outcome.status,
+                    "duration_ms": outcome.duration_ms,
+                    "error": outcome.error,
+                }
+                for outcome in run.outcomes
+            ],
+        },
+    )
 
 
 def _turn_budget_seconds() -> float | None:

@@ -1756,6 +1756,10 @@ class HarnessCapabilityInvoker:
             for key, item in value.items()
         }
 
+    def read_tool_result_reference(self, reference: dict[str, Any]) -> Any:
+        """Resolve a ``sandbox_json_file`` pointer into the data it points at."""
+        return self._read_json_tool_result_reference(reference)
+
     def _read_json_tool_result_reference(self, reference: dict[str, Any]) -> Any:
         sandbox_path = str(reference.get("sandbox_path") or "").strip()
         prefix = f"{SANDBOX_WORKSPACE}/"
