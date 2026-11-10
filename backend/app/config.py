@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     agent_plan_node_timeout_seconds: float = 30.0
     agent_max_replans: int = 2
     agent_tools_max_description_chars: int = 300
+    # 动作协议：tool_calls=原生工具调用（供应商不支持时自动回落 json），json=旧协议。
+    agent_action_protocol: str = "json"
     agent_tools_schema_budget_chars: int = 2000
     agent_shadow_sample_rate: float = 0.1
     tool_timeout_seconds: float = 8.0

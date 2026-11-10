@@ -10,6 +10,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from app import paths
+from app.config import get_settings
+from app.core.capability_tools import build_tool_specs
 from app.core.harness_attachments import (
     ValidatedTaskImagePayload,
     isolated_attachment_context,
@@ -24,6 +26,7 @@ from app.core.task_request_compiler import (
 from app.core.user_visible_reply import ACTION_BUDGET_SENTENCE, ensure_user_visible_reply
 from app.db.models import ModelConfig
 from app.llm import LLMClient, LLMError
+from app.llm.client import ToolCallingUnsupported
 from app.observability.spans import llm_operation
 from app.session.slot_policy import strip_router_generated_message_slots
 
@@ -132,6 +135,15 @@ class HarnessTaskAgent:
         failed_finish_without_attempt_blocked = False
         allowed_names = requirement.capability_manifest.allowed_names()
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8").strip()
+        tool_specs, tool_names = _harness_tool_specs(requirement)
+        native_tools = bool(tool_specs)
+        if native_tools:
+            system_prompt = _with_tool_protocol(system_prompt)
+            if trace_sink:
+                trace_sink(
+                    "harness_tool_protocol_enabled",
+                    {"mode": "tool_calls", "tool_count": len(tool_specs)},
+                )
         pending_actions: list[HarnessAction] = []
 
         def finish(result: TaskExecutionResult) -> TaskExecutionResult:
@@ -208,9 +220,12 @@ class HarnessTaskAgent:
             try:
                 action: HarnessAction | None = None
                 validation_error: Exception | None = None
+                used_native_tools = False
                 if pending_actions:
                     action = pending_actions.pop(0)
                 else:
+                    if native_tools:
+                        tool_specs, tool_names = _harness_tool_specs(requirement)
                     for protocol_attempt in range(2):
                         # Persist a stable link between this LLM span and the Harness
                         # iteration that consumes it.  Timing projections must not
@@ -225,11 +240,34 @@ class HarnessTaskAgent:
                                 model_config,
                                 step_deadline_monotonic,
                             )
-                            raw = _generate_harness_action_json(
-                                client,
-                                system_prompt,
-                                payload,
-                            )
+                            raw = None
+                            if tool_specs:
+                                try:
+                                    calls = _generate_harness_tool_calls(
+                                        client,
+                                        system_prompt,
+                                        payload,
+                                        tool_specs,
+                                    )
+                                except ToolCallingUnsupported:
+                                    # 供应商不接受 tools：本回合剩余迭代回落到 JSON 协议。
+                                    tool_specs = []
+                                    native_tools = False
+                                    calls = []
+                                    if trace_sink:
+                                        trace_sink(
+                                            "harness_tool_protocol_fallback",
+                                            {"iteration": iteration},
+                                        )
+                                if calls:
+                                    used_native_tools = True
+                                    raw = _actions_from_tool_calls(calls, tool_names)
+                            if raw is None:
+                                raw = _generate_harness_action_json(
+                                    client,
+                                    system_prompt,
+                                    payload,
+                                )
                         try:
                             actions = _harness_actions_from_raw(raw)
                             action = actions[0]
@@ -244,6 +282,10 @@ class HarnessTaskAgent:
                                     },
                                 )
                         except (ValidationError, ValueError) as exc:
+                            if used_native_tools:
+                                # 修复提示是 JSON 协议；本回合剩余迭代统一回落。
+                                tool_specs = []
+                                native_tools = False
                             action = _adapt_general_skill_structured_result(
                                 raw,
                                 loaded_general_skill_names=loaded_general_skill_names,
@@ -759,6 +801,105 @@ def _generate_harness_action_json(
         return sequence_generator(system_prompt, payload)
     # Test doubles and older compatible clients still expose the original method.
     return client.generate_json(system_prompt, payload)
+
+
+_HARNESS_FINISH_TOOL_NAME = "finish"
+_HARNESS_FINISH_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": _HARNESS_FINISH_TOOL_NAME,
+        "description": "结束当前任务并给出给用户的最终回复。无需更多工具调用时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reply": {"type": "string", "description": "给用户的最终回复"},
+                "status": {
+                    "type": "string",
+                    "enum": ["completed", "awaiting_user", "handoff", "failed"],
+                    "description": "任务结束状态；需要用户补充信息时用 awaiting_user",
+                },
+            },
+            "required": ["reply"],
+        },
+    },
+}
+
+_HARNESS_TOOL_PROTOCOL_PROMPT = """## 原生工具调用协议
+本次任务通过平台原生 tools 调用能力：
+- 每个已授权能力对应一个工具函数；参数按该工具的参数 schema 填写。
+- capability_search / capability_describe 只用于发现尚未出现在工具列表里的能力；目标能力已在 tools 里时直接调用。
+- 最多调用一次 capability_search；确定能力名后调用 capability_describe，该能力会从下一轮起出现在 tools 里，下一轮必须直接调用它，不要重复搜索或描述。
+- 在完成用户请求之前不要调用 finish；只有确实无法推进时才用 status=awaiting_user 并向用户说明。
+- 需要读取或执行能力时，直接调用对应工具，不要输出 JSON 动作文本。
+- 工具结果会以下一条消息注入；不要编造未返回的结果。
+- 任务完成或需要用户补充信息时，调用 finish 工具；finish 必须是本次响应里唯一的工具调用。"""
+
+
+def _harness_tool_specs(
+    requirement: TaskRequirement,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Build native tool specs from the frame's authorized capabilities.
+
+    Returns ``([], {})`` when the protocol is disabled, so callers keep using the
+    legacy JSON action loop without extra branching.
+    """
+
+    protocol = str(getattr(get_settings(), "agent_action_protocol", "tool_calls") or "").strip()
+    if protocol != "tool_calls":
+        return [], {}
+    manifest = requirement.capability_manifest
+    tools, names = build_tool_specs(manifest, activated=manifest.allowed_names())
+    if not tools:
+        return [], {}
+    if not any(str(item.get("function", {}).get("name") or "") == _HARNESS_FINISH_TOOL_NAME for item in tools):
+        tools = [*tools, _HARNESS_FINISH_TOOL]
+    return tools, names
+
+
+def _with_tool_protocol(system_prompt: str) -> str:
+    return f"{system_prompt}\n\n{_HARNESS_TOOL_PROTOCOL_PROMPT}"
+
+
+def _generate_harness_tool_calls(
+    client: LLMClient,
+    system_prompt: str,
+    payload: dict[str, Any],
+    tools: list[dict[str, Any]],
+) -> list[Any]:
+    generator = getattr(client, "generate_tool_calls", None)
+    if not callable(generator):
+        return []
+    return list(generator(system_prompt, payload, tools=tools, tool_choice="auto") or [])
+
+
+def _actions_from_tool_calls(calls: list[Any], names: dict[str, str]) -> dict[str, Any]:
+    """Map provider tool calls back to Harness actions.
+
+    ``names`` maps the sanitized model-facing function name back to the real
+    capability name; ``finish`` becomes the control action with a reply fragment.
+    """
+
+    actions: list[dict[str, Any]] = []
+    for call in calls:
+        name = str(getattr(call, "name", "") or "").strip()
+        parsed = dict(getattr(call, "parsed_arguments", None) or {})
+        if name == _HARNESS_FINISH_TOOL_NAME:
+            actions.append(
+                {
+                    "action": "finish",
+                    "status": str(parsed.get("status") or "completed"),
+                    "reply_fragment": str(parsed.get("reply") or ""),
+                }
+            )
+            continue
+        actions.append(
+            {
+                "action": "tool",
+                "tool_name": names.get(name, name),
+                "arguments": parsed,
+            }
+        )
+    return {"actions": actions}
 
 
 def _harness_actions_from_raw(raw: object) -> list[HarnessAction]:
