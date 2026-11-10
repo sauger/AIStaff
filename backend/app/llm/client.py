@@ -30,6 +30,7 @@ from app.llm.protocol_drivers import (
     ProtocolCallError,
     _protocol_call_error,
 )
+from app.llm.call_policy import policy_for
 from app.llm.stage_protocol import (
     STAGE_PROTOCOL_KEY,
     TURN_STAGE_MESSAGES_KEY,
@@ -84,6 +85,14 @@ EMPTY_RESPONSE_MESSAGE = "Model returned an empty response"
 DEFAULT_MODEL_API_TIMEOUT_SECONDS = 600.0
 DEFAULT_INPUT_TOKEN_BUDGET = 32_000
 TURN_STAGE_MESSAGE_MARKER = "_agent_turn_message"
+
+
+def _provider_max_retries() -> int:
+    """Provider SDK retries from settings; a 600s call must not be retried twice."""
+
+    return max(0, int(getattr(get_settings(), "model_max_retries", 0) or 0))
+
+
 class _CurrentStageText(str):
     pass
 
@@ -110,6 +119,7 @@ class LLMClient:
                 api_key=api_key,
                 base_url=self.base_url,
                 timeout=self.timeout_seconds,
+                max_retries=_provider_max_retries(),
             )
             self.driver = ChatCompletionsDriver(self.client)
         elif protocol is ModelApiProtocol.OPENAI_RESPONSES:
@@ -117,6 +127,7 @@ class LLMClient:
                 api_key=api_key,
                 base_url=self.base_url,
                 timeout=self.timeout_seconds,
+                max_retries=_provider_max_retries(),
             )
             self.driver = OpenAIResponsesDriver(self.client)
         elif protocol is ModelApiProtocol.ANTHROPIC_MESSAGES:
@@ -181,7 +192,13 @@ class LLMClient:
         vision_image_data_urls: list[str] | None = None,
     ) -> str:
         operation = current_llm_operation()
+        policy = policy_for(operation)
         max_output_tokens = operation_output_tokens(operation, self.max_output_tokens)
+        thinking_mode = (
+            policy.thinking
+            if policy is not None and policy.thinking
+            else getattr(self, "thinking_mode", "")
+        )
         empty_response_retries = operation_empty_response_retries(
             operation, EMPTY_RESPONSE_RETRIES
         )
@@ -219,10 +236,12 @@ class LLMClient:
                 request["response_format"] = response_format
             request.update(
                 _thinking_request_kwargs(
-                    getattr(self, "thinking_mode", ""),
+                    thinking_mode,
                     getattr(self, "extra_body", {}),
                 )
             )
+            if policy is not None and policy.timeout_seconds:
+                request["_timeout"] = policy.timeout_seconds
             empty_diagnostics: list[str] = []
             current_max_tokens = max_output_tokens
             for attempt in range(empty_response_retries + 1):
@@ -238,7 +257,7 @@ class LLMClient:
                     retry_count=attempt,
                     max_attempts=empty_response_retries + 1,
                     max_output_tokens=current_max_tokens,
-                    thinking_mode=getattr(self, "thinking_mode", "") or "provider_default",
+                    thinking_mode=thinking_mode or "provider_default",
                     request_messages=_observable_messages(request_messages),
                     request_parameters=_observable_request_parameters(
                         temperature=self.temperature,
@@ -318,7 +337,13 @@ class LLMClient:
         cancellation: CancellationToken | None = None,
     ) -> Iterator[str]:
         operation = current_llm_operation()
+        policy = policy_for(operation)
         max_output_tokens = operation_output_tokens(operation, self.max_output_tokens)
+        thinking_mode = (
+            policy.thinking
+            if policy is not None and policy.thinking
+            else getattr(self, "thinking_mode", "")
+        )
         empty_response_retries = operation_empty_response_retries(
             operation, EMPTY_RESPONSE_RETRIES
         )
@@ -344,12 +369,14 @@ class LLMClient:
                     "temperature": self.temperature,
                     "max_tokens": current_max_tokens,
                     **_thinking_request_kwargs(
-                        getattr(self, "thinking_mode", ""),
+                        thinking_mode,
                         getattr(self, "extra_body", {}),
                     ),
                 }
                 if cancellation is not None:
                     stream_request["_cancellation"] = cancellation
+                if policy is not None and policy.timeout_seconds:
+                    stream_request["_timeout"] = policy.timeout_seconds
                 driver = self._protocol_driver()
                 span = start_llm_call(
                     model=self.model,
@@ -361,7 +388,7 @@ class LLMClient:
                     retry_count=attempt,
                     max_attempts=empty_response_retries + 1,
                     max_output_tokens=current_max_tokens,
-                    thinking_mode=getattr(self, "thinking_mode", "") or "provider_default",
+                    thinking_mode=thinking_mode or "provider_default",
                     request_messages=_observable_messages(request_messages),
                     request_parameters=_observable_request_parameters(
                         temperature=self.temperature,

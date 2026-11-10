@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
+from app.config import get_settings
 from app.core.cancellation import is_chat_turn_cancelled
 from app.core.capability_discovery import project_capability_manifest
 from app.core.capability_manifest import CapabilityManifestBuilder
@@ -880,6 +881,14 @@ class HarnessV2Engine:
             if frame.kind == "sop"
             else None
         )
+        turn_budget_seconds = (
+            _turn_budget_seconds() if frame.kind == "conversation" else None
+        )
+        turn_deadline_monotonic = (
+            time.monotonic() + turn_budget_seconds
+            if turn_budget_seconds is not None
+            else None
+        )
         self.events.record(
             request.tenant_id,
             session.id,
@@ -904,10 +913,13 @@ class HarnessV2Engine:
 
         while remaining_actions > 0:
             self._raise_if_cancelled(request, session)
-            step_deadline_monotonic = (
-                time.monotonic() + step_timeout_seconds
-                if step_timeout_seconds is not None
-                else None
+            step_deadline_monotonic = _earliest_deadline(
+                turn_deadline_monotonic,
+                (
+                    time.monotonic() + step_timeout_seconds
+                    if step_timeout_seconds is not None
+                    else None
+                ),
             )
             frame.target_step_id = row.step_id or session.active_step_id
             manifest = self.manifests.build(
@@ -1044,6 +1056,12 @@ class HarnessV2Engine:
                 step_deadline_monotonic=step_deadline_monotonic,
                 step_timeout_seconds=step_timeout_seconds,
                 checkpoint=loop_checkpoint,
+            )
+            result = _apply_turn_budget_exhausted(
+                result,
+                turn_deadline_monotonic,
+                turn_budget_seconds,
+                trace=trace,
             )
             if request.channel == "human_handoff_resume" and result.status == "handoff":
                 # The human reply is already the handoff completion signal. Do not
@@ -1650,6 +1668,59 @@ def _step_result(result: TaskExecutionResult) -> StepAgentResult:
         is_step_completed=result.status == "completed",
         handoff=result.status == "handoff",
         structured_result=result.structured_result,
+    )
+
+
+def _turn_budget_seconds() -> float | None:
+    configured = float(getattr(get_settings(), "agent_turn_budget_seconds", 0) or 0)
+    return configured if configured > 0 else None
+
+
+def _earliest_deadline(*deadlines: float | None) -> float | None:
+    values = [item for item in deadlines if item is not None]
+    return min(values) if values else None
+
+
+def _apply_turn_budget_exhausted(
+    result: TaskExecutionResult,
+    deadline_monotonic: float | None,
+    budget_seconds: float | None,
+    *,
+    trace: Any = None,
+) -> TaskExecutionResult:
+    """Stop a conversation frame that outlived its wall-clock budget.
+
+    The partial answer is kept: the user must still see what the agent already
+    produced, and the frame keeps its capability results for the next turn.
+    Statuses that already answer the user (completed / awaiting_user / handoff /
+    waiting_external_task) are left untouched.
+    """
+
+    if deadline_monotonic is None or time.monotonic() < deadline_monotonic:
+        return result
+    if result.status not in {"failed", "action_budget"}:
+        return result
+    limit = int(budget_seconds or 0)
+    error = {
+        "code": "TURN_BUDGET_EXCEEDED",
+        "message": f"本轮执行超过 {limit} 秒预算，已停止继续调用模型。",
+        "budget_seconds": limit,
+    }
+    if trace is not None:
+        trace(
+            "harness_turn_budget_exhausted",
+            {
+                "budget_seconds": limit,
+                "action_count": result.action_count,
+                "previous_status": result.status,
+            },
+        )
+    return result.model_copy(
+        update={
+            "status": "failed",
+            "error": error,
+            "reply_fragment": result.reply_fragment or error["message"],
+        }
     )
 
 

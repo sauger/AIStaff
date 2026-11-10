@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.llm.client import LLMClient, LLMError, _thinking_mode_for_model
+from app.llm.call_policy import policy_for
 from app.llm.protocol_drivers import ChatCompletionsDriver, ProtocolCallError
 from app.llm.output_policy import (
     operation_empty_response_retries,
@@ -75,6 +76,7 @@ def test_llm_client_uses_600_second_timeout(monkeypatch):
 
     assert client.timeout_seconds == 600.0
     assert captured["timeout"] == 600.0
+    assert captured["max_retries"] == 0
     assert captured["base_url"] == "https://example.test/v1"
     assert client.extra_body == {
         "chat_template_kwargs": {"enable_thinking": False},
@@ -1187,14 +1189,59 @@ def test_user_visible_response_uses_configured_output_budget():
         "general_skill.select",
         "general_skill.review",
         "general_skill.reply",
+    ],
+)
+def test_control_plane_operation_uses_model_config_budget(operation):  # noqa: ANN001
+    assert operation_output_tokens(operation, 8192) == 8192
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
         "knowledge.document_route",
         "knowledge.bucket_route",
         "memory.capture",
         "session.title",
     ],
 )
-def test_control_plane_operation_uses_model_config_budget(operation):  # noqa: ANN001
-    assert operation_output_tokens(operation, 8192) == 8192
+def test_control_plane_operation_uses_call_policy_budget(operation):
+    policy = policy_for(operation)
+    assert policy is not None
+    assert operation_output_tokens(operation, 8192) == policy.max_tokens
+
+
+def test_call_policy_caps_tokens_timeout_and_thinking_for_harness_action():
+    client = object.__new__(LLMClient)
+    client.client = _FakeOpenAIClient()
+    client.model = "demo-model"
+    client.temperature = 0.2
+    client.max_output_tokens = 8192
+    client.thinking_mode = "provider_default"
+
+    with llm_operation("harness.task_action"):
+        assert client.generate_text("system prompt", "hello") == "ok"
+
+    call = client.client.chat.completions.calls[0]
+    assert call["max_tokens"] == 1600
+    assert call["timeout"] == 45.0
+    assert call["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_operation_without_policy_keeps_model_budget_and_no_call_timeout():
+    client = object.__new__(LLMClient)
+    client.client = _FakeOpenAIClient()
+    client.model = "demo-model"
+    client.temperature = 0.2
+    client.max_output_tokens = 8192
+    client.thinking_mode = "provider_default"
+
+    with llm_operation("response.generate"):
+        assert client.generate_text("system prompt", "hello") == "ok"
+
+    call = client.client.chat.completions.calls[0]
+    assert call["max_tokens"] == 8192
+    assert "timeout" not in call
+    assert "extra_body" not in call
 
 
 def test_step_agent_uses_model_config_budget() -> None:

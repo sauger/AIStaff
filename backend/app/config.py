@@ -16,6 +16,19 @@ class Settings(BaseSettings):
     model_api_timeout_seconds: float = 600.0
     model_thinking_mode: str = ""
     model_thinking_models: str = ""
+    model_max_retries: int = 0
+    # Agent 执行层预算（见 docs/design/agent-execution-redesign-plan.md）。
+    # react 为默认执行模式；compiled 尚未启用，切换前必须保持 react。
+    agent_execution_mode: str = "react"
+    agent_turn_budget_seconds: float = 120.0
+    agent_llm_call_timeout_seconds: float = 45.0
+    agent_plan_max_nodes: int = 12
+    agent_plan_parallel: int = 1
+    agent_plan_node_timeout_seconds: float = 30.0
+    agent_max_replans: int = 2
+    agent_tools_max_description_chars: int = 300
+    agent_tools_schema_budget_chars: int = 2000
+    agent_shadow_sample_rate: float = 0.1
     tool_timeout_seconds: float = 8.0
     external_task_poll_seconds: float = 2.0
     external_task_callback_base_url: str = ""

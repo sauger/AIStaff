@@ -88,11 +88,13 @@ class ChatCompletionsDriver:
 
     def complete(self, request: dict[str, Any]) -> Any:
         _raise_if_cancelled(request)
-        return self.client.chat.completions.create(**_wire_request(request))
+        return self.client.chat.completions.create(**_request_kwargs(request))
 
     def stream(self, request: dict[str, Any]) -> Iterator[Any]:
         _raise_if_cancelled(request)
-        stream = self.client.chat.completions.create(**_wire_request(request), stream=True)
+        stream = self.client.chat.completions.create(
+            **_request_kwargs(request), stream=True
+        )
 
         def iterate() -> Iterator[Any]:
             try:
@@ -125,8 +127,9 @@ class OpenAIResponsesDriver:
 
     def complete(self, request: dict[str, Any]) -> Any:
         _raise_if_cancelled(request)
+        kwargs = _with_call_timeout(_responses_request(request), request)
         try:
-            response = self.client.responses.create(**_responses_request(request))
+            response = self.client.responses.create(**kwargs)
         except ProtocolCallError:
             raise
         except Exception as exc:
@@ -135,9 +138,10 @@ class OpenAIResponsesDriver:
 
     def stream(self, request: dict[str, Any]) -> Iterator[Any]:
         _raise_if_cancelled(request)
+        kwargs = _with_call_timeout(_responses_request(request), request)
         try:
             events = self.client.responses.create(
-                **_responses_request(request),
+                **kwargs,
                 stream=True,
             )
         except Exception as exc:
@@ -817,6 +821,26 @@ def _raise_if_cancelled(request: dict[str, Any]) -> None:
 
 def _wire_request(request: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in request.items() if not key.startswith("_")}
+
+
+def _request_kwargs(request: dict[str, Any]) -> dict[str, Any]:
+    """Provider payload plus per-call SDK options.
+
+    ``_timeout`` lets a call policy bound a single stage without rebuilding the
+    SDK client (the client-wide timeout comes from the model configuration).
+    """
+
+    return _with_call_timeout(_wire_request(request), request)
+
+
+def _with_call_timeout(
+    kwargs: dict[str, Any],
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    timeout = request.get("_timeout")
+    if timeout:
+        kwargs = {**kwargs, "timeout": float(timeout)}
+    return kwargs
 
 
 def _anthropic_content(value: Any, role: str) -> list[dict[str, Any]]:
