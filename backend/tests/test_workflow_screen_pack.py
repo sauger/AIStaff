@@ -117,6 +117,24 @@ def test_binder_fails_closed_without_component_count() -> None:
     assert excinfo.value.code == "SCREEN_COMPONENT_COUNT_MISSING"
 
 
+def test_binder_negated_new_with_selection_stays_on_edit() -> None:
+    outcome = _bind(
+        _context(
+            selected=[
+                SelectedComponent(
+                    component_id="cmp_title",
+                    name="标题",
+                    component_type="text",
+                )
+            ]
+        ),
+        "不要动当前屏，把标题改大",
+    )
+
+    assert outcome.bind["mode"] == "edit"
+    assert outcome.bind["targets"] == ["cmp_title"]
+
+
 def test_binder_explicit_new_screen_wins_over_existing_screen() -> None:
     outcome = _bind(_context(count=5), "不要动当前屏，重新做一张销售大屏")
 
@@ -125,13 +143,14 @@ def test_binder_explicit_new_screen_wins_over_existing_screen() -> None:
     assert outcome.next_step_id == "describe_catalog"
 
 
-def test_binder_confirms_an_open_plan_without_drafting_again() -> None:
+def test_binder_does_not_confirm_or_write_an_open_plan_from_chat() -> None:
     outcome = _bind(
         _context(count=5, plan_id="plan_1", plan_status="needs_confirmation", confirm_plan=True),
         "确认",
     )
 
-    assert outcome.next_step_id == "confirm_plan"
+    assert outcome.bind["mode"] == "plan"
+    assert outcome.next_step_id == "describe_catalog"
     assert outcome.bind["plan_id"] == "plan_1"
 
 

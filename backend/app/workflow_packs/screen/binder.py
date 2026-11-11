@@ -1,9 +1,10 @@
 """Screen binder: route a turn from structured context, zero LLM.
 
 Whole-screen generation goes to the plan branch. A single selected component
-still goes to the edit branch. The only phrase match is the existing
-"explicit new screen" signal, and that signal sets placement_hint=new on the
-plan branch.
+still goes to the edit branch. Confirmation is a user REST action in ai-screen;
+the model never confirms or writes a plan from chat. The only phrase match is
+the existing "explicit new screen" signal, and negation must not win over a
+selected component.
 """
 
 from __future__ import annotations
@@ -15,11 +16,9 @@ from uuid import uuid4
 from app.session.turn_context import ScreenTurnContext
 from app.workflows.registry import BindError, BindOutcome, register_binder
 
-_NEW_SCREEN_RE = re.compile(
-    r"新建|另建|新开|重新做一张|另做一个|不要动当前屏|不要修改当前屏"
-)
+_NEW_SCREEN_RE = re.compile(r"新建|另建|新开|重新做一张|另做一个")
+_NEGATED_NEW_RE = re.compile(r"(不要|别|不用|无需)(新建|另建|新开|重新做|另做)")
 _OPEN_PLAN = {"draft", "needs_input", "needs_confirmation", "ready", "blocked"}
-_CONFIRM_PLAN = {"needs_confirmation", "ready"}
 
 
 def _request_id() -> str:
@@ -80,9 +79,8 @@ def bind_screen(
 ) -> BindOutcome:
     request_id = _request_id()
     plan_step = str(metadata.get("plan_step") or "describe_catalog").strip() or "describe_catalog"
-    confirm_step = str(metadata.get("confirm_step") or "confirm_plan").strip() or "confirm_plan"
     message = str(user_message or "")
-    if _NEW_SCREEN_RE.search(message):
+    if _NEW_SCREEN_RE.search(message) and not _NEGATED_NEW_RE.search(message):
         return _plan_outcome(
             turn_context=turn_context,
             request_id=request_id,
@@ -130,18 +128,7 @@ def bind_screen(
         )
 
     plan_status = _text(getattr(turn_context, "plan_status", ""))
-    plan_id = _text(getattr(turn_context, "plan_id", ""))
-    if (
-        bool(getattr(turn_context, "confirm_plan", False))
-        and plan_id
-        and plan_status in _CONFIRM_PLAN
-    ):
-        return _plan_outcome(
-            turn_context=turn_context,
-            request_id=request_id,
-            placement_hint="",
-            next_step_id=confirm_step,
-        )
+    screen_id = _text(getattr(turn_context, "screen_id", ""))
 
     count = getattr(turn_context, "component_count", None)
     if not screen_id or count == 0 or plan_status in _OPEN_PLAN:

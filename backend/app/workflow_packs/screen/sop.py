@@ -3,7 +3,6 @@
 The graph keeps the edit spine and adds a plan spine:
 
     bind ─┬─ describe_catalog ─> draft_plan ─> submit_plan ─> reply_plan
-          ├─ confirm_plan ─> reply_confirmed
           ├─ create ──> get_doc_created ──> verify_created ──> reply_created
           └─ resolve ─> plan ─> apply ─> get_doc_updated ─> verify_updated ─> reply_updated
 
@@ -250,7 +249,6 @@ def screen_sop_content(
                         "screenId": "$bind.screen_id",
                         "projectId": "$bind.project_id",
                         "expectedRevision": "$bind.revision",
-                        "confirm": "$out.draft_plan.data.confirm",
                         "draft": "$out.draft_plan.data.draft",
                     },
                     "next_step_id": "reply_plan",
@@ -268,37 +266,6 @@ def screen_sop_content(
                     )
                 },
             ),
-            _node(
-                "confirm_plan",
-                "确认大屏方案",
-                runtime_action="tool",
-                tool_refs=["plan_screen"],
-                metadata={
-                    "tool": "plan_screen",
-                    "arguments": {
-                        "requestId": "$bind.request_id",
-                        "planId": "$bind.plan_id",
-                        "sessionId": "$bind.session_id",
-                        "screenId": "$bind.screen_id",
-                        "projectId": "$bind.project_id",
-                        "expectedRevision": "$bind.revision",
-                        "confirm": True,
-                    },
-                    "next_step_id": "reply_confirmed",
-                },
-            ),
-            _node(
-                "reply_confirmed",
-                "回复确认结果",
-                runtime_action="reply",
-                metadata={
-                    "template": (
-                        "已处理方案「$out.confirm_plan.data.goal」，"
-                        "状态$out.confirm_plan.data.status。"
-                        "$out.confirm_plan.data.summary"
-                    )
-                },
-            ),
         ],
         "edges": [
             {"source_node_id": "bind", "next_node_id": "create"},
@@ -312,13 +279,11 @@ def screen_sop_content(
             {"source_node_id": "get_doc_updated", "next_node_id": "verify_updated"},
             {"source_node_id": "verify_updated", "next_node_id": "reply_updated"},
             {"source_node_id": "bind", "next_node_id": "describe_catalog"},
-            {"source_node_id": "bind", "next_node_id": "confirm_plan"},
             {"source_node_id": "describe_catalog", "next_node_id": "draft_plan"},
             {"source_node_id": "draft_plan", "next_node_id": "submit_plan"},
             {"source_node_id": "submit_plan", "next_node_id": "reply_plan"},
-            {"source_node_id": "confirm_plan", "next_node_id": "reply_confirmed"},
         ],
-        "terminal_node_ids": ["reply_created", "reply_updated", "reply_plan", "reply_confirmed"],
+        "terminal_node_ids": ["reply_created", "reply_updated", "reply_plan"],
     }
 
 

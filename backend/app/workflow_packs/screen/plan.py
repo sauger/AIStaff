@@ -251,14 +251,12 @@ DRAFT_SYSTEM_PROMPT = (
     "slot 只能包含 title、role、datasetVersionId、datasetSlug、dimensions、measures、chartType、timeRange。"
     "禁止输出 frame、x、y、document、operations，也不要编造坐标。"
     "目录里没有的字段放进 unmatched，不要换成别的字段。"
-    "用户明确接受方案时 confirm=true，否则 confirm=false。"
 )
 
 DRAFT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "confirm": {"type": "boolean"},
         "draft": {
             "type": "object",
             "additionalProperties": False,
@@ -274,7 +272,7 @@ DRAFT_SCHEMA: dict[str, Any] = {
             "required": ["goal"],
         },
     },
-    "required": ["confirm", "draft"],
+    "required": ["draft"],
 }
 
 
@@ -354,7 +352,7 @@ def draft_screen_plan(
         if error:
             last_message = error
             continue
-        return {"confirm": bool(raw.get("confirm")), "draft": draft}
+        return {"draft": draft}
     raise StructuredStepError(
         "INVALID_PLAN",
         last_message + "（已自动重试一次，仍未通过校验。）",

@@ -91,7 +91,7 @@ def _workflow_tool_policy(agent_row: Any) -> dict[str, Any] | None:
 
 
 def _conversation_allowlist(policy: dict[str, Any]) -> frozenset[str]:
-    configured = policy.get("conversation_allowlist")
+    configured = policy.get("conversation_allowlist") or policy.get("conversation_allow")
     if isinstance(configured, list):
         names = {str(item).strip() for item in configured if str(item).strip()}
         if names:

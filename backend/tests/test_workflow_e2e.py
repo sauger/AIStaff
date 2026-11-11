@@ -356,7 +356,7 @@ def test_t1_creates_a_sales_screen_through_the_sop(db):
     assert _tool_names(screen) == ["describe_dataset", "plan_screen"]
     draft = screen.calls[1][1]["draft"]
     assert "frame" not in draft and "operations" not in draft
-    assert screen.calls[1][1]["confirm"] is True
+    assert "confirm" not in screen.calls[1][1]
     assert screen.plan_calls == 1
     assert _step_ids(db) == [
         "bind",
