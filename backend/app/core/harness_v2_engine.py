@@ -37,6 +37,7 @@ from app.core.harness_session_lock import (
     release_harness_session,
 )
 from app.core.harness_turn_store import HarnessTurnStore
+from app.observability.spans import llm_operation
 from app.core.plan_compiler import PlanCompiler, PlanNode, build_compiled_tools
 from app.core.plan_executor import PlanExecutor, synthesize_reply
 from app.core.plan_synthesizer import PlanSynthesizer
@@ -59,6 +60,7 @@ from app.core.task_frame_store import (
 from app.core.task_request_compiler import (
     TaskExecutionResult,
     TaskRequestCompiler,
+    current_step_capability_refs,
 )
 from app.core.turn_planner import TurnPlanner, turn_plan_router_decision
 from app.db.models import (
@@ -73,6 +75,7 @@ from app.db.models import (
 )
 from app.honcho.service import inject_honcho_representation, schedule_honcho_message
 from app.knowledge.citations import compact_knowledge_citation_labels
+from app.llm import LLMClient
 from app.memory.service import memory_read
 from app.session.helpers import public_session
 from app.session.session_schema import (
@@ -387,6 +390,7 @@ class HarnessV2Engine:
                 planner_state,
                 interaction_mode=request.interaction_mode,
                 team_context=team_context,
+                turn_context=request.screen_context,
             )
         ready_frame = next(
             (
@@ -739,6 +743,18 @@ class HarnessV2Engine:
         self._renew_session_lease()
         reply, citations = compact_knowledge_citation_labels(reply, citations)
         artifacts = _aggregate_artifacts(execution_results)
+        self.events.record(
+            request.tenant_id,
+            session.id,
+            "turn_stopped",
+            {
+                "stop_reason": _turn_stop_reason(execution_results),
+                "statuses": [str(result.status or "") for result in execution_results],
+                "task_frame_ids": [row.task_id for row in records],
+                "turn_id": user_message.id,
+                "execution_engine": "harness_v2",
+            },
+        )
         assistant_metadata: dict[str, Any] = {
             "execution_engine": "harness_v2",
             "task_frame_ids": [row.task_id for row in records],
@@ -1086,18 +1102,46 @@ class HarnessV2Engine:
                 frame_kind=frame.kind,
                 slash_command=self.slash_command,
             )
-            result = compiled_result if compiled_result is not None else self.task_agent.run(
-                requirement,
-                model_config,
-                invoker.invoke,
-                max_actions=remaining_actions,
-                trace_sink=trace,
-                is_cancelled=lambda: self._is_cancelled(request, session),
-                image_payloads=image_payloads,
-                step_deadline_monotonic=step_deadline_monotonic,
-                step_timeout_seconds=step_timeout_seconds,
+            # workflow_v1 runtime: declarative node executors for published SOP
+            # packs. Runs before the compiled/react dispatch; None keeps the
+            # legacy branches byte-identical for every non-workflow skill.
+            workflow_result = _workflow_frame_result(
+                frame=frame,
+                active_skill=active_skill,
+                session=session,
+                request=request,
+                requirement=requirement,
+                manifest=manifest,
+                invoker=invoker,
+                model_config=model_config,
+                trace=trace,
                 checkpoint=loop_checkpoint,
-                tool_manifest=manifest if native_full_surface else None,
+                slots=dict(session.slots_json or {}),
+            )
+            result = (
+                workflow_result
+                if workflow_result is not None
+                else (
+                    compiled_result
+                    if compiled_result is not None
+                    else self.task_agent.run(
+                        requirement,
+                        model_config,
+                        invoker.invoke,
+                        max_actions=remaining_actions,
+                        trace_sink=trace,
+                        is_cancelled=lambda: self._is_cancelled(request, session),
+                        image_payloads=image_payloads,
+                        step_deadline_monotonic=step_deadline_monotonic,
+                        step_timeout_seconds=step_timeout_seconds,
+                        checkpoint=loop_checkpoint,
+                        tool_manifest=(
+                            manifest
+                            if (native_full_surface or _is_workflow_skill(active_skill))
+                            else None
+                        ),
+                    )
+                )
             )
             result = _apply_turn_budget_exhausted(
                 result,
@@ -1970,6 +2014,138 @@ def _compiled_frame_result(
     )
 
 
+def _workflow_node(skill: Skill | None, node_id: str | None) -> dict[str, Any] | None:
+    content = (skill.content_json or {}) if skill is not None else {}
+    for node in content.get("nodes") or []:
+        if isinstance(node, dict) and str(node.get("node_id") or "") == node_id:
+            return node
+    return None
+
+
+def _workflow_frame_result(
+    *,
+    frame: Any,
+    active_skill: Skill | None,
+    session: ChatSession,
+    request: ChatTurnRequest,
+    requirement: Any,
+    manifest: Any,
+    invoker: Any,
+    model_config: Any = None,
+    trace: Callable[[str, dict[str, Any]], None],
+    checkpoint: dict[str, Any],
+    slots: dict[str, Any] | None = None,
+) -> TaskExecutionResult | None:
+    """Run one SOP node through the workflow_v1 runtime.
+
+    ``None`` keeps the legacy compiled/react execution: the kill switch is
+    off, the frame is not a SOP, the skill declares no workflow metadata, or
+    the current node has no ``runtime_action`` (mixed graphs still use the
+    LLM executor for their free nodes).
+    """
+
+    # 延迟导入：workflows.runtime → app.core.task_request_compiler 会触发
+    # app.core.__init__ → agent_loop → 本模块。若在本模块顶层导入 runtime，
+    # `from app.workflow_packs import screen` 会形成
+    # workflows.runtime → core → engine → workflows.runtime 的环。
+    from app.workflows.pack import WorkflowPack, WorkflowPackError
+    from app.workflows.runtime import WorkflowRuntime
+
+    try:
+        # 静态注册表只在代码里填充：这里导入一次 pack 包，binder / structured
+        # handler 才会注册。metadata 里的字符串永远不会被 import。
+        import app.workflow_packs  # noqa: F401  (registration side effect)
+    except Exception as exc:  # noqa: BLE001 - pack 导入失败必须失败关闭
+        trace("workflow_pack_import_failed", {"error": str(exc)})
+        return TaskExecutionResult(
+            task_frame_id=str(getattr(requirement, "task_frame_id", "") or ""),
+            status="failed",
+            reply_fragment=f"岗位运行时加载失败：{exc}",
+            task_summary="workflow pack 导入失败，失败关闭。",
+            action_count=1,
+            error={"code": "WORKFLOW_PACK_IMPORT_FAILED", "message": str(exc)},
+        )
+
+    if not bool(getattr(get_settings(), "workflow_runtime_enabled", False)):
+        return None
+    if frame.kind != "sop" or active_skill is None:
+        return None
+    node_id = str(frame.target_step_id or session.active_step_id or "").strip()
+    node = _workflow_node(active_skill, node_id)
+    if node is None:
+        return None
+    try:
+        pack = WorkflowPack.from_skill(active_skill)
+    except WorkflowPackError as exc:
+        # A declared-but-invalid workflow must fail closed; silently running
+        # the SOP through free planning would bypass the node authorization
+        # the pack was published for.
+        trace(
+            "workflow_pack_invalid",
+            {
+                "skill_id": active_skill.skill_id,
+                "step_id": node_id,
+                "error": str(exc),
+            },
+        )
+        return TaskExecutionResult(
+            task_frame_id=str(requirement.task_frame_id or ""),
+            status="failed",
+            reply_fragment=f"岗位运行时配置无效：{exc}",
+            task_summary="workflow pack 校验失败，失败关闭。",
+            action_count=1,
+            error={"code": "WORKFLOW_PACK_INVALID", "message": str(exc)},
+        )
+    _ra = pack.runtime_action(node) if pack is not None else None
+    if pack is None or not _ra:
+        return None
+    # 节点级工具面：只把当前节点 capability_refs（含 legacy call_tool:<name>）
+    # 声明的工具交给运行时；没有声明就是空集合，运行时对任何工具 fail closed。
+    step_refs = current_step_capability_refs(active_skill, node_id)
+
+    llm_generate = None
+    if model_config is not None:
+
+        def _llm_generate(
+            system_prompt: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            with llm_operation("workflow.structured_step"):
+                return LLMClient(model_config).generate_json(system_prompt, payload)
+
+        llm_generate = _llm_generate
+
+    runtime = WorkflowRuntime(
+        pack=pack,
+        invoker=invoker,
+        manifest=manifest,
+        trace=trace,
+        task_frame_id=str(requirement.task_frame_id or ""),
+        skill_id=active_skill.skill_id,
+        allowed_tool_refs=set(step_refs.get("tool_ids") or []),
+        turn_context=request.screen_context,
+        checkpoint=checkpoint,
+        slots=slots,
+        llm_generate=llm_generate,
+        source_user_message=str(getattr(requirement, "source_user_message", "") or ""),
+    )
+    try:
+        result = runtime.run_step(node_id=node_id, node=node)
+    except NotImplementedError as exc:
+        trace(
+            "workflow_executor_missing",
+            {"skill_id": active_skill.skill_id, "step_id": node_id, "error": str(exc)},
+        )
+        return TaskExecutionResult(
+            task_frame_id=str(requirement.task_frame_id or ""),
+            status="failed",
+            reply_fragment=f"该节点执行器尚未实现：{exc}",
+            task_summary="workflow 执行器缺失，失败关闭。",
+            action_count=1,
+            error={"code": "WORKFLOW_EXECUTOR_NOT_IMPLEMENTED", "message": str(exc)},
+        )
+    return result
+
+
 def _turn_budget_seconds() -> float | None:
     configured = float(getattr(get_settings(), "agent_turn_budget_seconds", 0) or 0)
     return configured if configured > 0 else None
@@ -2186,6 +2362,47 @@ def _combine_results(
         action_count=sum(item.action_count for item in results),
         error=last.error,
     )
+
+
+def _is_workflow_skill(skill: Skill | None) -> bool:
+    """True when the skill declares the declarative workflow runtime."""
+
+    if skill is None:
+        return False
+    content = getattr(skill, "content_json", None)
+    if not isinstance(content, dict):
+        return False
+    metadata = content.get("metadata")
+    workflow = metadata.get("workflow") if isinstance(metadata, dict) else None
+    return (
+        isinstance(workflow, dict)
+        and str(workflow.get("runtime") or "") == "workflow_v1"
+    )
+
+
+def _turn_stop_reason(results: list[TaskExecutionResult]) -> str:
+    """Return one machine-readable reason for ending the turn.
+
+    ``completed`` is only reported when every frame reached a terminal state.
+    Budget/awaiting/failed take precedence so dashboards never count a
+    budget-exhausted turn as a success.
+    """
+
+    if not results:
+        return "no_task"
+    statuses = {str(result.status or "") for result in results}
+    for status, reason in (
+        ("failed", "failed"),
+        ("blocked", "blocked"),
+        ("awaiting_user", "awaiting_user"),
+        ("handoff", "handoff"),
+        ("action_budget", "budget_exhausted"),
+    ):
+        if status in statuses:
+            return reason
+    if statuses == {"completed"}:
+        return "completed"
+    return "completed" if "completed" in statuses else "replied"
 
 
 def _single_task_reply(results: list[TaskExecutionResult]) -> str | None:

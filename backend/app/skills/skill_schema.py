@@ -90,6 +90,11 @@ class SkillCard(BaseModel):
     start_node_id: str
     terminal_node_ids: list[str] = Field(default_factory=list)
     interruption_policy: dict[str, str] = Field(default_factory=dict)
+    # Pack-level runtime policy (e.g. metadata.workflow.runtime="workflow_v1",
+    # binder/tool_policy/stop). Free-form by design: unknown keys must not
+    # break older deployments, while the workflow runtime itself validates the
+    # structure it depends on (see app.workflows.pack).
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_graph(self) -> "SkillCard":

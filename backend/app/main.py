@@ -35,6 +35,7 @@ from app.api import (
     wechat_kf,
     wecom_apps,
     wecom_oa,
+    workflow_packs,
 )
 from app.cabinet.api import router as cabinet_router
 from app.contacts.api import router as contacts_router
@@ -157,6 +158,7 @@ app.include_router(org_router)
 app.include_router(secrets_router)
 app.include_router(guides_router)
 app.include_router(skills.router)
+app.include_router(workflow_packs.router)
 app.include_router(model_configs.router)
 app.include_router(memories.router)
 app.include_router(evolution.router)

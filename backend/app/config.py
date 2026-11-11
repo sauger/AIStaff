@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     agent_native_tool_surface: str = "full"
     agent_tools_schema_budget_chars: int = 2000
     agent_shadow_sample_rate: float = 0.1
+    # 岗位运行时（workflow_v1）总开关。默认关闭：只有同时满足本开关与
+    # SkillCard.metadata.workflow.runtime=="workflow_v1" 的 SOP 才走声明式节点
+    # 执行，排障时可一键回退到旧执行路径。
+    workflow_runtime_enabled: bool = False
     tool_timeout_seconds: float = 8.0
     external_task_poll_seconds: float = 2.0
     external_task_callback_base_url: str = ""

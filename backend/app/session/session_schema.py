@@ -4,6 +4,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.session.turn_context import ScreenTurnContext
 from app.tools.tool_schema import ToolCall, ToolResult
 
 
@@ -270,6 +271,10 @@ class ChatTurnRequest(BaseModel):
     # server-only and is applied only after the current employee binding has
     # been verified, so pinning a version never bypasses capability access.
     forced_sop_snapshot: Optional[dict[str, Any]] = Field(default=None, exclude=True)
+    # Structured editor context (screen/v1) for this turn. Server-only like the
+    # fields above: it feeds routing/runtime decisions and must never replace
+    # the user's visible message. Optional so legacy clients are unchanged.
+    screen_context: Optional[ScreenTurnContext] = Field(default=None, exclude=True)
     client_timezone: Optional[str] = None
     debug: bool = False
 

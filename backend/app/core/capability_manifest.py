@@ -64,6 +64,51 @@ RESERVED_HARNESS_CAPABILITY_NAMES = {
 }
 
 
+DEFAULT_CONVERSATION_ALLOWLIST = frozenset(
+    {
+        "get_screen",
+        "describe_dataset",
+        "list_component_types",
+        "knowledge_search",
+    }
+)
+
+
+def _workflow_tool_policy(agent_row: Any) -> dict[str, Any] | None:
+    """Return the per-agent workflow policy, or None for legacy agents.
+
+    Only employees that declare ``metadata.workflow`` get the narrowed
+    conversation / SOP tool surfaces; every other employee keeps the existing
+    manifest byte-for-byte.
+    """
+
+    metadata = getattr(agent_row, "metadata_json", None)
+    workflow = metadata.get("workflow") if isinstance(metadata, dict) else None
+    if not isinstance(workflow, dict):
+        return None
+    policy = workflow.get("tool_policy")
+    return policy if isinstance(policy, dict) else {}
+
+
+def _conversation_allowlist(policy: dict[str, Any]) -> frozenset[str]:
+    configured = policy.get("conversation_allowlist")
+    if isinstance(configured, list):
+        names = {str(item).strip() for item in configured if str(item).strip()}
+        if names:
+            return frozenset(names)
+    return DEFAULT_CONVERSATION_ALLOWLIST
+
+
+def _is_workflow_skill(skill: Skill | None) -> bool:
+    content = getattr(skill, "content_json", None)
+    metadata = content.get("metadata") if isinstance(content, dict) else None
+    workflow = metadata.get("workflow") if isinstance(metadata, dict) else None
+    return (
+        isinstance(workflow, dict)
+        and str(workflow.get("runtime") or "") == "workflow_v1"
+    )
+
+
 class CapabilityAuthorizationError(RuntimeError):
     pass
 
@@ -79,22 +124,37 @@ class CapabilityManifestBuilder:
         skill: Skill | None,
         step_id: str | None,
     ) -> CapabilityManifest:
-        if agent_id and get_agent(self.db, tenant_id, agent_id) is None:
+        agent_row = get_agent(self.db, tenant_id, agent_id) if agent_id else None
+        if agent_id and agent_row is None:
             raise CapabilityAuthorizationError("当前员工不存在、已归档或不属于该租户。")
+        policy = _workflow_tool_policy(agent_row)
+        is_workflow = _is_workflow_skill(skill)
+        conversation_allowlist = (
+            _conversation_allowlist(policy) if policy is not None else frozenset()
+        )
         refs = current_step_capability_refs(skill, step_id)
         authorization = current_sop_tool_authorization(tenant_id, skill, step_id)
         available: list[CapabilityDescriptor] = []
         unavailable: list[CapabilityDescriptor] = []
 
-        available.extend(_internal_capability_descriptors())
+        internal = _internal_capability_descriptors()
+        if policy is not None and not is_workflow:
+            internal = [item for item in internal if item.name in conversation_allowlist]
+        available.extend(internal)
         lark_descriptor = _lark_cli_descriptor(self.db, tenant_id, agent_id)
-        if lark_descriptor is not None:
+        if lark_descriptor is not None and (
+            policy is None or is_workflow or lark_descriptor.name in conversation_allowlist
+        ):
             if lark_descriptor.available:
                 available.append(lark_descriptor)
             else:
                 unavailable.append(lark_descriptor)
         wecom_oa_descriptor = _wecom_oa_approval_descriptor(self.db, tenant_id, agent_id)
-        if wecom_oa_descriptor is not None:
+        if wecom_oa_descriptor is not None and (
+            policy is None
+            or is_workflow
+            or wecom_oa_descriptor.name in conversation_allowlist
+        ):
             if wecom_oa_descriptor.available:
                 available.append(wecom_oa_descriptor)
             else:
@@ -106,6 +166,12 @@ class CapabilityManifestBuilder:
         register_command_tools(builtin_registry)
         register_skill_script_tools(builtin_registry)
         for spec in builtin_registry.specs():
+            if (
+                policy is not None
+                and not is_workflow
+                and spec.name not in conversation_allowlist
+            ):
+                continue
             is_command = spec.name in {"exec_command", "run_skill_script"}
             available.append(
                 CapabilityDescriptor(
@@ -153,6 +219,8 @@ class CapabilityManifestBuilder:
             explicitly_allowed = any(
                 general_by_ref.get(ref) is row for ref in refs["general_skill_ids"]
             )
+            if policy is not None and not explicitly_allowed:
+                continue
             if scope == "sop_specific" and not explicitly_allowed:
                 continue
             available.append(
@@ -218,6 +286,15 @@ class CapabilityManifestBuilder:
                 )
                 continue
             explicitly_allowed = authorization.explicitly_allows(row)
+            if policy is not None:
+                if is_workflow:
+                    if not explicitly_allowed:
+                        continue
+                elif (
+                    row.name not in conversation_allowlist
+                    and row.id not in conversation_allowlist
+                ):
+                    continue
             if scope == "sop_specific" and not explicitly_allowed:
                 continue
             if not authorization.permits_skill(row):

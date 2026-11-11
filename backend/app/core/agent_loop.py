@@ -923,6 +923,19 @@ class AgentLoop:
             return
         if invalid_next_step:
             return
+        if (
+            active_skill_matches
+            and step_result.next_step_id
+            and self._is_exclusive_runtime_step(active_skill, source_step_id)
+        ):
+            # workflow_v1 的分支节点已经用 runtime 的 next_step_id 选好唯一
+            # 后继；不能再把另一条边排队，否则 create/resolve 会串行执行。
+            self._change_active_step(
+                tenant_id,
+                chat_session,
+                str(step_result.next_step_id).strip(),
+            )
+            return
         if active_skill_matches and step_result.next_step_id:
             next_step_id = str(step_result.next_step_id).strip()
             source_step_id = chat_session.active_step_id
@@ -972,6 +985,13 @@ class AgentLoop:
             ):
                 step_result.next_step_id = chat_session.active_step_id
 
+    def _is_exclusive_runtime_step(
+        self, active_skill: Skill | None, step_id: str | None
+    ) -> bool:
+        step = self._current_skill_step(active_skill, step_id)
+        metadata = (step or {}).get("metadata") if isinstance(step, dict) else None
+        return bool(isinstance(metadata, dict) and metadata.get("exclusive_next"))
+
     def _sync_awaiting_input_from_step_result(
         self,
         chat_session: ChatSession,
@@ -992,6 +1012,17 @@ class AgentLoop:
             for field in step.get("expected_user_info", [])
             if not self._skill_slot_satisfied(chat_session.slots_json or {}, str(field))
         ]
+        if not missing_fields and not step.get("expected_user_info"):
+            # 工作流运行时的 bind 停点不声明节点级 expected_user_info；
+            # 结构化结果里的 expected_fields 承担同一职责（与 F3 的节点声明互斥）。
+            structured = step_result.structured_result
+            if isinstance(structured, dict):
+                for raw_field in structured.get("expected_fields") or []:
+                    name = str(raw_field or "").strip()
+                    if name and not self._skill_slot_satisfied(
+                        chat_session.slots_json or {}, name
+                    ):
+                        missing_fields.append(name)
         is_waiting_reply = step_result.action in {"ask_user", "clarify"}
         if is_waiting_reply and missing_fields:
             previous = (

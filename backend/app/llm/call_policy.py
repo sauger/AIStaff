@@ -12,6 +12,7 @@ return ``None`` and keep the model configuration's behaviour unchanged.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 
@@ -28,7 +29,17 @@ CALL_POLICIES: dict[str, CallPolicy] = {
     "harness.plan_compile": CallPolicy(1200, 45.0, "disabled"),
     "plan.replan": CallPolicy(1000, 45.0, "disabled"),
     "plan.synthesize": CallPolicy(1200, 45.0, "disabled"),
-    "turn_planner.plan": CallPolicy(800, 45.0, "disabled"),
+    # Routing is a small JSON decision; a 45s/800-token budget let it dominate
+    # the turn (measured p50 20s, 1.5K output tokens). Keep it bounded.
+    "turn_planner.plan": CallPolicy(
+        int(os.getenv("TURN_PLANNER_MAX_TOKENS", "300")),
+        float(os.getenv("TURN_PLANNER_TIMEOUT_SECONDS", "8")),
+        "disabled",
+    ),
+    # Workflow structured steps (plan_change, ...) produce a small JSON object.
+    # Without a policy they inherited the provider default and could spend 90s+
+    # thinking before emitting 6 components.
+    "workflow.structured_step": CallPolicy(1200, 30.0, "disabled"),
     "knowledge.document_route": CallPolicy(600, 30.0, "disabled"),
     "knowledge.bucket_route": CallPolicy(600, 30.0, "disabled"),
     "memory.capture": CallPolicy(400, 30.0, "disabled"),
