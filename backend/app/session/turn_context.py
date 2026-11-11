@@ -4,6 +4,32 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+ScreenIntentKind = Literal[
+    "create",
+    "modify_selected",
+    "modify_screen",
+    "query",
+    "confirm",
+    "cancel",
+    "help",
+]
+
+
+class ScreenIntent(BaseModel):
+    """Structured, non-writing interpretation of one screen-related turn."""
+
+    kind: ScreenIntentKind = "help"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    target: Literal["current", "new", "unspecified"] = "unspecified"
+    dataset: str | None = None
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    charts: list[str] = Field(default_factory=list)
+    time_range: str | None = None
+    missing: list[str] = Field(default_factory=list)
+    ambiguities: list[str] = Field(default_factory=list)
+    reason: str = ""
+
 
 class SelectedComponent(BaseModel):
     """One user-selected screen component, without props/style/frame payloads."""
@@ -35,3 +61,4 @@ class ScreenTurnContext(BaseModel):
     plan_status: str | None = None
     confirm_plan: bool = False
     session_id: str | None = None
+    intent: ScreenIntent | None = None

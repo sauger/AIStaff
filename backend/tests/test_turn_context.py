@@ -8,8 +8,8 @@ from pydantic import ValidationError
 from app.core import turn_planner as turn_planner_module
 from app.core.turn_planner import TurnPlanner
 from app.db.models import ChatSession, ModelConfig, Skill
-from app.session.session_schema import ChatTurnRequest
-from app.session.turn_context import ScreenTurnContext, SelectedComponent
+from app.session.session_schema import ChatTurnRequest, TurnPlan
+from app.session.turn_context import ScreenIntent, ScreenTurnContext, SelectedComponent
 
 
 def _request(**overrides: object) -> ChatTurnRequest:
@@ -267,3 +267,40 @@ def test_planner_prompt_documents_structured_turn_context() -> None:
     assert "turn_context" in text
     assert "component_count" in text
     assert "selected" in text
+
+
+def test_turn_plan_accepts_non_writing_screen_intent() -> None:
+    plan = TurnPlan.model_validate(
+        {
+            "decision": "answer_only",
+            "screen_intent": {
+                "kind": "query",
+                "confidence": 0.92,
+                "target": "current",
+                "dataset": "erp_projects_active",
+                "metrics": ["合同总额"],
+                "missing": [],
+                "ambiguities": [],
+            },
+        }
+    )
+    assert plan.screen_intent is not None
+    assert plan.screen_intent.kind == "query"
+    assert plan.screen_intent.confidence == 0.92
+
+
+def test_planner_summary_includes_plan_state(monkeypatch) -> None:
+    payloads, _ = _plan_with_fake_llm(
+        monkeypatch,
+        available_skills=[],
+        turn_context=_screen_context(
+            blank=False,
+            plan_id="plan_1",
+            plan_status="needs_confirmation",
+        ),
+    )
+
+    summary = payloads[0]["turn_context"]
+    assert summary["plan_id"] == "plan_1"
+    assert summary["plan_status"] == "needs_confirmation"
+    assert summary["blank"] is False

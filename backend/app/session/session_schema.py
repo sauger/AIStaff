@@ -4,7 +4,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.session.turn_context import ScreenTurnContext
+from app.session.turn_context import ScreenIntent, ScreenTurnContext
 from app.tools.tool_schema import ToolCall, ToolResult
 
 
@@ -128,6 +128,7 @@ class TurnPlan(BaseModel):
     clarification_question: Optional[str] = None
     task_frames: list[PlannedTaskFrame] = Field(default_factory=list)
     task_updates: list[TaskUpdate] = Field(default_factory=list)
+    screen_intent: Optional[ScreenIntent] = None
 
     @field_validator("task_frames", "task_updates", mode="before")
     @classmethod

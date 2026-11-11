@@ -30,6 +30,7 @@ from app.session.session_schema import (
     TurnPlan,
 )
 from app.session.slot_policy import strip_router_generated_message_slots
+from app.session.turn_context import ScreenTurnContext
 
 
 PROMPT_PATH = (
@@ -52,28 +53,33 @@ class TurnPlanner:
         task_frame_state: list[dict[str, Any]] | None = None,
         interaction_mode: str = "normal",
         team_context: TeamPlannerContext | None = None,
+        turn_context: ScreenTurnContext | None = None,
     ) -> TurnPlan:
+        stage_data: dict[str, Any] = {
+            "current_session": _session_payload(
+                session,
+                task_frame_state=task_frame_state,
+            ),
+            # `Skill` is the historical database model name for an SOP.
+            # Keep GeneralSkill selection out of TurnPlanner entirely and
+            # make the prompt boundary explicit so the planner cannot
+            # confuse runtime capabilities with SOP routing candidates.
+            "available_sops": [_sop_payload(skill) for skill in available_skills],
+            "interaction_mode": interaction_mode,
+            "team_context": (
+                team_context.model_dump(mode="json") if team_context is not None else None
+            ),
+        }
+        turn_context_summary = _turn_context_summary(turn_context)
+        if turn_context_summary is not None:
+            stage_data["turn_context"] = turn_context_summary
         payload = stage_payload(
             phase="TurnPlanner",
             user_message=message,
             conversation_context=compact_conversation_context(conversation_context),
             memory_context=memory_context,
             instructions=PROMPT_PATH.read_text(encoding="utf-8"),
-            stage_data={
-                "current_session": _session_payload(
-                    session,
-                    task_frame_state=task_frame_state,
-                ),
-                # `Skill` is the historical database model name for an SOP.
-                # Keep GeneralSkill selection out of TurnPlanner entirely and
-                # make the prompt boundary explicit so the planner cannot
-                # confuse runtime capabilities with SOP routing candidates.
-                "available_sops": [_sop_payload(skill) for skill in available_skills],
-                "interaction_mode": interaction_mode,
-                "team_context": (
-                    team_context.model_dump(mode="json") if team_context is not None else None
-                ),
-            },
+            stage_data=stage_data,
             output_contract=TURN_PLANNER_OUTPUT_SCHEMA,
         )
         try:
@@ -598,12 +604,61 @@ def _session_payload(
 
 def _sop_payload(skill: Skill) -> dict[str, Any]:
     content = skill.content_json or {}
+    metadata = content.get("metadata")
+    workflow = (
+        metadata.get("workflow")
+        if isinstance(metadata, dict) and isinstance(metadata.get("workflow"), dict)
+        else None
+    )
+    # binder 引用、tool_policy、stop 预算属于执行细节，不进路由提示词或日志；
+    # planner 只需要知道「该 SOP 走声明式运行时」这一个事实。
+    workflow_marker = (
+        "workflow_v1"
+        if isinstance(workflow, dict)
+        and str(workflow.get("runtime") or "").strip() == "workflow_v1"
+        else None
+    )
     return _without_empty(
         {
             "skill_id": skill.skill_id,
             "name": skill.name,
             "description": skill.description,
             "trigger_intents": content.get("trigger_intents", []),
+            "user_utterance_examples": content.get("user_utterance_examples", []),
+            "goal": content.get("goal", []),
+            "required_info": content.get("required_info", []),
+            "workflow": workflow_marker,
+        }
+    )
+
+
+def _turn_context_summary(turn_context: ScreenTurnContext | None) -> dict[str, Any] | None:
+    """Planner-facing summary of the editor context.
+
+    Deliberately excludes screen_id/project_id (runtime binding reads the full
+    envelope from the request) and every component payload beyond
+    id/name/type, so props snapshots never enter the routing prompt.
+    """
+    if turn_context is None:
+        return None
+    return _without_empty(
+        {
+            "screen_name": turn_context.screen_name,
+            "revision": turn_context.revision,
+            "component_count": turn_context.component_count,
+            "blank": turn_context.blank,
+            "plan_id": turn_context.plan_id,
+            "plan_status": turn_context.plan_status,
+            "selected": [
+                _without_empty(
+                    {
+                        "component_id": item.component_id,
+                        "name": item.name,
+                        "component_type": item.component_type,
+                    }
+                )
+                for item in turn_context.selected
+            ],
         }
     )
 

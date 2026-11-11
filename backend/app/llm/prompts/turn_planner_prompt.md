@@ -22,7 +22,8 @@
   `kind=conversation`；不要伪造 SOP。
 - 用户在问花费、多少钱、列通道、下明细、这个月账单多少，属于计算或读文件，使用
   kind=conversation，即使 available_sops 的名称或描述里出现「账单」「明细」。
-- 仅当用户要办理流程时才 kind=sop：核对、对账、出报告、改价、退款，或明确「办理」某 SOP。
+- 用户明确要办理流程或产出/改动某个业务对象时才 kind=sop：核对、对账、出报告、改价、退款、新建大屏、补全大屏、修改大屏组件，或明确「办理」某 SOP。只是询问做法、概念或信息时仍用 conversation。
+- 启动一条新的 SOP 时，顶层 `decision=start_new_task`，对应 frame 写 `kind=sop`、`decision=start_new_task`、`target_skill_id` 填 available_sops 里的 `skill_id`；不要写 answer_only，也不要把已经匹配到的 SOP 降级成 conversation。
 - 已有 active SOP 时，若本轮只问多少钱/合计，将花费问题放进 conversation frame 或当前
   SOP frame 的 requirements（只要求回答数字），不要切回下载节点，不要 start_new_task
   到另一条下载 SOP。
@@ -57,6 +58,27 @@
   - 不要生成一个依赖成员 TaskFrame 的本地“汇总” TaskFrame；团队任务完成后的汇总由团队
     调度链路处理。
   - 新链路不再要求最终回复输出 `team_tasks` JSON；该格式仅由服务端兼容历史会话。
+
+结构化回合上下文（turn_context）：
+- `stage_data.turn_context` 是编辑器当前状态（大屏名、revision、组件数、选中组件），
+  不是用户原话：不要复述它，也不要把它当成新需求或 requirement。
+- `selected` 非空：用户已在画布选中这些组件，优先把本轮请求理解为对这些组件的修改。
+- `component_count == 0`：当前是空白屏；用户说「生成/加一个/做一个」指向为当前屏补齐内容，
+  不是新建另一张屏。
+- `component_count > 0` 且 `selected` 为空：不要替用户假设目标组件；用户说「这个/它」时
+  仍可选择 SOP，由运行时绑定层决定是否向用户提问。
+- `turn_context` 缺失：按普通对话/SOP 规则处理，不推断任何编辑器状态。
+
+结构化大屏意图（screen_intent）：
+- 只要 stage_data.turn_context 存在，就必须输出 screen_intent；它是给大屏绑定层的判据，不是给用户看的回复。
+- kind 只能是 create / modify_selected / modify_screen / query / confirm / cancel / help。
+- confidence 用 0~1 表示你对 kind 的把握；低于 0.75 时宁可给 help 或带 missing，不要猜写屏。
+- target：用户明确说“新建/另建/新开”才用 new；说“当前屏/这个屏/上面”用 current；否则 unspecified。
+- 用户问数字/汇总/趋势事实（“合同额多少”“项目进度怎么样”）用 query，不要启动方案。
+- 用户只回复“可以/就这样/按这个生成/确认”且 turn_context.plan_status 是 needs_confirmation 或 ready 时用 confirm；句子里有“但是/不过/再改”等未完成条件时不要 confirm。
+- 用户说“算了/不做了/取消”用 cancel。
+- 有多个可能数据集、目标屏非空但没指定新建还是覆盖、或“刚才那个”不唯一时，把 code 放进 ambiguities/missing；一次只问一个问题。
+- 不要输出 frame、x、y、document、operations，也不要输出 confirm=true；确认由后续用户动作完成。
 
 对于 pending task：
 - 只有用户明确继续某个 pending task 时使用 switch_to_pending，并填写 selected_task_id。

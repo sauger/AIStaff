@@ -392,6 +392,10 @@ class HarnessV2Engine:
                 team_context=team_context,
                 turn_context=request.screen_context,
             )
+        if plan.screen_intent is not None and request.screen_context is not None:
+            # The planner already saw the editor context; carry its non-writing
+            # interpretation into the workflow binder without a second call.
+            request.screen_context.intent = plan.screen_intent
         ready_frame = next(
             (
                 item

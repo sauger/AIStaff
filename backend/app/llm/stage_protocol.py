@@ -70,6 +70,19 @@ TURN_PLANNER_OUTPUT_SCHEMA: dict[str, Any] = {
     "user_intent": "string?",
     "reason": "string?",
     "clarification_question": "string?",
+    "screen_intent": {
+        "kind": "create | modify_selected | modify_screen | query | confirm | cancel | help?",
+        "confidence": "number?",
+        "target": "current | new | unspecified?",
+        "dataset": "string?",
+        "metrics": ["string"],
+        "dimensions": ["string"],
+        "charts": ["string"],
+        "time_range": "string?",
+        "missing": ["string"],
+        "ambiguities": ["string"],
+        "reason": "string?",
+    },
     "task_frames": [
         {
             "task_id": "string?",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.session.turn_context import ScreenTurnContext, SelectedComponent
+from app.session.turn_context import ScreenIntent, ScreenTurnContext, SelectedComponent
 from app.workflow_packs.screen.binder import bind_screen
 from app.workflow_packs.screen.operations import compile_operations, validate_change_plan
 from app.workflow_packs.screen.sop import build_screen_sop, screen_sop_content
@@ -19,6 +19,7 @@ def _context(
     plan_id: str | None = None,
     plan_status: str | None = None,
     confirm_plan: bool = False,
+    intent: ScreenIntent | None = None,
 ) -> ScreenTurnContext:
     return ScreenTurnContext(
         project_id="proj_1",
@@ -31,6 +32,7 @@ def _context(
         plan_id=plan_id,
         plan_status=plan_status,
         confirm_plan=confirm_plan,
+        intent=intent,
     )
 
 
@@ -509,3 +511,72 @@ def test_plan_change_coerces_dict_title_to_string():
         llm=llm,
     )
     assert result["patches"]["cmp_avg_rev"]["props"] == {"title": "合同总额"}
+
+
+def test_intent_create_current_fills_the_blank_screen() -> None:
+    outcome = _bind(
+        _context(count=0, intent=ScreenIntent(kind="create", confidence=0.9, target="current")),
+        "补全这个屏",
+    )
+    assert outcome.missing_fields == []
+    assert outcome.bind["mode"] == "plan"
+    assert outcome.bind["placement_hint"] == "current"
+
+
+def test_intent_create_nonblank_asks_current_or_new() -> None:
+    outcome = _bind(
+        _context(count=5, blank=False, intent=ScreenIntent(kind="create", confidence=0.9)),
+        "做一个销售大屏",
+    )
+    assert outcome.bind["mode"] == "edit"
+    assert outcome.missing_fields == ["target_placement"]
+    assert "覆盖" in (outcome.question or "")
+
+
+def test_intent_modify_selected_routes_to_edit() -> None:
+    outcome = _bind(
+        _context(
+            selected=[SelectedComponent(component_id="cmp_title", name="标题", component_type="text")],
+            intent=ScreenIntent(kind="modify_selected", confidence=0.95),
+        ),
+        "改大一点",
+    )
+    assert outcome.bind["mode"] == "edit"
+    assert outcome.bind["targets"] == ["cmp_title"]
+    assert outcome.next_step_id == "resolve"
+
+
+def test_intent_modify_selected_without_selection_asks_one_question() -> None:
+    outcome = _bind(
+        _context(intent=ScreenIntent(kind="modify_selected", confidence=0.95)),
+        "把标题改大",
+    )
+    assert outcome.missing_fields == ["target_component"]
+    assert outcome.next_step_id is None
+
+
+def test_intent_confirm_never_writes_a_plan() -> None:
+    outcome = _bind(
+        _context(plan_status="needs_confirmation", intent=ScreenIntent(kind="confirm", confidence=0.95)),
+        "按这个生成",
+    )
+    assert outcome.bind["mode"] == "edit"
+    assert outcome.missing_fields == ["confirm_plan"]
+    assert outcome.next_step_id is None
+
+
+def test_intent_query_is_not_routed_to_a_plan() -> None:
+    outcome = _bind(
+        _context(intent=ScreenIntent(kind="query", confidence=0.95)),
+        "ERP 合同额多少",
+    )
+    assert outcome.missing_fields == ["query_dataset"]
+    assert outcome.bind["mode"] == "edit"
+
+
+def test_low_confidence_intent_falls_back_to_rules() -> None:
+    outcome = _bind(
+        _context(count=0, intent=ScreenIntent(kind="modify_screen", confidence=0.4)),
+        "做一个大屏",
+    )
+    assert outcome.bind["mode"] == "plan"
