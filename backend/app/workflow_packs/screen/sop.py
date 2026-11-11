@@ -163,6 +163,49 @@ def screen_sop_content(
                 },
             ),
             _node(
+                "create_blank",
+                "创建空白画布",
+                runtime_action="tool",
+                tool_refs=["create_screen"],
+                metadata={
+                    "tool": "create_screen",
+                    "arguments": {
+                        "requestId": "$bind.request_id",
+                        "mode": "new",
+                        "template": "blank",
+                        "name": "$bind.name",
+                        "taskId": "$bind.task_id",
+                    },
+                    "next_step_id": "ask_catalog",
+                },
+            ),
+            _node(
+                "ask_catalog",
+                "读取数据目录",
+                runtime_action="tool",
+                tool_refs=["describe_dataset"],
+                metadata={
+                    "tool": "describe_dataset",
+                    "arguments": {},
+                    "next_step_id": "ask_data",
+                },
+            ),
+            _node(
+                "ask_data",
+                "问数据",
+                runtime_action="ask",
+                instruction=(
+                    "我帮你先建了一张空白大屏（$out.create_blank.data.name）。"
+                    "空白只是画布，数据和组件我来放。"
+                    "我们从数据开始——这个大屏用哪份数据？"
+                    "选项来自目录：$out.ask_catalog.data。"
+                    "数据确认后我直接往上放组件。一次只问这一个缺口；"
+                    "用户说「你先出一版/别问了」后不再问第二遍。"
+                    "目录为空时改为回复：工作区里还没有可用数据集，"
+                    "我不能用示例数据凑一张屏。先接一份数据，再接这个任务。"
+                ),
+            ),
+            _node(
                 "describe_catalog",
                 "读取数据目录",
                 runtime_action="tool",
@@ -177,7 +220,17 @@ def screen_sop_content(
                 "draft_plan",
                 "起草大屏方案",
                 runtime_action="structured_llm",
-                instruction="只填 ScreenPlanDraft。禁止输出 frame、x、y、document、operations。",
+                instruction=(
+                    "只填 ScreenPlanDraft。禁止输出 frame、x、y、document、operations。"
+                    "数据未知且用户没说跳过时，禁止猜数据集。"
+                    "用户明确跳过（你先出一版/别问了/随便/你看着办）时："
+                    "从真实目录里选最接近业务的默认数据集（例如 ERP 选项目合同明细），"
+                    "写进方案并标为假设①；不得选目录外数据。"
+                    "假设最多 3 条，必须具体（数据集、口径、时间范围）。"
+                    "组件与版式不单独追问，由方案默认值承担。"
+                    "目录为空时不编数据，方案留空并说明："
+                    "工作区里还没有可用数据集，我不能用示例数据凑一张屏。"
+                ),
                 metadata={"handler": "draft_screen_plan", "next_step_id": "submit_plan"},
             ),
             _node(
@@ -206,9 +259,9 @@ def screen_sop_content(
                 runtime_action="reply",
                 metadata={
                     "template": (
-                        "方案「$out.submit_plan.data.goal」"
-                        "当前是$out.submit_plan.data.status。"
-                        "$out.submit_plan.data.summary"
+                        "数据来自$out.submit_plan.data.summary。"
+                        "$out.submit_plan.data.summary。"
+                        "确认后我落到目标屏上；不对的地方直接说。"
                     )
                 },
             ),
@@ -221,11 +274,14 @@ def screen_sop_content(
             {"source_node_id": "get_doc_updated", "next_node_id": "verify_updated"},
             {"source_node_id": "verify_updated", "next_node_id": "reply_updated"},
             {"source_node_id": "bind", "next_node_id": "describe_catalog"},
+            {"source_node_id": "bind", "next_node_id": "create_blank"},
+            {"source_node_id": "create_blank", "next_node_id": "ask_catalog"},
+            {"source_node_id": "ask_catalog", "next_node_id": "ask_data"},
             {"source_node_id": "describe_catalog", "next_node_id": "draft_plan"},
             {"source_node_id": "draft_plan", "next_node_id": "submit_plan"},
             {"source_node_id": "submit_plan", "next_node_id": "reply_plan"},
         ],
-        "terminal_node_ids": ["reply_updated", "reply_plan"],
+        "terminal_node_ids": ["reply_updated", "reply_plan", "ask_data"],
     }
 
 

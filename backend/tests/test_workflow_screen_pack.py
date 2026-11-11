@@ -441,6 +441,36 @@ def test_sop_content_is_stable_for_tests() -> None:
     assert screen_sop_content()["start_node_id"] == "bind"
 
 
+def test_sop_blank_canvas_spine_asks_exactly_one_data_question() -> None:
+    content = screen_sop_content()
+    nodes = {node["node_id"]: node for node in content["nodes"]}
+
+    # create_blank uses MCP create_screen with a blank template and the task id
+    args = nodes["create_blank"]["metadata"]["arguments"]
+    assert args["mode"] == "new"
+    assert args["template"] == "blank"
+    assert args["taskId"] == "$bind.task_id"
+
+    # ask_data is terminal and carries the first-sentence copy verbatim
+    assert "ask_data" in content["terminal_node_ids"]
+    instruction = nodes["ask_data"]["instruction"]
+    assert "我帮你先建了一张空白大屏" in instruction
+    assert "空白只是画布，数据和组件我来放" in instruction
+    assert "用哪份数据" in instruction
+    assert "不能用示例数据凑一张屏" in instruction
+
+    # draft_plan forbids guessing datasets and caps assumptions at three
+    draft = nodes["draft_plan"]["instruction"]
+    assert "禁止猜数据集" in draft
+    assert "假设最多 3 条" in draft
+
+    # spine: bind -> create_blank -> ask_catalog -> ask_data
+    edges = {(e["source_node_id"], e["next_node_id"]) for e in content["edges"]}
+    assert ("bind", "create_blank") in edges
+    assert ("create_blank", "ask_catalog") in edges
+    assert ("ask_catalog", "ask_data") in edges
+
+
 def test_plan_change_maps_metric_prop_to_title():
     from app.workflow_packs.screen.plan import plan_change
 

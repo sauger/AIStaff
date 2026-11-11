@@ -173,12 +173,15 @@ def bind_screen(
         # A new placement enters through the blank-canvas node: create the
         # empty screen, then ask exactly one data question (design §6).
         step = next_step_id or ("create_blank" if placement == "new" else plan_step)
-        return _plan_outcome(
+        outcome = _plan_outcome(
             turn_context=turn_context,
             request_id=request_id,
             placement_hint=placement,
             next_step_id=step,
         )
+        if placement == "new":
+            outcome.bind["name"] = _text(message)[:40] or "AI 大屏"
+        return outcome
 
     def _ask(field: str, question: str) -> BindOutcome:
         return BindOutcome(
