@@ -3,12 +3,10 @@
 The graph keeps the edit spine and adds a plan spine:
 
     bind ─┬─ describe_catalog ─> draft_plan ─> submit_plan ─> reply_plan
-          ├─ create ──> get_doc_created ──> verify_created ──> reply_created
           └─ resolve ─> plan ─> apply ─> get_doc_updated ─> verify_updated ─> reply_updated
 
-Whole-screen generation uses the plan spine. The create spine stays in the
-graph so an older published step id still resolves, but the binder does not
-send new whole-screen requests there. A selected component still uses resolve.
+Whole-screen generation uses the plan spine; the model cannot create a
+template screen or confirm a plan. A selected component still uses resolve.
 """
 
 from __future__ import annotations
@@ -94,22 +92,6 @@ def screen_sop_content(
                 metadata={"binder": "screen", "template": template, "exclusive_next": True},
             ),
             _node(
-                "create",
-                "创建大屏",
-                runtime_action="tool",
-                tool_refs=["create_screen"],
-                metadata={
-                    "tool": "create_screen",
-                    "arguments": {
-                        "template": "$bind.template",
-                        "mode": "$bind.create_mode",
-                        "requestId": "$bind.request_id",
-                        "name": "$bind.name",
-                    },
-                    "next_step_id": "get_doc_created",
-                },
-            ),
-            _node(
                 "resolve",
                 "读取大屏",
                 runtime_action="tool",
@@ -141,43 +123,6 @@ def screen_sop_content(
                         "operations": "$out.plan.data.operations",
                     },
                     "next_step_id": "get_doc_updated",
-                },
-            ),
-            _node(
-                "get_doc_created",
-                "读取新屏文档",
-                runtime_action="tool",
-                tool_refs=["get_screen"],
-                metadata={
-                    "tool": "get_screen",
-                    "arguments": {
-                        "screenId": "$out.create.data.screenId",
-                        "includeDocument": True,
-                    },
-                    "next_step_id": "verify_created",
-                },
-            ),
-            _node(
-                "verify_created",
-                "校验新屏",
-                runtime_action="tool",
-                tool_refs=["validate_screen"],
-                metadata={
-                    "tool": "validate_screen",
-                    "arguments": {"document": "$out.get_doc_created.data.document"},
-                    "next_step_id": "reply_created",
-                },
-            ),
-            _node(
-                "reply_created",
-                "回复创建结果",
-                runtime_action="reply",
-                metadata={
-                    "template": (
-                        "已创建大屏「$out.create.data.name」"
-                        "（screenId=$out.create.data.screenId，"
-                        "revision=$out.create.data.revision）。"
-                    )
                 },
             ),
             _node(
@@ -268,11 +213,7 @@ def screen_sop_content(
             ),
         ],
         "edges": [
-            {"source_node_id": "bind", "next_node_id": "create"},
             {"source_node_id": "bind", "next_node_id": "resolve"},
-            {"source_node_id": "create", "next_node_id": "get_doc_created"},
-            {"source_node_id": "get_doc_created", "next_node_id": "verify_created"},
-            {"source_node_id": "verify_created", "next_node_id": "reply_created"},
             {"source_node_id": "resolve", "next_node_id": "plan"},
             {"source_node_id": "plan", "next_node_id": "apply"},
             {"source_node_id": "apply", "next_node_id": "get_doc_updated"},
@@ -283,7 +224,7 @@ def screen_sop_content(
             {"source_node_id": "draft_plan", "next_node_id": "submit_plan"},
             {"source_node_id": "submit_plan", "next_node_id": "reply_plan"},
         ],
-        "terminal_node_ids": ["reply_created", "reply_updated", "reply_plan"],
+        "terminal_node_ids": ["reply_updated", "reply_plan"],
     }
 
 

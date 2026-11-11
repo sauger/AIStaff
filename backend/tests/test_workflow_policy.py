@@ -72,6 +72,7 @@ def _seed(metadata: dict | None) -> Session:
             ("describe_dataset", "general"),
             ("list_component_types", "general"),
             ("create_screen", "sop_specific"),
+            ("plan_screen", "sop_specific"),
             ("apply_screen_operations", "sop_specific"),
         ]
     ):
@@ -136,11 +137,12 @@ def test_workflow_sop_only_exposes_node_tools():
     assert "apply_screen_operations" in apply_names
     assert "create_screen" not in apply_names
 
-    create_names = _names(
-        CapabilityManifestBuilder(db).build(TENANT, AGENT, skill, "create")
+    plan_names = _names(
+        CapabilityManifestBuilder(db).build(TENANT, AGENT, skill, "submit_plan")
     )
-    assert "create_screen" in create_names
-    assert "apply_screen_operations" not in create_names
+    assert "plan_screen" in plan_names
+    assert "create_screen" not in plan_names
+    assert "apply_screen_operations" not in plan_names
 
 
 def test_legacy_agent_keeps_full_surface():

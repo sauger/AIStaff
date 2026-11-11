@@ -398,7 +398,7 @@ def test_sop_contract_is_valid_and_declares_the_runtime_actions() -> None:
     assert actions["bind"] == "bind"
     assert actions["plan"] == "structured_llm"
     assert actions["apply"] == "tool"
-    assert actions["reply_created"] == "reply"
+    assert actions["reply_plan"] == "reply"
     assert set(actions.values()) <= {"bind", "structured_llm", "tool", "ask", "reply"}
 
     apply_args = nodes["apply"]["metadata"]["arguments"]
