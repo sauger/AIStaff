@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,12 @@ class ScreenIntent(BaseModel):
     kind: ScreenIntentKind = "help"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     target: Literal["current", "new", "unspecified"] = "unspecified"
+    # True only when THIS utterance is an explicit placement choice
+    # ("新建一张/在当前屏改"). "帮我生成一个" is not a placement confirmation.
+    placement_confirmed: bool = False
+    # True when this turn starts a new generation task (second generation on
+    # the same screen, explicit new screen, or a confirmed new generation).
+    new_generation: bool = False
     dataset: str | None = None
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
@@ -62,3 +68,12 @@ class ScreenTurnContext(BaseModel):
     confirm_plan: bool = False
     session_id: str | None = None
     intent: ScreenIntent | None = None
+    # --- task session fields (ADR-0008): all optional, old senders keep working
+    task_id: str | None = None
+    task_status: str | None = None
+    task_title: str | None = None
+    task_brief: dict[str, Any] | None = None
+    placement: str | None = None
+    workspace: dict[str, Any] | None = None
+    entry: str | None = None
+

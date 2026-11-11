@@ -49,7 +49,8 @@ def test_binder_routes_a_new_screen_to_the_plan_branch() -> None:
     outcome = _bind(_context(screen_id=None, count=None), "帮我做一个大屏")
 
     assert outcome.missing_fields == []
-    assert outcome.next_step_id == "describe_catalog"
+    # Empty workspace: enter through the blank-canvas node (design §6).
+    assert outcome.next_step_id == "create_blank"
     assert outcome.bind["mode"] == "plan"
     assert outcome.bind["placement_hint"] == "new"
     assert outcome.bind["screen_id"] == ""
@@ -59,7 +60,7 @@ def test_binder_keeps_the_message_on_the_plan_branch() -> None:
     outcome = _bind(_context(screen_id=None, count=None), "做一张 ERP 项目经营大屏")
 
     assert outcome.bind["mode"] == "plan"
-    assert outcome.next_step_id == "describe_catalog"
+    assert outcome.next_step_id == "create_blank"
 
 
 def test_binder_plans_the_current_empty_screen() -> None:
@@ -147,12 +148,29 @@ def test_binder_negated_new_with_selection_stays_on_edit() -> None:
     assert outcome.bind["targets"] == ["cmp_title"]
 
 
-def test_binder_explicit_new_screen_wins_over_existing_screen() -> None:
-    outcome = _bind(_context(count=5), "不要动当前屏，重新做一张销售大屏")
+def test_binder_explicit_new_screen_transitions_instead_of_writing() -> None:
+    # "重新做一张" is an explicit placement choice; the structured intent
+    # carries it (no regex). The turn emits task_transition and writes nothing.
+    outcome = _bind(
+        _context(
+            count=5,
+            intent=ScreenIntent(
+                kind="create",
+                target="new",
+                confidence=0.95,
+                placement_confirmed=True,
+                new_generation=True,
+            ),
+        ),
+        "不要动当前屏，重新做一张销售大屏",
+    )
 
-    assert outcome.bind["mode"] == "plan"
-    assert outcome.bind["placement_hint"] == "new"
-    assert outcome.next_step_id == "describe_catalog"
+    assert outcome.bind["mode"] == "task_transition"
+    transition = outcome.bind["task_transition"]
+    assert transition["placement"] == "new"
+    assert transition["screenId"] is None
+    assert transition["reason"] == "new_screen"
+    assert "重新做一张销售大屏" in transition["brief"]
 
 
 def test_binder_does_not_confirm_or_write_an_open_plan_from_chat() -> None:
