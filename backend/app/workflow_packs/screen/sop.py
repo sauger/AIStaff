@@ -194,6 +194,7 @@ def screen_sop_content(
                         "screenId": "$bind.screen_id",
                         "projectId": "$bind.project_id",
                         "expectedRevision": "$bind.revision",
+                        "placementHint": "$bind.placement_hint",
                         "draft": "$out.draft_plan.data.draft",
                     },
                     "next_step_id": "reply_plan",

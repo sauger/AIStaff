@@ -218,7 +218,7 @@ def bind_screen(
 
     if not screen_id or count == 0 or blank is True or plan_status in _OPEN_PLAN:
         return _plan(
-            "current" if screen_id and blank is True else "",
+            "current" if screen_id and blank is True else "new",
         )
     if count is None:
         raise BindError(

@@ -51,7 +51,7 @@ def test_binder_routes_a_new_screen_to_the_plan_branch() -> None:
     assert outcome.missing_fields == []
     assert outcome.next_step_id == "describe_catalog"
     assert outcome.bind["mode"] == "plan"
-    assert outcome.bind["placement_hint"] == ""
+    assert outcome.bind["placement_hint"] == "new"
     assert outcome.bind["screen_id"] == ""
 
 
