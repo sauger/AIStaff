@@ -13,6 +13,7 @@ def _context(
     *,
     screen_id: str | None = "scr_1",
     count: int | None = 5,
+    blank: bool | None = None,
     selected: list[SelectedComponent] | None = None,
     revision: int | None = 11,
     plan_id: str | None = None,
@@ -25,6 +26,7 @@ def _context(
         screen_name="销售大屏",
         revision=revision,
         component_count=count,
+        blank=blank,
         selected=selected or [],
         plan_id=plan_id,
         plan_status=plan_status,
@@ -63,6 +65,14 @@ def test_binder_plans_the_current_empty_screen() -> None:
 
     assert outcome.bind["mode"] == "plan"
     assert outcome.bind["screen_id"] == "scr_1"
+    assert outcome.next_step_id == "describe_catalog"
+
+
+def test_binder_plans_a_blank_current_screen_without_a_create_phrase() -> None:
+    outcome = _bind(_context(count=1, blank=True), "做一个销售经营大屏")
+
+    assert outcome.bind["mode"] == "plan"
+    assert outcome.bind["placement_hint"] == "current"
     assert outcome.next_step_id == "describe_catalog"
 
 

@@ -28,6 +28,7 @@ class ScreenTurnContext(BaseModel):
     screen_name: str | None = None
     revision: int | None = None
     component_count: int | None = None
+    blank: bool | None = None
     selected: list[SelectedComponent] = Field(default_factory=list)
     editor_dirty: bool = False
     plan_id: str | None = None

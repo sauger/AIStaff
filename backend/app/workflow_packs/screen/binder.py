@@ -131,11 +131,12 @@ def bind_screen(
     screen_id = _text(getattr(turn_context, "screen_id", ""))
 
     count = getattr(turn_context, "component_count", None)
-    if not screen_id or count == 0 or plan_status in _OPEN_PLAN:
+    blank = getattr(turn_context, "blank", None)
+    if not screen_id or count == 0 or blank is True or plan_status in _OPEN_PLAN:
         return _plan_outcome(
             turn_context=turn_context,
             request_id=request_id,
-            placement_hint="",
+            placement_hint="current" if screen_id and blank is True else "",
             next_step_id=plan_step,
         )
     if count is None:
