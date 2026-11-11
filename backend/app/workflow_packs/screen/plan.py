@@ -249,6 +249,9 @@ DRAFT_SYSTEM_PROMPT = (
     "你是大屏方案起草器。只输出一个 JSON object，符合给定的 output_schema。"
     "draft 只能包含 goal、sources、slots、assumptions、unmatched、placement、joinRequested。"
     "slot 只能包含 title、role、datasetVersionId、datasetSlug、dimensions、measures、chartType、timeRange。"
+    "role 只能是 metric、trend、compare、share、detail；chartType 只能是 metric、line、bar、pie、table。"
+    "sources 只填 datasets[].slug（例如 sales_demo），不要填 sourceId（例如 sample）。"
+    "指标卡 role=metric、chartType=metric，必须没有 dimensions；趋势/对比/占比/明细必须有一个 dimension。"
     "禁止输出 frame、x、y、document、operations，也不要编造坐标。"
     "目录里没有的字段放进 unmatched，不要换成别的字段。"
 )
@@ -263,7 +266,30 @@ DRAFT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "goal": {"type": "string"},
                 "sources": {"type": "array", "items": {"type": "string"}},
-                "slots": {"type": "array"},
+                "slots": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string"},
+                            "role": {
+                                "type": "string",
+                                "enum": ["metric", "trend", "compare", "share", "detail"],
+                            },
+                            "datasetVersionId": {"type": "string"},
+                            "datasetSlug": {"type": "string"},
+                            "dimensions": {"type": "array", "items": {"type": "string"}},
+                            "measures": {"type": "array", "items": {"type": "string"}},
+                            "chartType": {
+                                "type": "string",
+                                "enum": ["metric", "line", "bar", "pie", "table"],
+                            },
+                            "timeRange": {"type": "object"},
+                        },
+                        "required": ["title", "role"],
+                    },
+                },
                 "assumptions": {"type": "array", "items": {"type": "string"}},
                 "unmatched": {"type": "array", "items": {"type": "string"}},
                 "placement": {"type": "string", "enum": ["current", "new"]},
