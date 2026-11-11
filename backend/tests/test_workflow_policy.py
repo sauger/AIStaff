@@ -180,9 +180,9 @@ def test_workflow_structured_step_is_bounded():
 def test_planner_call_is_bounded():
     policy = policy_for("turn_planner.plan")
     assert policy is not None
-    assert policy.max_tokens <= 300
+    assert 1000 <= policy.max_tokens <= 1600
     assert policy.timeout_seconds is not None
-    assert policy.timeout_seconds <= 8.0
+    assert policy.timeout_seconds <= 30.0
 
 
 def test_workflow_pack_endpoint_returns_publishable_card():

@@ -29,11 +29,12 @@ CALL_POLICIES: dict[str, CallPolicy] = {
     "harness.plan_compile": CallPolicy(1200, 45.0, "disabled"),
     "plan.replan": CallPolicy(1000, 45.0, "disabled"),
     "plan.synthesize": CallPolicy(1200, 45.0, "disabled"),
-    # Routing is a small JSON decision; a 45s/800-token budget let it dominate
-    # the turn (measured p50 20s, 1.5K output tokens). Keep it bounded.
+    # The planner returns a small JSON document, but the SOP task frame can
+    # include all requirements. A 300-token cap truncates it mid-JSON and
+    # causes JSON repair to fail. Keep a bounded but sufficient budget.
     "turn_planner.plan": CallPolicy(
-        int(os.getenv("TURN_PLANNER_MAX_TOKENS", "300")),
-        float(os.getenv("TURN_PLANNER_TIMEOUT_SECONDS", "8")),
+        int(os.getenv("TURN_PLANNER_MAX_TOKENS", "1200")),
+        float(os.getenv("TURN_PLANNER_TIMEOUT_SECONDS", "20")),
         "disabled",
     ),
     # Workflow structured steps (plan_change, ...) produce a small JSON object.
