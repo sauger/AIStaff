@@ -352,3 +352,126 @@ def test_validate_plan_allows_empty_reply_in_synthesize_mode():
     plan = _plan(reply="", answer=PlanAnswer(mode="synthesize"))
     errors = validate_plan(plan, allowed_tools=ALLOWED, max_nodes=12)
     assert errors == []
+
+
+def _fanout_plan() -> ExecutionPlan:
+    return ExecutionPlan(
+        nodes=[
+            PlanNode(id="n1", tool="tokenop.list_platform_organizations", args={}),
+            PlanNode(
+                id="n2",
+                tool="tokenop.get_platform_consumption_bill",
+                deps=["n1"],
+                foreach="${n1.data.organizations}",
+                args={"org_id": "${item.id}"},
+            ),
+        ],
+        answer=PlanAnswer(mode="synthesize"),
+    )
+
+
+def test_validate_plan_accepts_foreach_and_rejects_expressions():
+    plan = _fanout_plan()
+    assert validate_plan(plan, allowed_tools=ALLOWED) == []
+
+    expression = plan.model_copy(deep=True)
+    expression.nodes[1].foreach = "${n1.data.organizations}.map(x => x.id)"
+    errors = validate_plan(expression, allowed_tools=ALLOWED)
+    assert any("foreach" in error for error in errors)
+
+    unknown_root = plan.model_copy(deep=True)
+    unknown_root.nodes[1].foreach = "${n9.data.organizations}"
+    errors = validate_plan(unknown_root, allowed_tools=ALLOWED)
+    assert any("n9" in error for error in errors)
+
+
+def test_executor_fanout_runs_once_per_item_and_aggregates():
+    invocations = []
+
+    def invoke(name, arguments):
+        invocations.append((name, arguments))
+        if name == "tokenop.list_platform_organizations":
+            return {"success": True, "data": {"organizations": [{"id": "1"}, {"id": "2"}]}}
+        return {"success": True, "data": {"amount": arguments["org_id"]}}
+
+    run = PlanExecutor(invoke, node_timeout=60).run(_fanout_plan(), {"goal": {}})
+
+    assert [outcome.status for outcome in run.outcomes] == ["ok", "ok"]
+    assert invocations[1:] == [
+        ("tokenop.get_platform_consumption_bill", {"org_id": "1"}),
+        ("tokenop.get_platform_consumption_bill", {"org_id": "2"}),
+    ]
+    data = run.outcomes[1].result["data"]
+    assert data["count"] == 2
+    assert data["failed"] == 0
+    assert data["items"] == [{"amount": "1"}, {"amount": "2"}]
+
+
+def test_executor_fanout_keeps_going_after_one_item_fails():
+    def invoke(name, arguments):
+        if name == "tokenop.list_platform_organizations":
+            return {"success": True, "data": {"organizations": [{"id": "1"}, {"id": "2"}]}}
+        if arguments["org_id"] == "1":
+            return {"success": False, "error": {"code": "BOOM", "message": "失败"}}
+        return {"success": True, "data": {"amount": "9"}}
+
+    run = PlanExecutor(invoke, node_timeout=60).run(_fanout_plan(), {"goal": {}})
+
+    outcome = run.outcomes[1]
+    assert outcome.status == "ok"
+    assert outcome.result["success"] is False
+    assert outcome.result["data"]["failed"] == 1
+    assert outcome.result["data"]["items"] == [None, {"amount": "9"}]
+
+
+def test_executor_fanout_fails_on_an_empty_array():
+    def invoke(name, arguments):
+        if name == "tokenop.list_platform_organizations":
+            return {"success": True, "data": {"organizations": []}}
+        raise AssertionError("fan-out must not run without items")
+
+    run = PlanExecutor(invoke, node_timeout=60).run(_fanout_plan(), {"goal": {}})
+
+    assert run.outcomes[1].status == "failed"
+    assert run.outcomes[1].error["code"] == "FOREACH_EMPTY"
+
+
+def test_executor_fanout_inlines_sandbox_references_per_item():
+    def invoke(name, arguments):
+        if name == "tokenop.list_platform_organizations":
+            return {"success": True, "data": {"organizations": [{"id": "1"}, {"id": "2"}]}}
+        return {
+            "success": True,
+            "data": {
+                "kind": "sandbox_json_file",
+                "sandbox_path": f"/workspace/{arguments['org_id']}.json",
+            },
+        }
+
+    def read_reference(payload):
+        return {"amount": payload["sandbox_path"]}
+
+    run = PlanExecutor(invoke, node_timeout=60, read_reference=read_reference).run(
+        _fanout_plan(), {"goal": {}}
+    )
+
+    assert run.outcomes[1].result["data"]["items"] == [
+        {"amount": "/workspace/1.json"},
+        {"amount": "/workspace/2.json"},
+    ]
+
+
+def test_synthesizer_keeps_every_fanout_item_visible():
+    from app.core.plan_synthesizer import _bounded_outcome_data
+
+    items = [{"name": f"org-{index}", "blob": "x" * 1200} for index in range(6)]
+    bounded = _bounded_outcome_data(
+        {"items": items, "count": 6, "failed": 1, "results": ["ignored"]},
+        3000,
+    )
+
+    assert bounded["count"] == 6
+    assert bounded["failed"] == 1
+    assert "results" not in bounded
+    assert len(bounded["items"]) == 6
+    assert all(len(item["blob"]) < 600 for item in bounded["items"])

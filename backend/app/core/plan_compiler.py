@@ -37,6 +37,7 @@ _FORBIDDEN_NODE_TOOLS = frozenset(
     }
 )
 _MAX_ANSWERS = 4000
+_BARE_REF = re.compile(r"^\$\{[^{}]+\}$")
 
 
 class PlanNode(BaseModel):
@@ -44,6 +45,9 @@ class PlanNode(BaseModel):
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
     deps: list[str] = Field(default_factory=list)
+    # Fan-out: one reference to an array; the node runs once per item and
+    # aggregates into data.items. "${item.field}" reads the current element.
+    foreach: str = ""
     purpose: str = ""
 
 
@@ -134,6 +138,14 @@ def validate_plan(
                 errors.append(f"节点 {node.id} 依赖了未定义或后置的节点：{dep}")
         roots: set[str] = set()
         _ref_roots(node.args, roots)
+        if node.foreach:
+            roots.discard("item")
+            roots.discard("index")
+            expression = node.foreach.strip()
+            if not _BARE_REF.match(expression):
+                errors.append(f"节点 {node.id} 的 foreach 必须是单个引用：{expression[:40]}")
+            else:
+                _ref_roots(expression, roots)
         for root in roots:
             if root != "goal" and root not in seen:
                 errors.append(f"节点 {node.id} 引用了未知节点：{root}")
@@ -141,6 +153,8 @@ def validate_plan(
     bad: list[str] = []
     for node in plan.nodes:
         _bad_refs(node.args, bad)
+        if node.foreach:
+            _bad_refs(node.foreach, bad)
     _bad_refs(plan.reply, bad)
     for expression in bad[:3]:
         errors.append(f"引用只能是 ${'{节点.字段}'} 形式，不能写表达式：{expression}")

@@ -28,7 +28,7 @@ class PlanSynthesizer:
         client_factory: Callable[[Any], LLMClient] = LLMClient,
         *,
         prompt_path: Path | None = None,
-        max_outcome_chars: int = 1500,
+        max_outcome_chars: int = 3000,
     ) -> None:
         self.client_factory = client_factory
         self.prompt_path = prompt_path or _PROMPT_PATH
@@ -62,7 +62,7 @@ class PlanSynthesizer:
                     "tool": outcome.tool,
                     "status": outcome.status,
                     "error": outcome.error,
-                    "data": _bounded_json(
+                    "data": _bounded_outcome_data(
                         (outcome.result or {}).get("data"),
                         self.max_outcome_chars,
                     ),
@@ -80,6 +80,37 @@ class PlanSynthesizer:
             return ""
         reply = data.get("reply")
         return reply.strip() if isinstance(reply, str) else ""
+
+
+_MAX_FANOUT_ITEMS = 20
+
+
+def _bounded_outcome_data(value: Any, max_chars: int) -> Any:
+    """Bound one node's data, keeping every fan-out item visible."""
+    if isinstance(value, dict) and isinstance(value.get("items"), list):
+        items = value["items"][:_MAX_FANOUT_ITEMS]
+        per_item = max(200, max_chars // max(1, len(items)))
+        return {
+            "count": value.get("count", len(items)),
+            "failed": value.get("failed"),
+            "items": [_shrink(item, per_item) for item in items],
+        }
+    return _bounded_json(value, max_chars)
+
+
+def _shrink(value: Any, budget: int) -> Any:
+    """Shorten strings/containers in place-ish so each item serializes compactly."""
+    budget = max(budget, 40)
+    if isinstance(value, str):
+        return value if len(value) <= budget else value[: max(1, budget - 1)] + "…"
+    if isinstance(value, dict):
+        share = max(40, budget // max(1, len(value)))
+        return {key: _shrink(item, share) for key, item in value.items()}
+    if isinstance(value, list):
+        items = value[:_MAX_FANOUT_ITEMS]
+        share = max(40, budget // max(1, len(items)))
+        return [_shrink(item, share) for item in items]
+    return value
 
 
 def _bounded_json(value: Any, max_chars: int) -> Any:

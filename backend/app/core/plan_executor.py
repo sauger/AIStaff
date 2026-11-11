@@ -62,6 +62,29 @@ class PlanRun:
         return sum(1 for item in self.outcomes if item.status == "ok")
 
 
+_MAX_FANOUT = 50
+
+
+def _as_items(value: Any) -> list[Any]:
+    """Coerce a resolved reference into the list a fan-out node iterates."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        for key in ("items", "organizations", "records", "rows", "results", "list"):
+            candidate = value.get(key)
+            if isinstance(candidate, list):
+                return candidate
+        for child in value.values():
+            if isinstance(child, list) and child and isinstance(child[0], (dict, list)):
+                return child
+            if isinstance(child, dict):
+                nested = _as_items(child)
+                if nested:
+                    return nested
+        return [value]
+    return []
+
+
 def _split_path(expression: str) -> list[str]:
     parts: list[str] = []
     token = ""
@@ -263,6 +286,8 @@ class PlanExecutor:
         return run
 
     def _run_node(self, node: PlanNode, scope: dict[str, Any]) -> NodeOutcome:
+        if node.foreach:
+            return self._run_fanout(node, scope)
         try:
             args = resolve_refs(dict(node.args or {}), scope)
         except ReferenceError as exc:
@@ -348,6 +373,152 @@ class PlanExecutor:
                 "tool": node.tool,
                 "status": outcome.status,
                 "duration_ms": outcome.duration_ms,
+            },
+        )
+        return outcome
+
+
+    def _run_fanout(self, node: PlanNode, scope: dict[str, Any]) -> NodeOutcome:
+        """Run one node once per item of ``node.foreach`` and aggregate results."""
+        try:
+            source = resolve_refs(node.foreach.strip(), scope)
+        except ReferenceError as exc:
+            return self._fanout_failure(node, "FOREACH_UNRESOLVED", str(exc))
+        items = _as_items(source)[: _MAX_FANOUT]
+        if not items:
+            return self._fanout_failure(
+                node, "FOREACH_EMPTY", "foreach 引用的数组为空，无法执行"
+            )
+        self._events(
+            "plan_node_started",
+            {"node_id": node.id, "tool": node.tool, "count": len(items)},
+        )
+        started = time.monotonic()
+        results: list[dict[str, Any]] = []
+        failed = 0
+        stopped = False
+        for index, item in enumerate(items):
+            if self._stopped():
+                stopped = True
+                break
+            item_scope = dict(scope)
+            item_scope["item"] = item
+            item_scope["index"] = index
+            try:
+                args = resolve_refs(dict(node.args or {}), item_scope)
+            except ReferenceError as exc:
+                results.append(
+                    {
+                        "index": index,
+                        "item": item,
+                        "success": False,
+                        "error": {"code": "REF_UNRESOLVED", "message": str(exc)},
+                    }
+                )
+                failed += 1
+                continue
+            try:
+                payload = self.invoke(node.tool, args)
+            except Exception as exc:  # noqa: BLE001 - tool boundary
+                results.append(
+                    {
+                        "index": index,
+                        "item": item,
+                        "success": False,
+                        "error": {"code": "TOOL_EXCEPTION", "message": str(exc)[:300]},
+                    }
+                )
+                failed += 1
+                continue
+            payload = payload if isinstance(payload, dict) else {"data": payload}
+            success = bool(payload.get("success", True))
+            if success and self.read_reference is not None:
+                payload = _materialize_reference(payload, self.read_reference)
+            if not success:
+                failed += 1
+            results.append(
+                {
+                    "index": index,
+                    "item": item,
+                    "success": success,
+                    "data": payload.get("data"),
+                    "error": payload.get("error"),
+                }
+            )
+        duration_ms = int((time.monotonic() - started) * 1000)
+        limit_ms = int(self.node_timeout * max(1, len(results)) * 1000)
+        if not results:
+            return self._fanout_failure(node, "PLAN_STOPPED", "已取消或超出本轮预算")
+        if failed >= len(results):
+            outcome = NodeOutcome(
+                node_id=node.id,
+                tool=node.tool,
+                status="failed",
+                error={
+                    "code": "FANOUT_ALL_FAILED",
+                    "message": f"{len(results)} 个元素全部失败",
+                    "failed": failed,
+                },
+                duration_ms=duration_ms,
+            )
+        elif self.node_timeout and limit_ms and duration_ms > limit_ms:
+            outcome = NodeOutcome(
+                node_id=node.id,
+                tool=node.tool,
+                status="failed",
+                error={
+                    "code": "PLAN_NODE_TIMEOUT",
+                    "message": (
+                        f"fan-out 耗时 {duration_ms}ms 超过 "
+                        f"{self.node_timeout}s × {len(results)} 预算"
+                    ),
+                },
+                duration_ms=duration_ms,
+            )
+        else:
+            outcome = NodeOutcome(
+                node_id=node.id,
+                tool=node.tool,
+                status="ok",
+                result={
+                    "success": failed == 0,
+                    "data": {
+                        "items": [item.get("data") for item in results],
+                        "results": results,
+                        "count": len(results),
+                        "failed": failed,
+                        "stopped_early": stopped,
+                    },
+                },
+                duration_ms=duration_ms,
+            )
+        self._events(
+            "plan_node_finished",
+            {
+                "node_id": node.id,
+                "tool": node.tool,
+                "status": outcome.status,
+                "duration_ms": outcome.duration_ms,
+                "count": len(results),
+                "failed": failed,
+            },
+        )
+        return outcome
+
+    def _fanout_failure(self, node: PlanNode, code: str, message: str) -> NodeOutcome:
+        outcome = NodeOutcome(
+            node_id=node.id,
+            tool=node.tool,
+            status="failed",
+            error={"code": code, "message": message},
+        )
+        self._events(
+            "plan_node_finished",
+            {
+                "node_id": node.id,
+                "tool": node.tool,
+                "status": outcome.status,
+                "error": outcome.error,
             },
         )
         return outcome
