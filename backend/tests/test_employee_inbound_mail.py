@@ -33,7 +33,7 @@ from app.db.models import (
     utc_now,
 )
 from app.mail.api import (
-    get_inbox,
+    get_inbox as web_get_inbox,
     get_mailbox_status,
     get_pending_owner,
     get_sent,
@@ -56,6 +56,20 @@ from app.mail.service import compose, get_mailbox, prompt_context, sync_all_mail
 from app.mail.transport import FetchedMessage, set_transport
 from app.security.encryption import decrypt_secret
 from app.session.session_schema import ChatTurnRequest, ChatTurnResponse, SessionPublic
+
+
+
+def poll_and_get_inbox(**kwargs):
+    from app.mail.inbound import pending_owner_count, triage_all_pending
+    from app.mail.service import message_read
+
+    listing = web_get_inbox(**kwargs)
+    triage_all_pending(kwargs["db"])
+    listing.messages = [message_read(kwargs["db"].get(EmployeeMailMessage, item.id),
+                                    include_body=False, can_teach=listing.can_send)
+                        for item in listing.messages]
+    listing.pending_owner_count = pending_owner_count(kwargs["db"], kwargs["tenant_id"], kwargs["agent_id"])
+    return listing
 
 
 def _inbox_message(**overrides) -> FetchedMessage:
@@ -191,7 +205,7 @@ def test_ae1_opted_in_skill_runs_and_sends(
     _patch_production_mail_send_loop(monkeypatch)
     _bind_skill(db, agent_a.id)
     transport.inbox = [_inbox_message()]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "skill"
     assert listing.messages[0].triage_label and "报销申请" in listing.messages[0].triage_label
     sent = get_sent(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
@@ -222,7 +236,7 @@ def test_ae2_skill_without_flag_is_not_selected(inbound_mail_db) -> None:
         },
     )
     transport.inbox = [_inbox_message()]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_skill_name == "报销申请"
     assert listing.messages[0].triage_disposition == "skill"
 
@@ -235,7 +249,7 @@ def test_ae3_no_opted_in_skills_asks_owner(inbound_mail_db) -> None:
         runtime_config_json={"inbound_match_hint": "供应商报销申请"},
     )
     transport.inbox = [_inbox_message()]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "ask_owner"
     assert listing.pending_owner_count == 1
 
@@ -261,7 +275,7 @@ def test_ae4_unmatched_notifies_via_bound_channel(inbound_mail_db) -> None:
     )
     db.commit()
     transport.inbox = [_inbox_message(subject="你好", body_text="请问一下", rfc_message_id="<ask@example.com>")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "ask_owner"
     notice = db.exec(select(ChannelDelivery).where(ChannelDelivery.kind == "mail_triage_notice")).first()
     assert notice is not None
@@ -294,7 +308,7 @@ def test_ae5_high_confidence_spam_is_ignored(inbound_mail_db) -> None:
             body_text="unsubscribe 点击领奖 viagra",
         )
     ]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "ignore"
     assert listing.messages[0].triage_reason
     assert db.exec(select(ChannelDelivery)).first() is None
@@ -321,7 +335,7 @@ def test_ae6_vague_mail_must_ask_owner(inbound_mail_db) -> None:
             body_text="你好，方便聊一下吗？",
         )
     ]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "ask_owner"
 
 
@@ -330,7 +344,7 @@ def test_ae7_two_matching_skills_ask_owner(inbound_mail_db) -> None:
     _bind_skill(db, agent_a.id, slug="reimburse-a", name="报销A")
     _bind_skill(db, agent_a.id, slug="reimburse-b", name="报销B")
     transport.inbox = [_inbox_message()]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "ask_owner"
     assert "都像" in (listing.messages[0].triage_reason or "")
     assert transport.sent == []
@@ -357,7 +371,7 @@ def test_ae8_channel_reply_teaches_ignore(inbound_mail_db) -> None:
     )
     db.commit()
     transport.inbox = [_inbox_message(subject="请问", body_text="方便吗")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     mail = listing.messages[0]
     db.add(
         ChannelDelivery(
@@ -400,7 +414,7 @@ def test_ae8_channel_reply_teaches_ignore(inbound_mail_db) -> None:
             body_text="还是我",
         )
     ]
-    second = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    second = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     ignored = next(item for item in second.messages if item.id != mail.id)
     assert ignored.triage_disposition == "ignore"
 
@@ -409,7 +423,7 @@ def test_ae9_console_teach_skill_and_rule_visible(inbound_mail_db) -> None:
     db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
     skill = _bind_skill(db, agent_a.id)
     transport.inbox = [_inbox_message(subject="请问", body_text="这是什么")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     mail = listing.messages[0]
     taught = teach_message(
         mail.id,
@@ -426,14 +440,14 @@ def test_ae9_console_teach_skill_and_rule_visible(inbound_mail_db) -> None:
     transport.inbox.append(
         _inbox_message(uid="3", rfc_message_id="<three@example.com>", subject="又一份", body_text="补充材料")
     )
-    later = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    later = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert any(item.triage_disposition == "skill" and item.id != mail.id for item in later.messages)
 
 
 def test_ae10_ask_again_keeps_asking(inbound_mail_db) -> None:
     db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
     transport.inbox = [_inbox_message(subject="请问", body_text="方便吗")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     mail = listing.messages[0]
     taught = teach_message(
         mail.id,
@@ -446,7 +460,7 @@ def test_ae10_ask_again_keeps_asking(inbound_mail_db) -> None:
     transport.inbox.append(
         _inbox_message(uid="4", rfc_message_id="<four@example.com>", subject="再问", body_text="还在吗")
     )
-    later = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    later = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert all(
         item.triage_disposition == "ask_owner"
         for item in later.messages
@@ -495,7 +509,7 @@ def test_ae12_smtp_failure_marks_failed_and_notifies(
     )
     db.commit()
     transport.inbox = [_inbox_message()]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "failed"
     assert listing.messages[0].triage_label == "失败"
     sent = get_sent(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
@@ -514,7 +528,7 @@ def test_ae13_disabled_mailbox_stops_fetch_send_triage(inbound_mail_db) -> None:
         agent_id=agent_a.id,
     )
     transport.inbox = [_inbox_message(uid="new", rfc_message_id="<new@example.com>")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages == []
     assert listing.mailbox_enabled is False
     assert transport.fetch_calls == []
@@ -530,8 +544,9 @@ def test_ae13_disabled_mailbox_stops_fetch_send_triage(inbound_mail_db) -> None:
 def test_ae14_disabled_mailbox_keeps_history_readable(inbound_mail_db) -> None:
     db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
     transport.inbox = [_inbox_message()]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     mail_id = listing.messages[0].id
+    read_message(mail_id, tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     _compose(db, owner, agent_a.id)
     set_mailbox_enabled_status(
         MailboxEnabledRequest(tenant_id="tenant_demo", enabled=False),
@@ -539,7 +554,7 @@ def test_ae14_disabled_mailbox_keeps_history_readable(inbound_mail_db) -> None:
         current_user=owner,
         agent_id=agent_a.id,
     )
-    inbox = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    inbox = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert any(item.id == mail_id for item in inbox.messages)
     detail = read_message(
         mail_id, tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner, mark_read=False
@@ -565,14 +580,14 @@ def test_ae15_enable_resumes_triage(inbound_mail_db) -> None:
         agent_id=agent_a.id,
     )
     transport.inbox = [_inbox_message()]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "skill"
 
 
 def test_ae16_no_channel_keeps_pending_and_does_not_ignore(inbound_mail_db) -> None:
     db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
     transport.inbox = [_inbox_message(subject="请问", body_text="帮忙看下")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "ask_owner"
     assert listing.messages[0].triage_notified is False
     pending = get_pending_owner(
@@ -584,7 +599,7 @@ def test_ae16_no_channel_keeps_pending_and_does_not_ignore(inbound_mail_db) -> N
 def test_ae17_admin_can_read_cannot_teach_or_disable(inbound_mail_db) -> None:
     db, _owner, _other, admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
     transport.inbox = [_inbox_message(subject="请问", body_text="帮忙看下")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=admin)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=admin)
     assert listing.messages[0].body_text == ""
     detail = read_message(
         listing.messages[0].id,
@@ -617,7 +632,7 @@ def test_ae18_copy_agent_drops_mailbox_rules_and_history(inbound_mail_db) -> Non
     db, owner, _other, _admin, agent_a, _agent_b, transport = _owner_setup(inbound_mail_db)
     _bind_skill(db, agent_a.id)
     transport.inbox = [_inbox_message(subject="请问", body_text="帮忙看下")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     teach_message(
         listing.messages[0].id,
         MailTeachRequest(tenant_id="tenant_demo", action="ignore"),
@@ -639,7 +654,7 @@ def test_ae18_copy_agent_drops_mailbox_rules_and_history(inbound_mail_db) -> Non
         tenant_id="tenant_demo", agent_id=copied.id, db=db, current_user=owner
     )
     assert status.configured is False
-    copied_inbox = get_inbox(tenant_id="tenant_demo", agent_id=copied.id, db=db, current_user=owner)
+    copied_inbox = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=copied.id, db=db, current_user=owner)
     assert copied_inbox.messages == []
     rules = db.exec(
         select(EmployeeMailTriageRule).where(EmployeeMailTriageRule.agent_id == copied.id)
@@ -653,7 +668,7 @@ def test_ae19_password_stays_out_of_prompt_and_notices(inbound_mail_db) -> None:
     assert mailbox is not None
     secret = decrypt_secret(mailbox.password_encrypted)
     transport.inbox = [_inbox_message(subject="请问", body_text="帮忙看下")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     prompt = prompt_context(db, "tenant_demo", agent_a.id)
     assert secret not in prompt
     assert secret not in str(listing.model_dump())
@@ -674,7 +689,7 @@ def test_ae20_inbox_stays_paginated(inbound_mail_db) -> None:
         )
         for index in range(25)
     ]
-    page = get_inbox(
+    page = poll_and_get_inbox(
         tenant_id="tenant_demo",
         agent_id=agent_a.id,
         db=db,
@@ -685,7 +700,7 @@ def test_ae20_inbox_stays_paginated(inbound_mail_db) -> None:
     assert page.page_size == 20
     assert len(page.messages) == 20
     assert page.total == 25
-    assert transport.fetch_calls[-1]["limit"] == 20
+    assert transport.header_calls[-1]["limit"] == 20
 
 
 def test_inbound_auto_complete_bypasses_skill_confirm_flag(inbound_mail_db) -> None:
@@ -747,8 +762,8 @@ def test_legacy_inbox_is_not_auto_triaged(inbound_mail_db) -> None:
     )
     db.add(legacy)
     db.commit()
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
-    row = next(item for item in listing.messages if item.id == legacy.id)
+    poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    row = db.get(EmployeeMailMessage, legacy.id)
     assert row.triage_disposition is None
     assert row.triage_state is None
     assert transport.sent == []
@@ -775,8 +790,8 @@ def test_stale_processing_is_reclaimed(inbound_mail_db) -> None:
     )
     db.add(stuck)
     db.commit()
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
-    row = next(item for item in listing.messages if item.id == stuck.id)
+    poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    row = db.get(EmployeeMailMessage, stuck.id)
     assert row.triage_disposition == "skill"
     assert row.triage_state == "done"
     assert transport.sent
@@ -806,7 +821,7 @@ def test_owner_notice_does_not_copy_group_chat_target(inbound_mail_db) -> None:
     )
     db.commit()
     transport.inbox = [_inbox_message(subject="请问", body_text="帮忙看下")]
-    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = poll_and_get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
     assert listing.messages[0].triage_disposition == "ask_owner"
     assert db.exec(select(ChannelDelivery)).first() is None
     pending = get_pending_owner(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -133,6 +133,11 @@ class FakeTransport:
     append_note: str | None = None
     fetch_calls: list[dict[str, int | None]] = field(default_factory=list)
     fetched_uids: list[str] = field(default_factory=list)
+    header_calls: list[dict] = field(default_factory=list)
+    header_uids: list[str] = field(default_factory=list)
+    body_calls: list[str] = field(default_factory=list)
+    detail_calls: list[str] = field(default_factory=list)
+    seen_uids: list[str] = field(default_factory=list)
 
     def probe_imap(self, mailbox: MailboxConnection) -> None:
         if self.imap_error:
@@ -157,7 +162,33 @@ class FakeTransport:
         self.fetched_uids.extend(item.uid for item in sliced)
         return InboxPage(messages=list(sliced), total=len(self.inbox))
 
+    def fetch_headers(self, mailbox, *, subject="", from_address="", offset=0, limit=20):
+        if self.imap_error:
+            raise self.imap_error
+        self.header_calls.append({"offset": offset, "limit": limit})
+        matches = [item for item in reversed(self.inbox)
+                   if subject.casefold() in item.subject.casefold()
+                   and from_address.casefold() in item.from_address.casefold()]
+        selected = matches[offset:offset + limit]
+        self.header_uids.extend(item.uid for item in selected)
+        return InboxPage([replace(item, body_text="", attachments=[], headers_only=True)
+                          for item in selected], total=len(matches))
+
+    def fetch_body(self, mailbox, uid):
+        if self.imap_error:
+            raise self.imap_error
+        self.body_calls.append(uid)
+        item = next((item for item in self.inbox if item.uid == uid), None)
+        return replace(item, attachments=[], headers_only=False) if item is not None else None
+
+    def fetch_message(self, mailbox, uid):
+        if self.imap_error:
+            raise self.imap_error
+        self.detail_calls.append(uid)
+        return next((item for item in self.inbox if item.uid == uid), None)
+
     def mark_seen(self, mailbox: MailboxConnection, uid: str) -> None:
+        self.seen_uids.append(uid)
         for item in self.inbox:
             if item.uid == uid:
                 item.unseen = False
@@ -691,8 +722,12 @@ def test_inbound_attachment_not_duplicated_on_resync(mail_db) -> None:
             ],
         )
     ]
+    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    read_message(listing.messages[0].id, tenant_id="tenant_demo", agent_id=agent_a.id,
+                 db=db, current_user=owner)
     get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
-    get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    read_message(listing.messages[0].id, tenant_id="tenant_demo", agent_id=agent_a.id,
+                 db=db, current_user=owner)
     inbound = list_folder(db, "tenant_demo", agent_a.id, MAIL_INBOUND_FOLDER, can_write=True)
     files = [item for item in inbound.entries if item.kind == "file"]
     assert [item.name for item in files] == ["询价.pdf"]
@@ -889,7 +924,9 @@ def test_copy_agent_does_not_copy_mailbox_or_mail_files(mail_db) -> None:
             attachments=[FetchedAttachment(filename="询价.pdf", content_type="application/pdf", data=b"pdf")],
         )
     ]
-    get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    listing = get_inbox(tenant_id="tenant_demo", agent_id=agent_a.id, db=db, current_user=owner)
+    read_message(listing.messages[0].id, tenant_id="tenant_demo", agent_id=agent_a.id,
+                 db=db, current_user=owner)
     _compose(db, owner, agent_a.id)
     copied = create_agent(
         AgentProfileCreateRequest(
@@ -1118,8 +1155,9 @@ def test_inbox_lists_one_page_instead_of_whole_mailbox(mail_db) -> None:
     assert listing.total == 25
     assert len(listing.messages) == 20
     assert listing.messages[0].subject == "询价 25"
-    assert transport.fetch_calls == [{"offset": 0, "limit": 20}]
-    assert transport.fetched_uids == [str(index) for index in range(25, 5, -1)]
+    assert transport.header_calls == [{"offset": 0, "limit": 20}]
+    assert transport.fetch_calls == []
+    assert transport.header_uids == [str(index) for index in range(25, 5, -1)]
     page_two = get_inbox(
         tenant_id="tenant_demo",
         agent_id=agent_a.id,
@@ -1131,7 +1169,7 @@ def test_inbox_lists_one_page_instead_of_whole_mailbox(mail_db) -> None:
     assert len(page_two.messages) == 5
     assert page_two.total == 25
     assert page_two.messages[-1].subject == "询价 1"
-    assert transport.fetch_calls[-1] == {"offset": 20, "limit": 20}
+    assert transport.header_calls[-1] == {"offset": 20, "limit": 20}
 
 
 def test_inbox_imap_failure_returns_cached_page_not_http_error(mail_db) -> None:
@@ -1188,3 +1226,121 @@ def test_sent_list_is_paginated_and_detail_includes_body(mail_db) -> None:
     )
     assert len(page_two.messages) == 5
     assert page_two.messages[-1].subject == "报价 0"
+
+
+def test_harness_search_downloads_only_the_selected_message(mail_db, monkeypatch):
+    from app.db.models import EmployeeCabinetEntry
+    from app.mail.service import get_message
+
+    db, (owner, _other, _admin, employee, _other_employee), transport = mail_db
+    _configure(db, owner, employee.id)
+    original = _inbox_item("101", "2026年9月嗨赫账单", minutes_ago=10)
+    original.attachments = [FetchedAttachment("original.xlsx", "application/octet-stream", b"original")]
+    correction = _inbox_item("102", "【更正】2026年9月嗨赫账单", minutes_ago=5)
+    correction.attachments = [FetchedAttachment("corrected.xlsx", "application/octet-stream", b"corrected")]
+    transport.inbox = [original, correction, _inbox_item("103", "无关邮件", minutes_ago=1)]
+    details = []
+    real_fetch = transport.fetch_message
+    monkeypatch.setattr(transport, "fetch_message", lambda mailbox, uid: (details.append(uid), real_fetch(mailbox, uid))[1])
+    invoker = SimpleNamespace(db=db, tenant_id="tenant_demo", agent_id=employee.id)
+    result = invoke_mail_tool(invoker, "mail_list", {"subject": "2026年9月嗨赫账单"})
+    assert result["success"] and result["data"]["total"] == 2
+    assert result["data"]["headers_only"] is True
+    assert transport.fetch_calls == []
+    assert details == []
+    assert db.exec(select(EmployeeCabinetEntry).where(EmployeeCabinetEntry.kind == "file")).all() == []
+    selected = next(m for m in result["data"]["messages"] if m["subject"] == original.subject)
+    row = get_message(db, "tenant_demo", employee.id, selected["id"])
+    assert details == ["101"]
+    assert row.body_text == original.body_text
+    assert row.attachments_json[0]["saved"] is True
+    files = db.exec(select(EmployeeCabinetEntry).where(EmployeeCabinetEntry.kind == "file")).all()
+    assert [f.name for f in files] == ["original.xlsx"]
+    # Header refreshes preserve hydrated content; a second read reuses the saved file.
+    invoke_mail_tool(invoker, "mail_list", {"subject": original.subject})
+    assert get_message(db, "tenant_demo", employee.id, row.id).body_text == original.body_text
+    assert details == ["101"]
+
+
+def test_header_detail_cannot_read_another_employee_or_reused_uid(mail_db):
+    from app.mail.service import get_message
+
+    db, (owner, _other, _admin, employee, other_employee), transport = mail_db
+    _configure(db, owner, employee.id)
+    item = _inbox_item("101", "账单", minutes_ago=1)
+    transport.inbox = [item]
+    result = invoke_mail_tool(SimpleNamespace(db=db, tenant_id="tenant_demo", agent_id=employee.id),
+                              "mail_list", {"subject": "账单"})
+    message_id = result["data"]["messages"][0]["id"]
+    with pytest.raises(MailError, match="找不到"):
+        get_message(db, "tenant_demo", other_employee.id, message_id)
+    transport.inbox = [replace(item, rfc_message_id="<changed@example.com>")]
+    with pytest.raises(MailError) as error:
+        get_message(db, "tenant_demo", employee.id, message_id)
+    assert error.value.code == "MAIL_UID_CHANGED"
+
+
+def test_batch_mail_read_checks_files_and_omits_unrequested_bodies(mail_db):
+    from app.core.harness_v2_engine import _single_task_reply
+    from app.core.task_request_compiler import TaskExecutionResult
+
+    db, (owner, _other, _admin, employee, _other_employee), transport = mail_db
+    _configure(db, owner, employee.id)
+    first = _inbox_item("201", "账单", minutes_ago=10)
+    first.attachments = [FetchedAttachment("original.xlsx", "application/octet-stream", b"version1")]
+    corrected = _inbox_item("202", "【更正】账单", minutes_ago=5)
+    corrected.attachments = [FetchedAttachment("corrected.xlsx", "application/octet-stream", b"version2")]
+    transport.inbox = [first, corrected]
+    invoker = SimpleNamespace(db=db, tenant_id="tenant_demo", agent_id=employee.id)
+    listing = invoke_mail_tool(invoker, "mail_list", {"subject": "账单"})
+    ids = [m["id"] for m in listing["data"]["messages"]]
+    result = invoke_mail_tool(invoker, "mail_read", {"message_ids": ids, "include_body": False})
+    assert result["success"] is True and result["data"]["all_attachments_verified"] is True
+    assert len(result["data"]["messages"]) == 2
+    for message in result["data"]["messages"]:
+        assert "body_text" not in message and message["body_included"] is False
+        assert message["attachments"][0]["verified"] is True
+        assert message["attachments"][0]["sha256"]
+    completion = TaskExecutionResult(task_frame_id="batch", status="completed",
+        reply_fragment="账单、【更正】账单已找到，original.xlsx 和 corrected.xlsx 已保存到邮件附件/收件。",
+        structured_result={"saved": True}, capability_results=[{
+            "tool_name": "mail_read", **result,
+        }])
+    assert _single_task_reply([completion]) == completion.reply_fragment
+    # A partial batch cannot assert successful download of every selected message.
+    partial = invoke_mail_tool(invoker, "mail_read", {"message_ids": [ids[0], "missing"]})
+    assert partial["success"] is False
+    assert len(partial["data"]["messages"]) == 1
+    assert partial["data"]["errors"] and partial["data"]["all_attachments_verified"] is False
+
+
+def test_mail_read_detects_missing_and_corrupt_saved_files(mail_db):
+    from app.cabinet.paths import storage_path
+
+    db, (owner, _other, _admin, employee, _other_employee), transport = mail_db
+    _configure(db, owner, employee.id)
+    item = _inbox_item("301", "账单", minutes_ago=1)
+    item.attachments = [FetchedAttachment("invoice.xlsx", "application/octet-stream", b"version1")]
+    transport.inbox = [item]
+    invoker = SimpleNamespace(db=db, tenant_id="tenant_demo", agent_id=employee.id)
+    message_id = invoke_mail_tool(invoker, "mail_list", {})["data"]["messages"][0]["id"]
+    read = invoke_mail_tool(invoker, "mail_read", {"message_id": message_id})
+    path = storage_path("tenant_demo", employee.id, read["data"]["attachments"][0]["cabinet_path"])
+    path.write_bytes(b"version2")  # Same size, different checksum.
+    read = invoke_mail_tool(invoker, "mail_read", {"message_id": message_id})
+    assert read["data"]["all_attachments_verified"] is False
+    assert read["data"]["attachments"][0]["saved"] is False
+    path.unlink()
+    read = invoke_mail_tool(invoker, "mail_read", {"message_id": message_id})
+    assert read["data"]["all_attachments_verified"] is False
+
+
+@pytest.mark.parametrize("arguments", [
+    {"message_ids": []}, {"message_ids": ["same", "same"]},
+    {"message_ids": ["a"], "message_id": "b"}, {"message_ids": list(map(str, range(9)))},
+    {"message_ids": [None]}, {"message_id": 42}, {"message_id": "a", "include_body": "false"},
+])
+def test_batch_mail_read_rejects_invalid_arguments(arguments):
+    result = invoke_mail_tool(SimpleNamespace(db=None, tenant_id="tenant_demo", agent_id="employee"),
+                              "mail_read", arguments)
+    assert result["success"] is False
