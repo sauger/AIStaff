@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 from app.channels.adapters.wecom import WECOM_API_BASE
 from app.channels.crypto import encrypt_channel_secret
 from app.config import get_settings
+from app.channels.service_identity import sync_wecom_corp_id_to_bindings
 from app.db.models import WecomApp, utc_now
 from app.wecom_oa.credentials import (
     WecomOaCredentialError,
@@ -129,6 +130,10 @@ def create_wecom_app(
     )
     db.add(row)
     _commit_unique(db, row)
+    try:
+        sync_wecom_corp_id_to_bindings(db, tenant_id=tenant_id, corp_id=corp_id)
+    except Exception:  # noqa: BLE001 - app create already committed; sync is best-effort
+        logger.exception("sync wecom corp_id to bindings failed tenant=%s", tenant_id)
     return row
 
 
@@ -181,6 +186,15 @@ def update_wecom_app(
     row.updated_at = utc_now()
     db.add(row)
     _commit_unique(db, row)
+    if "corp_id" in fields:
+        try:
+            sync_wecom_corp_id_to_bindings(
+                db, tenant_id=row.tenant_id, corp_id=row.corp_id
+            )
+        except Exception:  # noqa: BLE001 - app update already committed; sync is best-effort
+            logger.exception(
+                "sync wecom corp_id to bindings failed tenant=%s", row.tenant_id
+            )
     return row
 
 

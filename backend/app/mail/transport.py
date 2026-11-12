@@ -4,7 +4,7 @@ import imaplib
 import smtplib
 import ssl
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid, parsedate_to_datetime
 from typing import Protocol
@@ -410,6 +410,7 @@ def _address_list(value: object) -> list[str]:
 
 
 def _parse_date(value: object) -> datetime | None:
+    """Normalize mail Date headers to timezone-aware UTC for SQLModel storage."""
     raw = str(value or "").strip()
     if not raw:
         return None
@@ -417,9 +418,9 @@ def _parse_date(value: object) -> datetime | None:
         parsed = parsedate_to_datetime(raw)
     except (TypeError, ValueError, IndexError):
         return None
-    if parsed.tzinfo is not None:
-        return parsed.replace(tzinfo=None)
-    return parsed
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _imap_connect(mailbox: MailboxConnection) -> imaplib.IMAP4:

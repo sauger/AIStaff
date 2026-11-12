@@ -723,11 +723,35 @@ def test_wecom_credentials_accepts_corp_id_and_meta_lists_it(monkeypatch) -> Non
         config = db.get(ChannelBinding, binding_id).config_json
         assert config["corp_id"] == "corpA"
 
+    # 企业 ID 改在企微应用配置；机器人凭证 meta 不再要求 corp_id
     meta = client.get("/api/enterprise/channels/meta?tenant_id=tenant_demo", headers=headers)
     wecom = next(item for item in meta.json() if item["channel"] == "wecom")
-    fields = {field["key"]: field for field in wecom["credential_fields"]}
-    assert fields["corp_id"]["optional"] is False
-    assert fields["corp_id"]["secret"] is False
+    field_keys = {field["key"] for field in wecom["credential_fields"]}
+    assert field_keys == {"bot_id", "secret"}
+
+    # 不传 corp_id 也可激活
+    binding_id2 = _seed_wecom_binding(engine, bot_id="aib_bot2", agent_id="agent_2")
+    with Session(engine) as db:
+        binding = db.get(ChannelBinding, binding_id2)
+        binding.status = "pending"
+        binding.credentials_enc = None
+        binding.config_json = {}
+        db.add(binding)
+        db.commit()
+    response2 = client.post(
+        f"/api/enterprise/channels/{binding_id2}/wecom/credentials",
+        json={
+            "tenant_id": "tenant_demo",
+            "bot_id": "aib_bot2",
+            "secret": "bot_secret",
+        },
+        headers=headers,
+    )
+    assert response2.status_code == 200
+    with Session(engine) as db:
+        binding = db.get(ChannelBinding, binding_id2)
+        assert "corp_id" not in (binding.config_json or {})
+        assert binding.identity_scope_key == "aib_bot2"
 
 
 # ---------- scope 变化连续性迁移 ----------
@@ -974,11 +998,11 @@ def test_scope_migration_roundtrip_and_noop(monkeypatch) -> None:
             "wecom:corp:5:corpA:bot:8:aib_bot1"
         )
 
-    # ② 显式空串去掉 corp_id:跨企业变更,400 拦截且数据零变化
+    # ② 显式空串：视为未提供，保留已有 corp_id（企业 ID 主配置在企微应用）
     cleared = client.post(url, json={"tenant_id": "tenant_demo", "bot_id": "aib_bot1", "secret": "s2", "corp_id": ""}, headers=headers)
-    assert cleared.status_code == 400
-    assert "corp_id" in cleared.json()["detail"]
+    assert cleared.status_code == 200
     with Session(engine) as db:
+        assert db.get(ChannelBinding, binding_id).config_json["corp_id"] == "corpA"
         assert db.exec(select(ChannelIdentity)).one().external_account_scope == "corpA"
         assert db.get(ChatSession, "s_scope").external_conv_id == "wecom_corpA_p2p_zhangsan"
 
@@ -1272,13 +1296,13 @@ def test_corp_id_read_and_reconfig_keeps_unless_explicit(monkeypatch) -> None:
     with Session(engine) as db:
         assert db.get(ChannelBinding, binding_id).config_json["corp_id"] == "corpA"
 
-    # 显式传空串想清除:属于跨企业变更,400 拦截,corpA 保留(与本轮禁止迁移语义一致)
+    # 显式传空串:视为未提供,corpA 保留
     cleared = client.post(
         url,
         json={"tenant_id": "tenant_demo", "bot_id": "aib_bot1", "secret": "s3", "corp_id": ""},
         headers=headers,
     )
-    assert cleared.status_code == 400
+    assert cleared.status_code == 200
     with Session(engine) as db:
         assert db.get(ChannelBinding, binding_id).config_json["corp_id"] == "corpA"
 
