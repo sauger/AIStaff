@@ -24,6 +24,7 @@ from app.db import get_session
 from app.db.database import migrate_wecom_apps
 from app.db.models import (
     AgentProfile,
+    ChannelBinding,
     Tenant,
     User,
     WecomApp,
@@ -789,3 +790,54 @@ def test_callback_paths_use_app_token_and_legacy_default_only(caplog):
         content=f"<xml><Encrypt>{other_cipher}</Encrypt></xml>",
     )
     assert disabled.status_code == 404
+
+def test_create_wecom_app_syncs_corp_id_onto_bindings():
+    """企微应用保存企业 ID 后，同步到同租户尚无 corp_id 的 wecom 绑定。"""
+    engine = _engine()
+    with Session(engine) as db:
+        _admin, _member = _users(db)
+        db.add(AgentProfile(id="agent_1", tenant_id="t1", name="客服", metadata_json={}))
+        db.add(AgentProfile(id="agent_2", tenant_id="t1", name="人事", metadata_json={}))
+        bare = ChannelBinding(
+            tenant_id="t1",
+            agent_id="agent_1",
+            channel="wecom",
+            status="active",
+            config_json={"bot_id": "aib_bot1"},
+            external_account_key="wecom:bot:aib_bot1",
+            identity_scope_key="aib_bot1",
+        )
+        db.add(bare)
+        db.add(
+            ChannelBinding(
+                id="chan_keep",
+                tenant_id="t1",
+                agent_id="agent_2",
+                channel="wecom",
+                status="active",
+                config_json={"bot_id": "aib_bot2", "corp_id": "ww_keep"},
+                external_account_key="wecom:corp:6:ww_keep:bot:8:aib_bot2",
+                identity_scope_key="ww_keep",
+            )
+        )
+        db.commit()
+        bare_id = bare.id
+
+    with Session(engine) as db:
+        create_wecom_app(
+            db,
+            tenant_id="t1",
+            name="审批",
+            corp_id="ww_synced",
+            agentid="100",
+            secret="secret-value",
+        )
+
+    with Session(engine) as db:
+        bare = db.get(ChannelBinding, bare_id)
+        assert bare.config_json["corp_id"] == "ww_synced"
+        assert bare.identity_scope_key == "ww_synced"
+        assert bare.external_account_key == "wecom:corp:9:ww_synced:bot:8:aib_bot1"
+        kept = db.get(ChannelBinding, "chan_keep")
+        assert kept.config_json["corp_id"] == "ww_keep"
+

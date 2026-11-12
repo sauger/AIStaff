@@ -224,13 +224,6 @@ CHANNEL_META = [
         "credential_fields": [
             {"key": "bot_id", "label": "机器人 ID", "placeholder": "企业微信后台获取", "secret": False},
             {"key": "secret", "label": "机器人 Secret", "placeholder": None, "secret": True},
-            {
-                "key": "corp_id",
-                "label": "企业 ID",
-                "placeholder": "管理后台-我的企业-企业信息",
-                "secret": False,
-                "optional": False,
-            },
         ],
         "capabilities": ["file"],
     },
@@ -1355,9 +1348,9 @@ def save_wecom_credentials(
         raise HTTPException(status_code=400, detail="该绑定不是企业微信渠道")
     bot_id = request.bot_id.strip()
     secret = request.secret.strip()
-    corp_id = request.corp_id.strip()
-    if not bot_id or not secret or not corp_id:
-        raise HTTPException(status_code=400, detail="corp_id、bot_id 与 secret 均不能为空")
+    requested_corp_id = str(request.corp_id or "").strip()
+    if not bot_id or not secret:
+        raise HTTPException(status_code=400, detail="bot_id 与 secret 均不能为空")
     db.rollback()
     with binding_lifecycle_lock(binding_id):
         binding = _get_binding(db, request.tenant_id, binding_id)
@@ -1369,7 +1362,9 @@ def save_wecom_credentials(
         old_corp_id = str(old_config.get("corp_id") or "").strip()
         old_scope = scope_from_config(old_config, binding)
         old_account_key = binding.external_account_key or external_account_key(channel, old_config)
-        if old_corp_id and old_corp_id != corp_id:
+        # 企业 ID 主配置在企微应用；此处仅保留已有值，或接受显式补填，不允许改企业。
+        corp_id = requested_corp_id or old_corp_id
+        if old_corp_id and requested_corp_id and old_corp_id != requested_corp_id:
             raise HTTPException(
                 status_code=400,
                 detail="企业变更不允许直接修改，请删除后重新创建绑定",
@@ -1383,10 +1378,13 @@ def save_wecom_credentials(
         config.update(
             {
                 "bot_id": bot_id,
-                "corp_id": corp_id,
                 "bound_at": utc_now().isoformat(),
             }
         )
+        if corp_id:
+            config["corp_id"] = corp_id
+        else:
+            config.pop("corp_id", None)
         account_key = external_account_key(binding.channel, config)
         if not account_key:
             raise HTTPException(status_code=400, detail="机器人 ID 无效")
@@ -1410,13 +1408,13 @@ def save_wecom_credentials(
             binding.credentials_enc = encrypt_channel_secret(secret)
             binding.config_json = config
             binding.external_account_key = account_key
-            binding.identity_scope_key = corp_id
+            binding.identity_scope_key = corp_id or bot_id
             binding.config_revision += 1
             binding.status = "active"
             binding.connected = False
             binding.updated_at = utc_now()
             db.add(binding)
-            if old_bot_id and not old_corp_id and old_scope != corp_id:
+            if corp_id and old_bot_id and not old_corp_id and old_scope != corp_id:
                 migrate_scope_for_binding(db, binding, old_scope, corp_id)
                 migrate_binding_session_account_key(
                     db,

@@ -71,7 +71,7 @@ def external_account_key(channel: str, config: dict) -> str | None:
         bot_id = str(config.get("bot_id") or "").strip()
         if corp_id and bot_id:
             return f"wecom:corp:{len(corp_id)}:{corp_id}:bot:{len(bot_id)}:{bot_id}"
-        # 仅兼容尚未补企业 ID 的存量 PR 数据；新激活必须提供 corp_id。
+        # 企业 ID 改在企微应用配置；机器人可先按 bot_id 接入，后续再同步 corp_id。
         return f"wecom:bot:{bot_id}" if bot_id else None
     if channel == "wechat":
         bot_id = str(config.get("ilink_bot_id") or "").strip()
@@ -563,3 +563,53 @@ def migrate_scope_for_binding(
             stats["conv_states"] += 1
 
     return stats
+
+
+def sync_wecom_corp_id_to_bindings(db: Session, *, tenant_id: str, corp_id: str) -> int:
+    """把企微应用上的企业 ID 同步到同租户尚无 corp_id 的 wecom 渠道绑定。
+
+    只补空，不覆盖已有企业；首次补填时做 bot→corp 的 scope / account_key 迁移。
+    """
+    corp_id = str(corp_id or "").strip()
+    if not corp_id:
+        return 0
+    from app.channels.service_session import migrate_binding_session_account_key
+
+    bindings = db.exec(
+        select(ChannelBinding).where(
+            ChannelBinding.tenant_id == tenant_id,
+            ChannelBinding.channel == "wecom",
+        )
+    ).all()
+    updated = 0
+    for binding in bindings:
+        config = dict(binding.config_json or {})
+        existing = str(config.get("corp_id") or "").strip()
+        if existing:
+            continue
+        bot_id = str(config.get("bot_id") or "").strip()
+        old_scope = scope_from_config(config, binding)
+        old_account_key = binding.external_account_key or external_account_key(
+            "wecom", config
+        )
+        config["corp_id"] = corp_id
+        new_account_key = external_account_key("wecom", config)
+        binding.config_json = config
+        binding.identity_scope_key = corp_id
+        if new_account_key:
+            binding.external_account_key = new_account_key
+        binding.updated_at = utc_now()
+        db.add(binding)
+        if bot_id and old_scope != corp_id:
+            migrate_scope_for_binding(db, binding, old_scope, corp_id)
+            if old_account_key and new_account_key:
+                migrate_binding_session_account_key(
+                    db,
+                    binding.id,
+                    old_account_key,
+                    new_account_key,
+                )
+        updated += 1
+    if updated:
+        db.commit()
+    return updated

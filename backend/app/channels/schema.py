@@ -147,8 +147,8 @@ class WeComCredentialsRequest(BaseModel):
     tenant_id: str
     bot_id: str
     secret: str
-    # 企业 ID 是企微 userid 的真实唯一边界,首次激活即必须提供
-    corp_id: str
+    # 可选。企业 ID 改在「企微应用 / OA 审批」配置；机器人长连接只需要 bot_id+secret。
+    corp_id: Optional[str] = None
 
 
 class WeChatKfCredentialsRequest(BaseModel):

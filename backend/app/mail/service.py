@@ -1072,6 +1072,12 @@ def _empty_reason(
 
 
 def _store_mailbox_error(db: Session, mailbox: EmployeeMailbox, message: str) -> None:
+    # Sync failures often leave the session in a rolled-back flush; clear it first
+    # so last_error can still be persisted for the inbox empty-state copy.
+    try:
+        db.rollback()
+    except Exception:  # noqa: BLE001 - best-effort recovery before writing last_error
+        pass
     mailbox.last_error = message
     mailbox.updated_at = utc_now()
     db.add(mailbox)

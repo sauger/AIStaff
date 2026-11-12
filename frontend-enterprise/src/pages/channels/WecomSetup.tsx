@@ -16,7 +16,6 @@ const OUTLINE_BUTTON_CLASS =
 const DEFAULT_FIELDS: ChannelCredentialFieldRead[] = [
   { key: 'bot_id', label: '机器人 ID' },
   { key: 'secret', label: '机器人 Secret', secret: true },
-  { key: 'corp_id', label: '企业 ID' },
 ];
 
 export default function WecomSetup({
@@ -86,7 +85,6 @@ export default function WecomSetup({
           onClick={() => {
             setValues({
               bot_id: configuredBotId,
-              ...(configuredCorpId ? { corp_id: configuredCorpId } : {}),
             });
             setEditing(true);
           }}
@@ -101,8 +99,11 @@ export default function WecomSetup({
   return (
     <div className="flex flex-col gap-[12px] rounded-[10px] bg-[#fafbfc] p-[16px]">
       <span className="text-[12px] leading-[1.6] text-[#858b9c]">
-        凭证获取路径：企业微信管理后台 → 智能机器人。
+        凭证获取路径：企业微信管理后台 → 智能机器人。企业 ID 请在「企微应用」中配置，机器人接入无需再填。
       </span>
+      {configuredCorpId && (
+        <span className="text-[12px] text-[#858b9c]">{`当前企业 ID：${configuredCorpId}（来自企微应用同步）`}</span>
+      )}
       {fields.map((field) => (
         <label key={field.key} className="flex flex-col gap-[6px] text-[12px] text-[#464c5e]">
           {field.label}
@@ -116,11 +117,6 @@ export default function WecomSetup({
             }
             className="h-8 rounded-[10px] text-[12px]"
           />
-          {field.key === 'corp_id' && (
-            <span className="text-[11px] leading-[1.5] text-[#a0a6b8]">
-              企业身份隔离的必要字段，激活后不可在原绑定上修改
-            </span>
-          )}
         </label>
       ))}
       <div className="flex justify-end gap-[8px]">
