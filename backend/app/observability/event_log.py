@@ -46,4 +46,14 @@ class EventLog:
                 self._event_sink(event_type, traced_payload)
             except Exception:
                 logger.exception("event_sink 调用失败 event_type=%s", event_type)
+        from app.core.execution_feedback import execution_feedback
+
+        feedback = execution_feedback(event_type, traced_payload)
+        if feedback is not None:
+            progress_payload = {
+                key: traced_payload[key]
+                for key in ("turn_id", "user_message_id", "client_turn_id", "task_frame_id", "message_visibility")
+                if key in traced_payload
+            }
+            self.record(tenant_id, session_id, "execution_progress", {**progress_payload, **feedback})
         return event

@@ -3806,6 +3806,14 @@ def _event_trace_line(
     tool_names: dict[str, str] | None = None,
 ) -> dict | list[dict] | None:
     payload = event.payload_json or {}
+    if event.event_type == "execution_progress":
+        payload = event.payload_json or {}
+        return {
+            "id": "execution_progress",
+            "kind": "decision",
+            "text": str(payload.get("text") or "正在处理…"),
+            "state": "failed" if payload.get("state") == "failed" else "running",
+        }
     if event.event_type in {
         "task_frame_started",
         "task_frame_finished",

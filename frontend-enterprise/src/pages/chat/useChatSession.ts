@@ -2128,6 +2128,14 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     };
     if (item.event === 'session_created') return;
     if (item.event === 'heartbeat') return;
+    if (item.event === 'execution_progress') {
+      const text = typeof item.data.text === 'string' ? item.data.text : '正在处理…';
+      upsertVisibleTraceLine({
+        id: 'execution_progress', kind: 'decision', text,
+        state: item.data.state === 'failed' ? 'failed' : 'running', icon: 'loading',
+      });
+      return;
+    }
     if (item.event === 'session_title_summarized') {
       applySessionTitleSummary(eventSessionId, item.data.title);
       return;

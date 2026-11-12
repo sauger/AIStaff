@@ -334,16 +334,15 @@ class WeComStreamReply:
         body = frame.get("body") if isinstance(frame, dict) else None
         self._is_group = bool((body or {}).get("chatid"))
         self._condition = threading.Condition()
-        self._progress: list[tuple[str, str]] = [("status", "📖 正在思考…")]
+        self._progress: list[tuple[str, str]] = [("status", "⏳ 正在思考…")]
         self._answer = ""
         self._answer_started = False
         self._dirty = False
         self._finished = False
         self._failed = False
         self._animation_frame = 0
-        # Mobile group chats can jump when a stream message is re-laid out.
-        # Keep group progress event-driven and single-line; direct chats retain
-        # the existing animated progress behavior.
+        # Keep one persistent status row throughout the turn. Direct chats
+        # animate its hourglass in place; groups remain event driven.
         self._animation_enabled = not self._is_group
         self._processing_key: str | None = None
         self._last_progress_sent = ""
@@ -373,7 +372,10 @@ class WeComStreamReply:
             if self._finished or self._failed:
                 return
             self._answer += delta
+            if not self._answer_started:
+                self._progress = [("status", "⏳ 正在生成回复…")]
             self._answer_started = True
+            self._processing_key = None
             self._animation_enabled = False
             self._dirty = True
             self._condition.notify_all()
@@ -383,34 +385,30 @@ class WeComStreamReply:
         progress = self._event_progress(event_type, payload)
         if not progress:
             return
-        key, message = progress
+        _key, message = progress
         with self._condition:
             if self._finished or self._failed:
                 return
-            if self._is_group and self._answer_started:
+            if self._answer_started:
                 return
-            self._animation_enabled = False
-            if self._is_group:
-                # Group-chat mobile clients are sensitive to changing message
-                # height. Replace one status line instead of growing history.
-                self._progress = [("status", message)]
-                self._processing_key = None
-                self._dirty = True
-                self._condition.notify_all()
+            # Replacing the same row avoids shrinking on intent detection and
+            # growing again when tool/task events arrive.
+            if self._progress == [("status", message)]:
                 return
-            if key == "intent":
-                self._progress = [item for item in self._progress if item[0] != "status"]
-            if key in {"skill", "step", "task", "tool", "knowledge"} and message.startswith("⏳"):
-                self._processing_key = key
-                self._animation_enabled = True
-            elif key in {"status", "intent"} or message.startswith(("✅", "❌", "📖")):
-                self._processing_key = None
-            self._upsert_progress(key, message)
+            self._progress = [("status", message)]
+            self._processing_key = "status" if message.startswith("⏳") else None
+            self._animation_enabled = bool(self._processing_key) and not self._is_group
             self._dirty = True
             self._condition.notify_all()
 
     def _event_progress(self, event_type: str, payload: dict[str, Any]) -> tuple[str, str] | None:
         """Render the same high-level milestones shown by the Feishu trace UI."""
+        if event_type == "execution_progress":
+            text = str(payload.get("text") or "").strip()
+            if not text:
+                return None
+            prefix = "❌" if payload.get("state") == "failed" else "⏳"
+            return "task", f"{prefix} {text}"
         if event_type == "router_decision_created":
             intent = str(payload.get("user_intent") or payload.get("intent") or "").strip()
             return "intent", f"✅ 已判断意图：{intent}" if intent else "⏳ 判断意图…"
@@ -485,7 +483,7 @@ class WeComStreamReply:
                 self._finished = True
                 self._condition.notify_all()
                 return False
-            self._upsert_progress("status", "✅ 流程已结束")
+            self._progress = [("status", "✅ 本轮处理结束")]
             self._finished = True
             self._animation_enabled = False
             self._processing_key = None
@@ -506,7 +504,7 @@ class WeComStreamReply:
         while True:
             with self._condition:
                 while not self._dirty and not self._finished:
-                    self._condition.wait(timeout=WECOM_STREAM_MIN_INTERVAL_SECONDS)
+                    self._condition.wait(timeout=1.5)
                     if not self._dirty and not self._finished and self._animation_enabled:
                         self._animation_frame += 1
                         if self._processing_key:
@@ -523,7 +521,7 @@ class WeComStreamReply:
                         elif not self._answer:
                             self._upsert_progress(
                                 "status",
-                                f"{WECOM_PROGRESS_FRAMES[self._animation_frame % len(WECOM_PROGRESS_FRAMES)]} 正在思考…",
+                                f"{WECOM_PROCESSING_FRAMES[self._animation_frame % 2]} 正在思考…",
                             )
                         self._dirty = True
                 if not self._dirty and not self._finished:
@@ -588,10 +586,23 @@ class WeComStreamReply:
             return self._render_progress_unlocked()
 
     def _render_progress_unlocked(self) -> str:
-        return "\n\n".join(message for _key, message in self._progress)
+        import unicodedata
+
+        # Bound display width as well as line count so long names/intents do
+        # not turn the compact status into multiple lines on typical clients.
+        text = " ".join(self._progress[-1][1].split()) if self._progress else ""
+        compact = ""
+        width = 0
+        for char in text:
+            char_width = 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+            if width + char_width > 30:
+                return compact + "…"
+            compact += char
+            width += char_width
+        return compact
 
     def _render_content_unlocked(self) -> str:
-        progress = "\n\n".join(message for _key, message in self._progress)
+        progress = self._render_progress_unlocked()
         answer = self._answer.strip()
         return f"{progress}\n\n---\n\n{answer}" if answer else progress
 

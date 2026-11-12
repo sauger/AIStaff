@@ -695,7 +695,7 @@ def test_stream_reply_updates_one_stream_and_finishes() -> None:
     assert client.sent
     assert client.sent[-2][1] == {
         "stream_id": "staffdeck:binding-1:incoming-1:progress",
-        "content": "✅ 流程已结束",
+        "content": "✅ 本轮处理结束",
         "finish": True,
     }
     assert client.sent[-1][1] == {
@@ -756,6 +756,7 @@ def test_stream_reply_renders_safe_progress_events() -> None:
     )
     try:
         reply.on_event("capability_started", {"tool_display_name": "查询订单"})
+        assert _wait_for(lambda: any("查询订单" in item[1]["content"] for item in client.sent))
         reply.on_delta("结果已整理")
         assert reply.finish() is True
     finally:
@@ -824,7 +825,7 @@ def test_group_stream_reply_keeps_one_event_driven_progress_line() -> None:
 
         reply.on_delta("结果已整理")
         reply.on_event("tool_call_started", {"name": "查询订单"})
-        assert reply._progress == [("status", "⏳ 正在处理：核对订单信息…")]
+        assert reply._progress == [("status", "⏳ 正在生成回复…")]
         assert reply._render_content().endswith("结果已整理")
     finally:
         reply.abort()
@@ -2270,3 +2271,41 @@ def test_disconnect_timeout_not_fired_before_threshold() -> None:
     with Session(engine) as db:
         assert db.exec(select(ChannelDelivery)).all() == []
         assert "disconnect_alerted_at" not in (db.get(ChannelBinding, binding_id).config_json or {})
+
+
+def test_wecom_busy_session_waits_without_rerunning_agent_and_then_resumes():
+    from datetime import timedelta
+
+    from sqlalchemy import delete
+
+    from app.channels.session_queue import WAITING_SESSION_KEY
+    from app.db.models import AgentEvent, HarnessSessionLeaseRecord
+
+    engine = _test_engine()
+    binding_id = _seed_wecom_binding(engine)
+    binding = _load_binding(engine, binding_id)
+    assert process_inbound(binding, normalize_wecom_frame(_text_frame(msgid="seed-session")), db_engine=engine)
+    session_id = RecordingAgentLoop.calls[-1].session_id
+    RecordingAgentLoop.calls = []
+    with Session(engine) as db:
+        db.add(HarnessSessionLeaseRecord(
+            tenant_id=binding.tenant_id, session_id=session_id, lease_owner="different-worker",
+            lease_expires_at=utc_now() + timedelta(minutes=15),
+        ))
+        db.commit()
+    assert process_inbound(binding, normalize_wecom_frame(_text_frame(msgid="waiting-message")), db_engine=engine) is False
+    with Session(engine) as db:
+        event = db.exec(select(ChannelInboundEvent).where(ChannelInboundEvent.event_id == "waiting-message")).one()
+        event_id = event.id
+        assert event.status == "received" and event.target_json[WAITING_SESSION_KEY] == session_id
+    for _ in range(50):
+        intake_module.run_staged_inbound_daemon(once=True, db_engine=engine)
+    assert RecordingAgentLoop.calls == []
+    with Session(engine) as db:
+        assert db.exec(select(AgentEvent).where(AgentEvent.event_type == "turn_rejected")).all() == []
+        db.exec(delete(HarnessSessionLeaseRecord)); db.commit()
+    intake_module.run_staged_inbound_daemon(once=True, db_engine=engine)
+    intake_module.run_staged_inbound_daemon(once=True, db_engine=engine)
+    assert len(RecordingAgentLoop.calls) == 1
+    with Session(engine) as db:
+        assert db.get(ChannelInboundEvent, event_id).status == "done"
