@@ -1371,7 +1371,7 @@ export function stepResultTraceLine(data: Record<string, unknown>): TraceLine {
 export function mergeTraceLine(existing: TraceLine, incoming: TraceLine): TraceLine {
   const keepExistingContent = incoming.provisional === true && existing.provisional !== true;
   const nextState =
-    existing.state !== 'running' && incoming.state === 'running'
+    incoming.id !== 'execution_progress' && existing.state !== 'running' && incoming.state === 'running'
       ? existing.state
       : incoming.state;
   const startedAt =
@@ -1739,7 +1739,7 @@ export function generalSkillTraceOutput(data: Record<string, unknown>, phase: st
 }
 
 export function traceLineAllowed(line: TraceLine, config: UIConfigRead): boolean {
-  if (line.state === 'failed') return true;
+  if (line.id === 'execution_progress' || line.state === 'failed') return true;
   if (line.kind === 'thinking' || line.kind === 'decision') return config.show_thinking_trace;
   if (line.kind === 'code') return config.show_thinking_trace;
   if (line.kind === 'skill') return config.show_skill_trace;
@@ -1754,6 +1754,8 @@ export function traceSummary(trace: TurnTrace, lines: TraceLine[]): { text: stri
     }
     return { text: '执行记录', state: 'completed' };
   }
+  const progress = lines.find((line) => line.id === 'execution_progress');
+  if (progress) return { text: progress.text, state: progress.state };
   if (lines.some((line) => line.state === 'running')) {
     return { text: '执行记录', state: 'running' };
   }

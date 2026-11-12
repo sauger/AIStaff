@@ -70,6 +70,8 @@ class HarnessTaskAgent:
         step_timeout_seconds: int | None = None,
         checkpoint: dict[str, Any] | None = None,
     ) -> TaskExecutionResult:
+        from app.core.harness_progress import ExecutionProgress
+
         max_actions = max(1, min(int(max_actions), 100))
         checkpoint = dict(checkpoint or {})
         current_step_id = _requirement_step_id(requirement)
@@ -122,16 +124,12 @@ class HarnessTaskAgent:
         recent_task_summaries = _string_list(
             checkpoint.get("recent_task_summaries")
         )[-8:]
-        # A non-retryable failure only blocks an identical call inside this
-        # invocation of the AgentLoop.  Persisting the signature in the
-        # checkpoint made a later user turn inherit an obsolete failure even
-        # after its inputs or external state had changed.
-        non_retryable_action_signatures: set[str] = set()
         # 强制能力从未尝试就 finish(failed) 只拦一次，避免与固执模型互相死锁。
         failed_finish_without_attempt_blocked = False
         allowed_names = requirement.capability_manifest.allowed_names()
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8").strip()
         pending_actions: list[HarnessAction] = []
+        progress = ExecutionProgress()
 
         def finish(result: TaskExecutionResult) -> TaskExecutionResult:
             summary = " ".join(
@@ -177,6 +175,22 @@ class HarnessTaskAgent:
                     artifacts=artifacts,
                     trace_sink=trace_sink,
                 ))
+            if progress.exhausted:
+                if trace_sink:
+                    trace_sink("harness_no_progress_stopped", progress.snapshot())
+                return finish(TaskExecutionResult(
+                    task_frame_id=requirement.task_frame_id,
+                    status="failed",
+                    reply_fragment="当前任务尚未完成。连续尝试没有获得新信息，已停止重复操作；需要先解决当前工具或访问能力的限制。",
+                    task_summary="连续四次操作没有进展，已停止重复尝试。",
+                    capability_results=capability_results,
+                    citations=citations,
+                    evidence_results=evidence_results,
+                    artifacts=artifacts,
+                    action_count=iteration - 1,
+                    error={"code": "HARNESS_NO_PROGRESS", "message": progress.last_reason},
+                    structured_result={"completed": False, "execution_progress": progress.snapshot()},
+                ))
             requirement_payload = dump_task_requirement(requirement)
             attachment_descriptors, attachment_context = isolated_attachment_context(
                 requirement.attachments,
@@ -185,6 +199,7 @@ class HarnessTaskAgent:
             requirement_payload["attachments"] = attachment_descriptors
             payload = {
                 "task_requirement": requirement_payload,
+                "execution_progress": progress.snapshot(),
                 "harness_transcript": _transcript_for_model(transcript),
                 "iteration": iteration,
                 "remaining_actions": max_actions - iteration + 1,
@@ -210,6 +225,8 @@ class HarnessTaskAgent:
                 if pending_actions:
                     action = pending_actions.pop(0)
                 else:
+                    if trace_sink:
+                        trace_sink("harness_action_started", {"iteration": iteration})
                     for protocol_attempt in range(2):
                         # Persist a stable link between this LLM span and the Harness
                         # iteration that consumes it.  Timing projections must not
@@ -355,6 +372,10 @@ class HarnessTaskAgent:
                     satisfied_required_knowledge_ids,
                 )
                 if action.status in {None, "completed"} and missing_capabilities:
+                    progress.observe("harness_requirement_check", {}, None, {
+                        "success": False,
+                        "error": {"code": "REQUIRED_CAPABILITY_NOT_INVOKED"},
+                    })
                     transcript.extend(
                         [
                             {
@@ -458,87 +479,39 @@ class HarnessTaskAgent:
                 ))
 
             tool_name = str(action.tool_name or "").strip()
-            if not tool_name or tool_name not in allowed_names:
-                transcript.append(
-                    {
-                        "role": "tool",
-                        "tool_name": tool_name,
-                        "result": {
-                            "success": False,
-                            "error": {
-                                "code": "TOOL_NOT_AVAILABLE",
-                                "message": "该能力不在当前 TaskFrame 的冻结清单中。",
-                            },
-                        },
-                    }
-                )
-                continue
-
+            descriptors = {item.name: item for item in requirement.capability_manifest.available}
+            aliases = {item.capability_id: item.name for item in descriptors.values()}
+            tool_name = aliases.get(tool_name, tool_name)
+            descriptor = descriptors.get(tool_name)
+            arguments = dict(action.arguments or {})
+            result = progress.before(tool_name, arguments, descriptor)
+            if result is None and (not tool_name or tool_name not in allowed_names):
+                result = {"success": False, "error": {
+                    "code": "TOOL_NOT_AVAILABLE",
+                    "message": "该能力不在当前 TaskFrame 的冻结清单中。",
+                    "retryable": False,
+                }}
             if (
-                tool_name == "knowledge_search"
-                and successful_knowledge_searches
-                >= MAX_SUCCESSFUL_KNOWLEDGE_SEARCHES_PER_TASK
+                result is None and tool_name == "knowledge_search"
+                and successful_knowledge_searches >= MAX_SUCCESSFUL_KNOWLEDGE_SEARCHES_PER_TASK
             ):
-                result = {
-                    "success": False,
-                    "error": {
-                        "code": "KNOWLEDGE_SEARCH_BUDGET_EXHAUSTED",
-                        "message": (
-                            "当前 TaskFrame 已完成两次有效知识检索。请使用已有证据完成"
-                            "原始需求；不要扩展相邻主题或继续改写同义查询。"
-                        ),
-                    },
-                }
-            else:
-                action_signature = _action_signature(
-                    tool_name,
-                    dict(action.arguments or {}),
-                )
-                if action_signature in non_retryable_action_signatures:
-                    result = {
-                        "success": False,
-                        "error": {
-                            "code": "NON_RETRYABLE_ACTION_REPEATED",
-                            "message": (
-                                "相同工具与参数此前已失败且不可重试，本次未再次执行。"
-                                "请根据前一次错误更换工具或参数，或结束当前任务。"
-                            ),
-                            "retryable": False,
-                        },
-                    }
-                    if trace_sink:
-                        trace_sink(
-                            "harness_action_failed",
-                            {
-                                "iteration": iteration,
-                                "tool_name": tool_name,
-                                "error": {
-                                    "code": "NON_RETRYABLE_ACTION_REPEATED",
-                                    "message": (
-                                        "模型重复提交了已标记为不可重试的相同工具调用；"
-                                        "调用未执行，AgentLoop 将继续重新规划。"
-                                    ),
-                                    "retryable": False,
-                                },
-                            },
-                        )
-                else:
-                    try:
-                        _raise_if_cancelled(is_cancelled)
-                        result = invoke_tool(tool_name, dict(action.arguments or {}))
-                        _raise_if_cancelled(is_cancelled)
-                    except (HarnessExecutionCancelled, HarnessExecutionFenced):
-                        raise
-                    except Exception as exc:
-                        result = {
-                            "success": False,
-                            "error": {
-                                "code": "HARNESS_TOOL_ERROR",
-                                "message": str(exc),
-                            },
-                        }
-                    if _is_non_retryable_failure(result):
-                        non_retryable_action_signatures.add(action_signature)
+                result = {"success": False, "error": {
+                    "code": "KNOWLEDGE_SEARCH_BUDGET_EXHAUSTED",
+                    "message": "当前 TaskFrame 已完成两次有效知识检索。请使用已有证据完成原始需求。",
+                    "retryable": False,
+                }}
+            if result is None:
+                try:
+                    _raise_if_cancelled(is_cancelled)
+                    result = invoke_tool(tool_name, arguments)
+                    _raise_if_cancelled(is_cancelled)
+                except (HarnessExecutionCancelled, HarnessExecutionFenced):
+                    raise
+                except Exception as exc:  # noqa: BLE001 - report tool failures to the loop.
+                    result = {"success": False, "error": {
+                        "code": "HARNESS_TOOL_ERROR", "message": str(exc),
+                    }}
+            progress.observe(tool_name, arguments, descriptor, result)
             bounded_result = _bounded_capability_result(tool_name, result)
             result_data = result.get("data")
             if (

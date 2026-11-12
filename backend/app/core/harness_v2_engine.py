@@ -1838,28 +1838,21 @@ def _combine_results(
 
 
 def _single_task_reply(results: list[TaskExecutionResult]) -> str | None:
-    """Use a lone TaskFrame's terminal reply when no structured evidence needs synthesis.
-
-    ``finish`` already asks the Harness model for the user-facing reply.
-    Structured results and empty tool responses need the response pass to
-    reconcile the draft with the available evidence. Empty replies also fall
-    back to ``ResponseGenerator`` for the existing recovery path.
-    """
-
+    """Reuse a single readable finish; structured mail replies require checked receipts."""
     if len(results) != 1:
         return None
     result = results[0]
     reply = str(result.reply_fragment or "").strip()
-    if any(
-        item.get("data_status") == "empty"
-        for item in result.capability_results
-        if isinstance(item, dict)
-    ):
+    if any(isinstance(item, dict) and item.get("data_status") == "empty"
+           for item in result.capability_results):
         return None
-    if result.structured_result is not None or _structured_reply_requires_synthesis(
-        reply, result.structured_result
-    ):
+    if _structured_reply_requires_synthesis(reply, result.structured_result):
         return None
+    if result.structured_result is not None:
+        from app.mail.receipts import can_reuse_mail_reply
+
+        if not can_reuse_mail_reply(result, reply):
+            return None
     return reply or None
 
 

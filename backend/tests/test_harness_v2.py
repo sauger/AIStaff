@@ -3212,7 +3212,8 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     assert result.citations == [{"source": "logistics"}]
     assert invoked == [("allowed.tool", {"query": "ORDER-1"})]
     completed = next(
-        payload for event_type, payload in trace_events if event_type == "harness_tool_completed"
+        payload for event_type, payload in trace_events
+        if event_type == "harness_tool_completed" and payload["tool_name"] == "allowed.tool"
     )
     assert completed["result"] == {
         "tool_name": "allowed.tool",
@@ -3222,6 +3223,7 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     }
 
     assert set(payloads[0]) == {
+        "execution_progress",
         "task_requirement",
         "harness_transcript",
         "iteration",
@@ -3237,7 +3239,8 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     second_transcript = payloads[1]["harness_transcript"]
     assert isinstance(second_transcript, list)
     assert second_transcript[0]["tool_name"] == "forbidden.tool"
-    assert second_transcript[0]["result"]["error"]["code"] == "TOOL_NOT_AVAILABLE"
+    rejected = next(item for item in second_transcript if item.get("role") == "tool")
+    assert rejected["result"]["error"]["code"] == "TOOL_NOT_AVAILABLE"
     assert "OUTER_CONTEXT_MUST_NOT_LEAK" not in json.dumps(payloads, ensure_ascii=False)
     assert "不得为了“更精准”而在零检索、零工具结果时提前结束" in system_prompts[0]
     assert "GeneralSkill 是工作流说明包" in system_prompts[0]

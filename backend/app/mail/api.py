@@ -275,7 +275,7 @@ def get_reply_defaults(
     ensure_tenant(db, tenant_id)
     try:
         ensure_reader(db, tenant_id, agent_id, current_user)
-        row = get_message(db, tenant_id, agent_id, message_id, mark_read=False)
+        row = get_message(db, tenant_id, agent_id, message_id, mark_read=False, load_content="body")
         return reply_defaults(row)
     except MailError as error:
         _raise(error)
@@ -329,7 +329,7 @@ def teach_message(
     ensure_tenant(db, request.tenant_id)
     try:
         agent = ensure_sender(db, request.tenant_id, agent_id, current_user)
-        row = get_message(db, request.tenant_id, agent_id, message_id, mark_read=False)
+        row = get_message(db, request.tenant_id, agent_id, message_id, mark_read=False, load_content="headers")
         mailbox = get_mailbox(db, request.tenant_id, agent_id)
         if mailbox is None:
             raise MailError("MAIL_NOT_CONFIGURED", "这个员工还没有配置邮箱。")

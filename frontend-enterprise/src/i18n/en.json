@@ -4095,5 +4095,6 @@
   "部门不存在或不在可见范围内（errcode={1}）": "The department does not exist or is outside the visible scope (errcode={1})",
   "部门编号无效": "Invalid department id",
   "仅企业管理员可读取企微通讯录": "Only an enterprise administrator can read the WeCom directory",
-  "企微应用密钥无法解密，请检查服务端密钥配置": "The WeCom app secret could not be decrypted. Check the server key configuration."
+  "企微应用密钥无法解密，请检查服务端密钥配置": "The WeCom app secret could not be decrypted. Check the server key configuration.",
+  "正在处理…": "Working…"
 }

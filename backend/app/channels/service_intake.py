@@ -208,6 +208,8 @@ def _claim_stale_event(db: Session, event_id: str) -> bool:
 
 def claim_staged_inbound(event_id: str, *, db_engine=None) -> bool:
     """Atomically claim one durable received event for this processor generation."""
+    from app.channels.session_queue import inbound_ready_condition
+
     use_engine = db_engine or engine
     with Session(use_engine) as db:
         result = db.exec(
@@ -216,6 +218,7 @@ def claim_staged_inbound(event_id: str, *, db_engine=None) -> bool:
                 ChannelInboundEvent.id == event_id,
                 ChannelInboundEvent.channel.in_({"feishu", "wecom", "dingtalk", "wechat_kf"}),
                 ChannelInboundEvent.status == "received",
+                inbound_ready_condition(),
             )
             .values(
                 status="processing",
@@ -1598,6 +1601,7 @@ def _try_handle_pending_knowledge_selection(
     return True
 
 
+
 def process_inbound(
     binding: ChannelBinding,
     msg: dict | ChannelInbound,
@@ -2010,12 +2014,18 @@ def process_inbound(
         event_id = event.id
         user_id = user.id
         turn_team_id = team.id if team is not None else None
+        from app.channels.session_queue import defer_busy_inbound
+
+        if defer_busy_inbound(db, event_id, session_id, inbound=inbound):
+            return False
 
     with _session_lock(session_id):
         with Session(use_engine) as db:
             event = db.get(ChannelInboundEvent, event_id)
             chat_session = db.get(ChatSession, session_id)
             if not event or not chat_session:
+                return False
+            if defer_busy_inbound(db, event_id, session_id, inbound=inbound):
                 return False
             from app.core.agent_loop import AgentLoop
 
@@ -2178,28 +2188,13 @@ def process_inbound(
                 "HARNESS_TURN_CONFLICT",
                 "HARNESS_SESSION_BUSY",
             }:
-                # This is a retryable admission failure, not a completed
-                # channel turn. Persist an explicit terminal notice for this
-                # delivery (which also removes the processing reaction), then
-                # release the inbox row for a later retry.
-                if _finish_owned_inbound(
-                    db,
-                    event_id,
-                    status="received",
-                    error=response_reply[:500],
-                ):
-                    _stage_notice(
-                        db,
-                        binding,
-                        str(inbound.external_conv_id or ""),
-                        dict(event.target_json or {}),
-                        response_reply,
-                        final_for_event=True,
-                        idempotency_key=(
-                            f"channel-runtime-conflict:{binding.id}:{event.event_id}"
-                        ),
-                    )
-                    db.commit()
+                # A rare race after the admission check: park durably, never spam
+                # a terminal conflict notice or run the turn every polling tick.
+                if stream_sink is not None:
+                    abort_stream = getattr(stream_sink, "abort", None)
+                    if callable(abort_stream):
+                        abort_stream()
+                defer_busy_inbound(db, event_id, session_id, force=True, inbound=inbound)
                 return False
             if not _finish_owned_inbound(
                 db,
@@ -2338,6 +2333,8 @@ def run_staged_inbound_daemon(
     poll_seconds: float = 1.0,
     db_engine=None,
 ) -> None:
+    from app.channels.session_queue import inbound_ready_condition
+
     use_engine = db_engine or engine
     while True:
         try:
@@ -2349,6 +2346,7 @@ def run_staged_inbound_daemon(
                             {"feishu", "wecom", "dingtalk", "wechat_kf"}
                         ),
                         ChannelInboundEvent.status == "received",
+                        inbound_ready_condition(),
                     )
                     .order_by(ChannelInboundEvent.created_at)
                     .limit(20)

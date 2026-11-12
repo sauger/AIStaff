@@ -80,6 +80,9 @@ class MailMessageRead(BaseModel):
     cc: list[str] = Field(default_factory=list)
     bcc: list[str] = Field(default_factory=list)
     subject: str
+    content_state: str = "complete"
+    body_loaded: bool = True
+    attachments_loaded: bool = True
     body_text: str = ""
     unread: bool = False
     sent_at: str | None = None
@@ -104,6 +107,7 @@ class MailMessageRead(BaseModel):
 
 
 class MailListResponse(BaseModel):
+    headers_only: bool = False
     agent_id: str
     folder: MailFolder
     configured: bool

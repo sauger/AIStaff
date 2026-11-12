@@ -279,6 +279,17 @@ def triage_message(
         return _apply_teaching_rule(db, mailbox, agent, message, rule)
 
     opted = list_inbound_opted_in_skills(db, mailbox.tenant_id, mailbox.agent_id)
+    # Sender rules and unambiguous header-only spam need no content. Other
+    # classification retains existing body matching without downloading files.
+    if not opted and high_confidence_spam(message):
+        return ignore_message(db, message, reason="高置信判定为推销/无关来信，已忽略。")
+    if (message.metadata_json or {}).get("content_state") == "headers_only":
+        from app.mail.header_query import ensure_message_body
+
+        try:
+            message = ensure_message_body(db, message)
+        except MailError as exc:
+            return _apply_failure(db, message, f"读取邮件正文失败：{exc.message}")
     matches = [skill for skill in opted if skill_match_score(skill, message) >= MATCH_THRESHOLD]
     if len(matches) == 1:
         return _hand_to_skill(
@@ -680,6 +691,9 @@ def _hand_to_skill(
     db.commit()
     db.refresh(message)
     try:
+        from app.mail.header_query import ensure_message_content
+
+        message = ensure_message_content(db, message)
         _run_matched_skill(db, agent, skill, message)
     except MailError as exc:
         return _fail_skill(db, mailbox, agent, message, skill, exc.message)

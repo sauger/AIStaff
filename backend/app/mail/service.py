@@ -36,7 +36,6 @@ from app.mail.inbound import (
     pending_owner_count,
     purge_agent_inbound_mail,
     require_enabled_mailbox,
-    triage_pending_for_mailbox,
 )
 from app.mail.schema import (
     MAIL_DEFAULT_PAGE_SIZE,
@@ -235,15 +234,18 @@ def list_inbox(
     page: int = 1,
     page_size: int = MAIL_DEFAULT_PAGE_SIZE,
 ) -> MailListResponse:
+    from app.mail.header_query import sync_header_page
+
     page, page_size, offset = _clamp_page(page, page_size)
     mailbox = get_mailbox(db, tenant_id, agent_id)
     if mailbox is None:
         return _unconfigured_list(agent_id, "inbox", page=page, page_size=page_size)
     last_error = mailbox.last_error
     total = _folder_count(db, tenant_id, agent_id, "inbox")
+    fresh_rows = None
     if sync and mailbox_is_enabled(mailbox):
         try:
-            total = sync_inbox(db, mailbox, offset=offset, limit=page_size)
+            fresh_rows, total = sync_header_page(db, mailbox, offset=offset, limit=page_size)
             last_error = None
         except MailError as exc:
             last_error = exc.message
@@ -251,10 +253,13 @@ def list_inbox(
         except Exception as exc:  # noqa: BLE001 - first page must still return local cache.
             last_error = f"收取收件箱失败：{exc.__class__.__name__}"
             _store_mailbox_error(db, mailbox, last_error)
-    rows = _folder_rows(db, tenant_id, agent_id, "inbox", offset=offset, limit=page_size)
+    rows = fresh_rows if fresh_rows is not None else _folder_rows(
+        db, tenant_id, agent_id, "inbox", offset=offset, limit=page_size,
+    )
     return MailListResponse(
         agent_id=agent_id,
         folder="inbox",
+        headers_only=True,
         configured=True,
         can_send=can_send and mailbox_is_enabled(mailbox),
         empty_reason=_empty_reason(rows, last_error, "收件箱是空的。"),
@@ -335,10 +340,18 @@ def get_message(
     message_id: str,
     *,
     mark_read: bool = False,
+    load_content: str = "full",
 ) -> EmployeeMailMessage:
     row = db.get(EmployeeMailMessage, message_id)
     if row is None or row.tenant_id != tenant_id or row.agent_id != agent_id:
         raise MailError("MAIL_NOT_FOUND", "找不到这封邮件。", status_code=404)
+    if load_content not in {"full", "body", "headers"}:
+        raise MailError("INVALID_ARGUMENTS", "无效的邮件加载模式。")
+    if row.folder == "inbox" and load_content != "headers":
+        from app.mail.header_query import ensure_message_body, ensure_message_content
+
+        row = (ensure_message_content(db, row) if load_content == "full"
+               else ensure_message_body(db, row))
     if mark_read and row.folder == "inbox" and row.status == "unread":
         row.status = "read"
         row.updated_at = utc_now()
@@ -346,7 +359,7 @@ def get_message(
         db.commit()
         db.refresh(row)
         mailbox = get_mailbox(db, tenant_id, agent_id)
-        if mailbox is not None and row.imap_uid:
+        if mailbox_is_enabled(mailbox) and row.imap_uid:
             try:
                 get_transport().mark_seen(_connection(mailbox), row.imap_uid)
             except Exception:  # noqa: BLE001, S110 - local body stays readable if IMAP seen fails.
@@ -488,23 +501,14 @@ def reply_defaults(row: EmployeeMailMessage) -> dict[str, Any]:
 
 
 def sync_inbox(
-    db: Session,
-    mailbox: EmployeeMailbox,
-    *,
-    offset: int = 0,
+    db: Session, mailbox: EmployeeMailbox, *, offset: int = 0,
     limit: int = MAIL_DEFAULT_PAGE_SIZE,
 ) -> int:
-    require_enabled_mailbox(mailbox)
-    fetched = get_transport().fetch_inbox(_connection(mailbox), offset=offset, limit=limit)
-    for item in fetched.messages:
-        _upsert_inbox(db, mailbox, item)
-    mailbox.last_synced_at = utc_now()
-    mailbox.last_error = None
-    mailbox.updated_at = utc_now()
-    db.add(mailbox)
-    db.commit()
-    triage_pending_for_mailbox(db, mailbox)
-    return fetched.total
+    from app.mail.header_query import sync_header_page
+
+    # Synchronization stores headers only. The poller owns separate lazy triage.
+    _rows, total = sync_header_page(db, mailbox, offset=offset, limit=limit)
+    return total
 
 
 def sync_all_mailboxes(db: Session) -> None:
@@ -515,15 +519,9 @@ def sync_all_mailboxes(db: Session) -> None:
         try:
             sync_inbox(db, mailbox)
         except MailError as exc:
-            mailbox.last_error = exc.message
-            mailbox.updated_at = utc_now()
-            db.add(mailbox)
-            db.commit()
+            _store_mailbox_error(db, mailbox, exc.message)
         except Exception as exc:  # noqa: BLE001 - poller must keep walking other mailboxes.
-            mailbox.last_error = f"收取收件箱失败：{exc.__class__.__name__}"
-            mailbox.updated_at = utc_now()
-            db.add(mailbox)
-            db.commit()
+            _store_mailbox_error(db, mailbox, f"收取收件箱失败：{exc.__class__.__name__}")
 
 
 def message_read(
@@ -533,8 +531,12 @@ def message_read(
     can_teach: bool = False,
 ) -> MailMessageRead:
     attachments = [MailAttachmentRead.model_validate(item) for item in (row.attachments_json or [])]
+    state = str((row.metadata_json or {}).get("content_state") or "complete")
     payload = MailMessageRead(
         id=row.id,
+        content_state=state,
+        body_loaded=include_body and state != "headers_only",
+        attachments_loaded=state == "complete",
         folder=row.folder,  # type: ignore[arg-type]
         status=row.status,
         direction=row.direction,
@@ -580,6 +582,13 @@ def prompt_context(db: Session, tenant_id: str, agent_id: str) -> str:
         "该员工有岗位邮箱身份。收发是系统 IMAP+SMTP 引擎，不是飞书/企微渠道。",
         "按原始邮箱地址发信即可，不要按人名猜地址，也不要去知识库或通讯录里找人。",
         "列出收件箱：mail_list；读信：mail_read；起草：mail_draft；发送：mail_send。",
+        "按标题找邮件时，先调用 mail_list 并传 subject 检索，不要逐页下载整箱邮件或仅复述历史回复。",
+        "收件箱列表只含邮件头，不会下载正文和附件；列表的空附件名称不能证明没有附件。",
+        "命中后用 mail_read 读取选中的邮件并保存附件；有同标题更正邮件时要提醒用户。",
+        "多个已确定的邮件 ID 用 mail_read 的 message_ids 一次读取；只查找和下载时传 include_body=false。",
+        "mail_read 返回 all_attachments_verified=true 表示实际文件已校验，不要再读文件柜来重复确认。",
+        "仅查找或下载的任务，在一句简短完成回复中列明邮件、附件和文件柜位置，有更正版则提醒。",
+        "除非任务明确要求分析正文或附件，不要顺带分析账单或起草回信；非技能要求时可省略 structured_result，task_summary 用一句话。",
         "用户说先起草、确认后再发，或技能标明 confirm_before_send_mail 时，只能出草稿，确认前不得 SMTP 投递。",
         "来信命中已开「可被来信自动跑」的技能时，回信和对外提交直接做完，不再等人确认。",
         "附件会进入文件柜「邮件附件/收件」或「邮件附件/发件」，不要放进对话附件或模板目录。",
@@ -729,6 +738,9 @@ def _upsert_inbox(db: Session, mailbox: EmployeeMailbox, fetched: FetchedMessage
         )
         return
     existing.imap_uid = fetched.uid
+    existing.metadata_json = {**(existing.metadata_json or {}), "content_state": "complete"}
+    if existing.triage_state == "headers_only":
+        existing.triage_state = "pending"
     existing.body_text = fetched.body_text
     existing.subject = fetched.subject
     existing.attachments_json = attachments

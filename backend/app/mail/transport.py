@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import imaplib
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ class FetchedMessage:
     date: datetime | None
     unseen: bool
     attachments: list[FetchedAttachment] = field(default_factory=list)
+    headers_only: bool = False
 
 
 @dataclass
@@ -64,6 +66,15 @@ class MailboxConnection:
 
 
 class MailTransport(Protocol):
+    def fetch_headers(
+        self, mailbox: MailboxConnection, *, subject: str = "", from_address: str = "",
+        offset: int = 0, limit: int = MAIL_DEFAULT_PAGE_SIZE,
+    ) -> InboxPage: ...
+
+    def fetch_message(self, mailbox: MailboxConnection, uid: str) -> FetchedMessage | None: ...
+
+    def fetch_body(self, mailbox: MailboxConnection, uid: str) -> FetchedMessage | None: ...
+
     def probe_imap(self, mailbox: MailboxConnection) -> None: ...
 
     def probe_smtp(self, mailbox: MailboxConnection) -> None: ...
@@ -118,6 +129,106 @@ def validate_encryption(value: str, *, field: str) -> str:
 
 
 class StdlibMailTransport:
+    def fetch_body(self, mailbox: MailboxConnection, uid: str) -> FetchedMessage | None:
+        """Load MIME text sections for routing without fetching any attachment bytes."""
+        from app.mail.body_parts import fetch_text_sections
+
+        client = None
+        try:
+            client = _imap_connect(mailbox)
+            client.login(mailbox.username, mailbox.password)
+            if client.select("INBOX", readonly=True)[0] != "OK":
+                raise MailError("MAIL_IMAP_INBOX_FAILED", "无法打开收件箱。")
+            headers = _fetch_header_batch(client, [uid.encode("ascii")])
+            if not headers:
+                return None
+            item = headers[0]
+            item.body_text = fetch_text_sections(client, uid)
+            item.headers_only = False
+            return item
+        except MailError:
+            raise
+        except Exception as exc:
+            raise _imap_error(mailbox, exc) from exc
+        finally:
+            _imap_logout(client)
+
+    def fetch_headers(
+        self, mailbox: MailboxConnection, *, subject: str = "", from_address: str = "",
+        offset: int = 0, limit: int = MAIL_DEFAULT_PAGE_SIZE,
+    ) -> InboxPage:
+        """Search on the server, then batch-fetch only matching headers with PEEK."""
+        client = None
+        try:
+            client = _imap_connect(mailbox)
+            client.login(mailbox.username, mailbox.password)
+            if client.select("INBOX", readonly=True)[0] != "OK":
+                raise MailError("MAIL_IMAP_INBOX_FAILED", "无法打开收件箱。")
+            criteria: list = []
+            for key, value in [("SUBJECT", subject), ("FROM", from_address)]:
+                if value:
+                    if any(c in value for c in "\r\n\x00"):
+                        raise MailError("INVALID_ARGUMENTS", "检索条件不能包含换行或空字符。")
+                    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+                    criteria.extend([key, ('"' + escaped + '"').encode("utf-8")])
+            fallback = False
+            try:
+                status, payload = client.uid("SEARCH", "CHARSET", "UTF-8", *criteria) if criteria else client.uid("SEARCH", None, "ALL")
+                fallback = status != "OK"
+            except imaplib.IMAP4.error:
+                fallback = True
+            if fallback:
+                # Some servers reject UTF-8 SEARCH. Scan headers, never MIME bodies.
+                status, payload = client.uid("SEARCH", None, "ALL")
+            if status != "OK":
+                raise MailError("MAIL_IMAP_SEARCH_FAILED", "无法检索收件箱。")
+            uids = list(reversed((payload[0] or b"").split()))
+            if not criteria:
+                return InboxPage(_fetch_header_batch(client, uids[offset:offset + limit]), len(uids))
+            if not uids and not fallback:
+                status, payload = client.uid("SEARCH", None, "ALL")
+                if status != "OK":
+                    raise MailError("MAIL_IMAP_SEARCH_FAILED", "无法复核邮件头检索结果。")
+                uids = list(reversed((payload[0] or b"").split()))
+            # Verify matches even after OK: some IMAP servers silently ignore
+            # UTF-8 search criteria. Filtering headers also gives an honest total.
+            matches = []
+            for start in range(0, len(uids), 50):
+                for item in _fetch_header_batch(client, uids[start:start + 50]):
+                    if (subject.casefold() in item.subject.casefold()
+                            and from_address.casefold() in item.from_address.casefold()):
+                        matches.append(item)
+            return InboxPage(matches[offset:offset + limit], len(matches))
+        except MailError:
+            raise
+        except Exception as exc:
+            raise _imap_error(mailbox, exc) from exc
+        finally:
+            _imap_logout(client)
+
+    def fetch_message(self, mailbox: MailboxConnection, uid: str) -> FetchedMessage | None:
+        """Fetch one selected message; PEEK must not mark it read implicitly."""
+        client = None
+        try:
+            client = _imap_connect(mailbox)
+            client.login(mailbox.username, mailbox.password)
+            if client.select("INBOX", readonly=True)[0] != "OK":
+                raise MailError("MAIL_IMAP_INBOX_FAILED", "无法打开收件箱。")
+            status, payload = client.uid("FETCH", uid, "(FLAGS BODY.PEEK[])")
+            if status != "OK" or not payload:
+                return None
+            for part in payload:
+                meta, raw = _split_fetch(part)
+                if raw:
+                    return parse_rfc822(uid, raw, unseen=b"\\Seen" not in meta)
+            return None
+        except MailError:
+            raise
+        except Exception as exc:
+            raise _imap_error(mailbox, exc) from exc
+        finally:
+            _imap_logout(client)
+
     def probe_imap(self, mailbox: MailboxConnection) -> None:
         client = None
         try:
@@ -341,6 +452,29 @@ def html_to_text(value: str) -> str:
     for tag in soup(["script", "style"]):
         tag.decompose()
     return " ".join(soup.get_text(" ", strip=True).split())
+
+
+def _fetch_header_batch(client: imaplib.IMAP4, uids: list[bytes]) -> list[FetchedMessage]:
+    if not uids:
+        return []
+    status, payload = client.uid(
+        "FETCH", b",".join(uids),
+        "(UID FLAGS BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO CC DATE SUBJECT)])",
+    )
+    if status != "OK":
+        raise MailError("MAIL_IMAP_FETCH_FAILED", "读取邮件头失败。")
+    by_uid = {}
+    for part in payload or []:
+        meta, raw = _split_fetch(part)
+        match = re.search(rb"\bUID\s+(\d+)\b", meta)
+        if match and raw:
+            uid = match.group(1).decode("ascii")
+            item = parse_rfc822(uid, raw, unseen=b"\\Seen" not in meta)
+            item.headers_only = True
+            by_uid[uid] = item
+    if any(uid.decode("ascii") not in by_uid for uid in uids):
+        raise MailError("MAIL_IMAP_FETCH_FAILED", "邮件头返回不完整，请重新检索。")
+    return [by_uid[uid.decode("ascii")] for uid in uids]
 
 
 def _fetch_one(client: imaplib.IMAP4, uid: str) -> FetchedMessage | None:
