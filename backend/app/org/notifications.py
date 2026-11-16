@@ -315,6 +315,7 @@ def stage_notification(
         session_id=session.id,
         kind="person_notification",
         text=text,
+        next_attempt_at=utc_now(),
         idempotency_key=key,
         target_json={"to_user_id": link.external_user_id, "is_group": False},
         artifact_json={

@@ -317,6 +317,28 @@ def test_worker_reports_success_only_after_adapter_accepts(db, monkeypatch):
     assert finished[-1]["delivered_at"] is not None
 
 
+def test_staged_notification_is_claimed_and_sent_once_by_worker(db, monkeypatch):
+    from app.channels import adapters
+    from app.channels import service_outbox as outbox
+
+    bind(db)
+    row = stage(db)
+    db.commit()
+    sent = []
+    adapter = SimpleNamespace(send=lambda *args, **kwargs: sent.append((args, kwargs)))
+    monkeypatch.setattr(adapters, "get_channel_adapter", lambda _: adapter)
+
+    assert outbox._deliver_due(db) == 1
+    db.refresh(row)
+    assert row.status == "delivered"
+    assert row.attempts == 1
+    assert row.delivered_at is not None
+    assert len(sent) == 1
+    assert sent[0][0][1] == {"to_user_id": "wx1", "is_group": False}
+    assert outbox._deliver_due(db) == 0
+    assert len(sent) == 1
+
+
 def test_unrelated_archived_contact_does_not_block_other_people(db):
     db.add(PersonContact(id="stale", tenant_id="t", display_name="Old", status="archived"))
     db.add(
