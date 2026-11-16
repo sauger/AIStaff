@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import PersonWecomNotification from '@/components/PersonWecomNotification';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   Dialog,
@@ -623,7 +624,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
         }}
       >
         <DialogContent
-          className="flex w-[calc(100%-2rem)] flex-col gap-[14px] sm:max-w-[480px]"
+          className="flex max-h-[calc(100dvh-4rem)] w-[calc(100%-2rem)] flex-col gap-[14px] overflow-y-auto sm:max-w-[480px]"
           onPointerDownOutside={(event) => {
             if (wecomPickerOpen) event.preventDefault();
           }}
@@ -720,6 +721,7 @@ export default function CompanyMembersPage({ currentUser }: { currentUser?: Ente
             <UIButton variant="outline" className="h-8 rounded-[10px] px-3 text-[12px]" onClick={() => setPersonDraft(null)}>取消</UIButton>
             <UIButton className="h-8 rounded-[10px] bg-[#18181a] px-3 text-[12px] text-white" disabled={personSaving} onClick={() => void savePerson()}>{personSaving ? '保存中…' : '保存'}</UIButton>
           </div>
+          {personDraft?.id && <PersonWecomNotification key={personDraft.id} personId={personDraft.id} admin={canPickWecom} self={personDraft.primaryUserId === currentUser?.id} />}
         </DialogContent>
       </Dialog>
 

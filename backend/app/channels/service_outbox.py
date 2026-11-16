@@ -836,6 +836,19 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
             last_error="渠道绑定不存在或已停用",
         )
         return
+    if delivery.kind == "person_notification":
+        from app.org.errors import OrgError
+        from app.org.notifications import validate_delivery
+
+        try:
+            validate_delivery(db, delivery)
+        except OrgError as error:
+            _finish_delivery_claim(db, delivery, status="failed", last_error=error.message)
+            return
+        # WeCom has no remote idempotency key: a recovered sending attempt may have arrived.
+        if delivery.attempts > 1:
+            _finish_delivery_claim(db, delivery, status="failed", last_error="remote_state_unknown")
+            return
     reaction_event = None
     if delivery.kind in _REACTION_KINDS:
         if not channel_reaction_token(binding.channel):
@@ -937,6 +950,8 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
     except Exception as exc:
         last_error = str(exc)[:500]
         retryable = bool(getattr(exc, "retryable", True))
+        if delivery.kind == "person_notification":
+            retryable = False  # Send outcome may be unknown; never blindly repeat a business event.
         if not retryable or delivery.attempts >= settings.channel_delivery_max_attempts:
             status = "failed"
             next_attempt_at = None

@@ -38,6 +38,7 @@ from app.api import (
 from app.cabinet.api import router as cabinet_router
 from app.contacts.api import router as contacts_router
 from app.org.api import router as org_router
+from app.org import notification_api  # noqa: F401  # Register notification routes.
 from app.mail.api import router as mail_router
 from app.secrets.api import guides_router, secrets_router
 from app.mail.poller import start_mail_poller, stop_mail_poller

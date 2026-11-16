@@ -1761,7 +1761,11 @@ def process_inbound(
 
         # 指令拦截:早于身份解析与会话创建,指令消息不进 AgentLoop
         if command:
-            if command.kind in {"bind", "unbind"}:
+            if command.kind == "notification_bind":
+                from app.org.notifications import consume_code
+
+                reply = consume_code(db, binding, inbound, command.query)
+            elif command.kind in {"bind", "unbind"}:
                 reply = _run_bind_command(db, binding, inbound, command)
             elif command.kind == "handoff_reply":
                 reply = _run_handoff_reply_command(db, binding, inbound, command)

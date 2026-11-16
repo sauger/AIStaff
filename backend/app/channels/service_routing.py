@@ -56,6 +56,8 @@ def parse_command(text: str) -> ChannelCommand | None:
         return ChannelCommand(kind="help")
     if lowered in {"解绑", "unbind"}:
         return ChannelCommand(kind="unbind")
+    if lowered.startswith("通知绑定 "):
+        return ChannelCommand(kind="notification_bind", query=body[len("通知绑定 "):].strip())
     for prefix in ("绑定", "bind"):
         if lowered.startswith(prefix):
             return ChannelCommand(kind="bind", query=body[len(prefix):].strip())

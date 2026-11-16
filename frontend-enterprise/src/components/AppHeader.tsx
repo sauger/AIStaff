@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -21,6 +24,7 @@ import {
   type EnterpriseAuthUser,
 } from '../auth';
 import LanguageSwitcher from './LanguageSwitcher';
+import { MyWecomNotification } from './PersonWecomNotification';
 import AccountApiKeyDialog from './AccountApiKeyDialog';
 
 /** 只允许 http/https/data:image/blob 协议的图片地址,其余一律视为无效。 */
@@ -83,6 +87,7 @@ export default function AppHeader({
   const [avatarBlobUrl, setAvatarBlobUrl] = useState('');
   const avatarBlobUrlRef = useRef('');
   const [avatarSaving, setAvatarSaving] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
   const [apiKeyOpen, setApiKeyOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -334,13 +339,16 @@ export default function AppHeader({
                 </>
               )}
               {user && (
-                <DropdownMenuItem
-                  onSelect={() => setApiKeyOpen(true)}
-                  className="h-[36px] cursor-pointer gap-2 rounded-[10px] px-[12px] text-[14px] text-[#464C5E]"
-                >
-                  <KeyRound className="size-[16px]" />
-                  API 全量密钥
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuItem onSelect={() => setNotificationOpen(true)}>我的企微通知</DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => setApiKeyOpen(true)}
+                    className="h-[36px] cursor-pointer gap-2 rounded-[10px] px-[12px] text-[14px] text-[#464C5E]"
+                  >
+                    <KeyRound className="size-[16px]" />
+                    API 全量密钥
+                  </DropdownMenuItem>
+                </>
               )}
               <DropdownMenuItem
                 onSelect={() => onLogout?.()}
@@ -362,6 +370,12 @@ export default function AppHeader({
         className="hidden"
         onChange={(event) => pickAvatar(event.target.files?.[0] || null)}
       />
+      <Dialog open={notificationOpen} onOpenChange={setNotificationOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogTitle>我的企微通知</DialogTitle>
+          {notificationOpen && <MyWecomNotification />}
+        </DialogContent>
+      </Dialog>
       <AccountApiKeyDialog
         account={user ?? null}
         open={apiKeyOpen}

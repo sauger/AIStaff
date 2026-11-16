@@ -1748,6 +1748,53 @@ class ChannelDelivery(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class PersonNotificationBinding(SQLModel, table=True):
+    """Notification consent and route; identities remain in contacts. Revocations are audit history."""
+
+    __tablename__ = "person_notification_bindings"
+    __table_args__ = (
+        Index(
+            "uq_person_notification_active", "tenant_id", "person_id", unique=True,
+            sqlite_where=text("revoked_at IS NULL"),
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index(
+            "uq_person_notification_contact", "tenant_id", "contact_id", unique=True,
+            sqlite_where=text("revoked_at IS NULL"),
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+    id: str = Field(default_factory=lambda: new_id("pnb"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    person_id: str = Field(index=True)
+    contact_id: str = Field(index=True)
+    binding_id: str
+    account_key: str
+    scope: str
+    external_user_id: str
+    created_by_user_id: str
+    created_at: datetime = Field(default_factory=utc_now)
+    revoked_at: datetime | None = None
+    revoked_by_user_id: str | None = None
+
+
+class PersonNotificationCode(SQLModel, table=True):
+    """Purpose-specific, hashed, single-use notification claim; never a login binding."""
+
+    __tablename__ = "person_notification_codes"
+    id: str = Field(default_factory=lambda: new_id("pnc"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    person_id: str = Field(index=True)
+    user_id: str
+    code_hash: str = Field(unique=True, index=True)
+    binding_id: str
+    account_key: str
+    scope: str
+    expires_at: datetime
+    used_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class HumanHandoffRequest(SQLModel, table=True):
     __tablename__ = "human_handoff_requests"
 

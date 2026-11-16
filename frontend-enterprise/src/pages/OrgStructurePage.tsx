@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import PersonWecomNotification from '@/components/PersonWecomNotification';
 import AppHeader from '@/components/AppHeader';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
@@ -678,7 +679,7 @@ export default function OrgStructurePage({
                 onEdit={(department) => openDepartmentDialog('', department)}
                 onAddChild={(department) => openDepartmentDialog(department.id)}
                 onDelete={setDeleteTarget}
-                onPersonClick={() => navigate('/enterprise/company/people')}
+                onPersonClick={(person) => openEditPerson(person)}
                 onEditPerson={openEditPerson}
                 onMovePerson={openMovePerson}
                 onAgentClick={() => navigate('/enterprise/company/agents')}
@@ -1050,6 +1051,7 @@ export default function OrgStructurePage({
               {savingPerson ? '保存中…' : '保存'}
             </UIButton>
           </div>
+          {personDialog?.id && <PersonWecomNotification key={personDialog.id} personId={personDialog.id} admin={currentUser?.role === 'admin'} self={personDialog.primaryUserId === currentUser?.id} />}
         </DialogContent>
       </Dialog>
 
