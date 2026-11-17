@@ -137,7 +137,41 @@ PROPS_WHITELIST: dict[str, set[str]] = {
     "table": {"title", "pageSize"},
 }
 
-CHANGE_KINDS = {"update_component", "change_component_type", "add_components"}
+CHANGE_KINDS = {"update_component", "change_component_type", "add_components", "bind_component"}
+
+_AGGREGATES = {"sum", "avg", "min", "max", "count"}
+
+
+def binding_structure_error(binding: Any) -> str:
+    """Structural check for a component binding; empty string means valid.
+
+    One chart, one datasetVersionId: dimensions are fieldId strings and each
+    measure is {fieldId, aggregate, alias}. Field membership in the dataset is
+    checked separately against the describe_dataset catalog in plan_change.
+    """
+
+    if not isinstance(binding, dict):
+        return "binding 必须是 object。"
+    if not str(binding.get("datasetVersionId") or "").strip():
+        return "binding.datasetVersionId 不能为空。"
+    dimensions = binding.get("dimensions")
+    if not isinstance(dimensions, list) or not all(
+        isinstance(item, str) and item for item in dimensions
+    ):
+        return "binding.dimensions 必须是 fieldId 字符串数组。"
+    measures = binding.get("measures")
+    if not isinstance(measures, list) or not measures:
+        return "binding.measures 不能为空。"
+    for measure in measures:
+        if not isinstance(measure, dict):
+            return "binding.measures 的每一项必须是 object。"
+        if not str(measure.get("fieldId") or "").strip():
+            return "binding.measures[].fieldId 不能为空。"
+        if measure.get("aggregate") not in _AGGREGATES:
+            return "binding.measures[].aggregate 必须是 " + "/".join(sorted(_AGGREGATES)) + "。"
+        if not str(measure.get("alias") or "").strip():
+            return "binding.measures[].alias 不能为空。"
+    return ""
 
 
 def _component_types_by_id(components: list[dict[str, Any]]) -> dict[str, str]:
@@ -146,6 +180,34 @@ def _component_types_by_id(components: list[dict[str, Any]]) -> dict[str, str]:
         for item in components
         if isinstance(item, dict)
     }
+
+
+def _binding_for_operation(
+    value: Any,
+    *,
+    components: list[dict[str, Any]],
+    component_id: str,
+) -> dict[str, Any] | None:
+    """Complete a plan binding with the resolved component's immutable fields.
+
+    The LLM only authors datasetVersionId/dimensions/measures; the MCP
+    Component schema also requires ``source`` (and benefits from the old
+    limit/nullPolicy/timeZone). Resolve is the authority, so merge its binding
+    underneath the planned mapping instead of sending a partial object.
+    """
+    if not isinstance(value, dict):
+        return None
+    merged: dict[str, Any] = {}
+    for item in components:
+        if str(item.get("componentId") or "") != component_id:
+            continue
+        old = item.get("binding")
+        if isinstance(old, dict):
+            merged.update(old)
+        break
+    merged.update({key: item for key, item in value.items() if item is not None})
+    merged["source"] = str(merged.get("source") or "dataset")
+    return merged
 
 
 def compile_operations(
@@ -182,11 +244,27 @@ def compile_operations(
             "componentId": component_id,
             "componentType": str(plan.get("componentType") or ""),
         }
+        if plan.get("binding") is not None:
+            operation["binding"] = _binding_for_operation(
+                plan["binding"], components=components, component_id=component_id
+            )
         patch = patches.get(component_id)
         props = patch.get("props") if isinstance(patch, dict) else None
         if isinstance(props, dict) and props:
             operation["props"] = dict(props)
         return [operation]
+    if change_kind == "bind_component":
+        # 改数据：只替换目标组件的一个数据集绑定（现有 MCP op）。
+        return [
+            {
+                "op": "bind_component",
+                "componentId": targets[0],
+                "binding": _binding_for_operation(
+                    plan.get("binding"), components=components, component_id=targets[0]
+                )
+                or {},
+            }
+        ]
     if change_kind == "add_components":
         declared = plan.get("components") if isinstance(plan.get("components"), dict) else {}
         operations = []
@@ -270,6 +348,16 @@ def validate_change_plan(
                 "change_component_type 一次只能转换一个组件。",
                 [],
             )
+        if change_kind == "bind_component":
+            if len(targets) != 1:
+                return (
+                    "CHANGE_PLAN_INVALID",
+                    "bind_component 一次只能改一个组件的数据绑定。",
+                    [],
+                )
+            error = binding_structure_error(plan.get("binding"))
+            if error:
+                return ("CHANGE_PLAN_INVALID", error, [])
         if change_kind == "update_component":
             missing_patches = [item for item in targets if not isinstance((patches or {}).get(item), dict)]
             if missing_patches:
@@ -365,6 +453,13 @@ def validate_change_plan(
         plan.get("componentType") or ""
     ):
         return ("CHANGE_PLAN_INVALID", "change_component_type 需要 componentType。", [])
+    if plan.get("binding") is not None and change_kind in {
+        "change_component_type",
+        "bind_component",
+    }:
+        error = binding_structure_error(plan.get("binding"))
+        if error:
+            return ("CHANGE_PLAN_INVALID", error, [])
     if change_kind == "add_components":
         declared = plan.get("components")
         if not isinstance(declared, dict):

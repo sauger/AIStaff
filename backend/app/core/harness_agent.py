@@ -75,6 +75,7 @@ class HarnessTaskAgent:
         step_timeout_seconds: int | None = None,
         checkpoint: dict[str, Any] | None = None,
         tool_manifest: CapabilityManifest | None = None,
+        fold_schemas: bool = True,
     ) -> TaskExecutionResult:
         max_actions = max(1, min(int(max_actions), 100))
         checkpoint = dict(checkpoint or {})
@@ -153,6 +154,16 @@ class HarnessTaskAgent:
                     {"mode": "tool_calls", "tool_count": len(tool_specs)},
                 )
         pending_actions: list[HarnessAction] = []
+        # Names whose full schema was already shown to the model. The payload
+        # built for the next model call folds these; the in-memory manifest
+        # used for authorization stays intact.
+        schema_exposed_names: set[str] = set()
+        pending_schema_exposure: set[str] = set()
+        # Exact successful read-only calls are not re-executed while their
+        # result is still in the projected transcript.  This is the deterministic
+        # counterpart to the "same account/path only once" skill rule.
+        successful_read_results: dict[str, tuple[dict[str, Any], int]] = {}
+        mutated_paths: set[str] = set()
 
         def finish(result: TaskExecutionResult) -> TaskExecutionResult:
             summary = " ".join(
@@ -199,6 +210,11 @@ class HarnessTaskAgent:
                     trace_sink=trace_sink,
                 ))
             requirement_payload = dump_task_requirement(requirement)
+            if fold_schemas:
+                _fold_exposed_capability_manifest(
+                    requirement_payload,
+                    schema_exposed_names - pending_schema_exposure,
+                )
             attachment_descriptors, attachment_context = isolated_attachment_context(
                 requirement.attachments,
                 image_payloads,
@@ -236,6 +252,8 @@ class HarnessTaskAgent:
                         tool_specs, tool_names = _harness_tool_specs(
                             requirement, tool_manifest
                         )
+                    schema_exposed_names.update(pending_schema_exposure)
+                    pending_schema_exposure.clear()
                     for protocol_attempt in range(2):
                         # Persist a stable link between this LLM span and the Harness
                         # iteration that consumes it.  Timing projections must not
@@ -280,6 +298,7 @@ class HarnessTaskAgent:
                                 )
                         try:
                             actions = _harness_actions_from_raw(raw)
+                            _validate_action_batch(actions, requirement, allowed_names)
                             action = actions[0]
                             pending_actions.extend(actions[1:])
                             if len(actions) > 1 and trace_sink:
@@ -332,6 +351,21 @@ class HarnessTaskAgent:
                                         "required_finish_envelope": {
                                             "action": "finish",
                                             "status": "completed | awaiting_user | handoff | failed",
+                                        },
+                                        "required_read_only_actions_envelope": {
+                                            "actions": [
+                                                {
+                                                    "action": "tool",
+                                                    "tool_name": "<read-only capability>",
+                                                    "arguments": {},
+                                                }
+                                            ]
+                                        },
+                                        "action_sequence_rules": {
+                                            "max_actions": _READ_ONLY_ACTION_BATCH_LIMIT,
+                                            "only_read_only_tools": True,
+                                            "finish_must_be_standalone": True,
+                                            "describe_must_be_standalone": True,
                                         },
                                     },
                                 }
@@ -511,6 +545,27 @@ class HarnessTaskAgent:
                 ))
 
             tool_name = str(action.tool_name or "").strip()
+            if any(
+                tool_name.startswith(prefix)
+                for prefix in requirement.blocked_tool_prefixes
+            ):
+                transcript.append(
+                    {
+                        "role": "tool",
+                        "tool_name": tool_name,
+                        "result": {
+                            "success": False,
+                            "error": {
+                                "code": "POLICY_BLOCKED",
+                                "message": (
+                                    "当前 TaskFrame 的口径/权限策略禁止调用该能力。"
+                                    "请直接 finish 说明拒绝原因。"
+                                ),
+                            },
+                        },
+                    }
+                )
+                continue
             if not tool_name or tool_name not in allowed_names:
                 transcript.append(
                     {
@@ -527,6 +582,9 @@ class HarnessTaskAgent:
                 )
                 continue
 
+            read_only_call = False
+            duplicate_read = False
+            action_signature = ""
             if (
                 tool_name == "knowledge_search"
                 and successful_knowledge_searches
@@ -547,7 +605,47 @@ class HarnessTaskAgent:
                     tool_name,
                     dict(action.arguments or {}),
                 )
-                if action_signature in non_retryable_action_signatures:
+                descriptor = next(
+                    (
+                        item
+                        for item in requirement.capability_manifest.available
+                        if item.name == tool_name
+                    ),
+                    None,
+                )
+                read_only_call = bool(
+                    descriptor is not None and _capability_is_read_only(descriptor)
+                )
+                cached_read = (
+                    successful_read_results.get(action_signature)
+                    if read_only_call
+                    else None
+                )
+                if (
+                    tool_name == "read_file"
+                    and str((action.arguments or {}).get("path") or "") in mutated_paths
+                ):
+                    cached_read = None
+                duplicate_read = bool(
+                    cached_read is not None
+                    and len(transcript) - cached_read[1] <= 6
+                    and tool_name != "external_task_status"
+                )
+                if duplicate_read:
+                    result = _duplicate_read_result(tool_name, cached_read[0])
+                    if trace_sink:
+                        trace_sink(
+                            "harness_duplicate_read_blocked",
+                            {
+                                "iteration": iteration,
+                                "tool_name": tool_name,
+                                "signature": hashlib.sha256(
+                                    action_signature.encode("utf-8")
+                                ).hexdigest()[:16],
+                                "result_age_entries": len(transcript) - cached_read[1],
+                            },
+                        )
+                elif action_signature in non_retryable_action_signatures:
                     result = {
                         "success": False,
                         "error": {
@@ -632,6 +730,29 @@ class HarnessTaskAgent:
                         "status": result_data.get("status"),
                     },
                 ))
+            if (
+                read_only_call
+                and result.get("success") is True
+                and not duplicate_read
+                and not (
+                    isinstance(result_data, dict)
+                    and result_data.get("detached") is True
+                )
+            ):
+                successful_read_results[action_signature] = (
+                    bounded_result,
+                    len(transcript),
+                )
+            if result.get("success") is True and tool_name in {
+                "write_file",
+                "edit_file",
+                "move_file",
+                "delete_file",
+            }:
+                for key in ("path", "old_path", "new_path"):
+                    value = str((action.arguments or {}).get(key) or "").strip()
+                    if value:
+                        mutated_paths.add(value)
             if _is_loaded_general_skill_result(tool_name, result):
                 loaded_general_skill_names.append(tool_name)
             transcript.extend(
@@ -667,6 +788,10 @@ class HarnessTaskAgent:
                 tool_name,
                 result,
             )
+            pending_schema_exposure.update(activated_names)
+            # A capability described again must be shown in full on the next
+            # model request even if it was folded in an earlier turn.
+            schema_exposed_names.difference_update(activated_names)
             allowed_names.update(activated_names)
             _extend_dict_list(artifacts, result.get("artifacts"))
             if tool_name == "knowledge_search" and bool(result.get("success")):
@@ -762,10 +887,71 @@ def _activate_described_capabilities(
             continue
         if not descriptor.available or descriptor.kind == "internal":
             continue
+        if any(
+            descriptor.name.startswith(prefix)
+            for prefix in requirement.blocked_tool_prefixes
+        ):
+            continue
         existing[descriptor.name] = descriptor
         activated.add(descriptor.name)
     requirement.capability_manifest.available = list(existing.values())
     return activated
+
+
+_FOLDED_DESCRIPTION_LIMIT = 80
+
+
+def _fold_exposed_capability_manifest(
+    requirement_payload: dict[str, Any],
+    exposed_names: set[str],
+) -> None:
+    """Shrink already-seen descriptors in the model payload only."""
+
+    if not exposed_names:
+        return
+    manifest = requirement_payload.get("capability_manifest")
+    if not isinstance(manifest, dict):
+        return
+    available = manifest.get("available")
+    if not isinstance(available, list):
+        return
+    folded_names: set[str] = set()
+    for item in available:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        if name not in exposed_names:
+            continue
+        # Resident file tools and internal harness tools are part of the
+        # operating contract, not progressively disclosed business capabilities.
+        if str(item.get("kind") or "") in {"file", "internal"}:
+            continue
+        schema = item.get("input_schema")
+        required: list[str] = []
+        if isinstance(schema, dict) and isinstance(schema.get("required"), list):
+            required = [str(field) for field in schema["required"]]
+        item["description"] = _first_sentence(str(item.get("description") or ""))
+        item["input_schema"] = {"required": required, "schema_seen": True}
+        folded_names.add(name)
+    catalog = manifest.get("catalog")
+    if isinstance(catalog, list) and folded_names:
+        manifest["catalog"] = [
+            item
+            for item in catalog
+            if not (
+                isinstance(item, dict)
+                and str(item.get("name") or "") in folded_names
+            )
+        ]
+
+
+def _first_sentence(text: str) -> str:
+    compact = " ".join(text.split())
+    if "。" in compact:
+        compact = compact.split("。", 1)[0].strip()
+    if len(compact) <= _FOLDED_DESCRIPTION_LIMIT:
+        return compact
+    return compact[: _FOLDED_DESCRIPTION_LIMIT - 1].rstrip() + "…"
 
 
 def _is_loaded_general_skill_result(
@@ -811,105 +997,6 @@ def _generate_harness_action_json(
         return sequence_generator(system_prompt, payload)
     # Test doubles and older compatible clients still expose the original method.
     return client.generate_json(system_prompt, payload)
-
-
-_HARNESS_FINISH_TOOL_NAME = "finish"
-_HARNESS_FINISH_TOOL: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": _HARNESS_FINISH_TOOL_NAME,
-        "description": "结束当前任务并给出给用户的最终回复。无需更多工具调用时使用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reply": {"type": "string", "description": "给用户的最终回复"},
-                "status": {
-                    "type": "string",
-                    "enum": ["completed", "awaiting_user", "handoff", "failed"],
-                    "description": "任务结束状态；需要用户补充信息时用 awaiting_user",
-                },
-            },
-            "required": ["reply"],
-        },
-    },
-}
-
-_HARNESS_TOOL_PROTOCOL_PROMPT = """## 原生工具调用协议
-本次任务通过平台原生 tools 调用能力：
-- 每个已授权能力对应一个工具函数；参数按该工具的参数 schema 填写。
-- capability_search / capability_describe 只用于发现尚未出现在工具列表里的能力；目标能力已在 tools 里时直接调用。
-- 最多调用一次 capability_search；确定能力名后调用 capability_describe，该能力会从下一轮起出现在 tools 里，下一轮必须直接调用它，不要重复搜索或描述。
-- 在完成用户请求之前不要调用 finish；只有确实无法推进时才用 status=awaiting_user 并向用户说明。
-- 需要读取或执行能力时，直接调用对应工具，不要输出 JSON 动作文本。
-- 工具结果会以下一条消息注入；不要编造未返回的结果。
-- 任务完成或需要用户补充信息时，调用 finish 工具；finish 必须是本次响应里唯一的工具调用。"""
-
-
-def _harness_tool_specs(
-    requirement: TaskRequirement,
-) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Build native tool specs from the frame's authorized capabilities.
-
-    Returns ``([], {})`` when the protocol is disabled, so callers keep using the
-    legacy JSON action loop without extra branching.
-    """
-
-    protocol = str(getattr(get_settings(), "agent_action_protocol", "tool_calls") or "").strip()
-    if protocol != "tool_calls":
-        return [], {}
-    manifest = requirement.capability_manifest
-    tools, names = build_tool_specs(manifest, activated=manifest.allowed_names())
-    if not tools:
-        return [], {}
-    if not any(str(item.get("function", {}).get("name") or "") == _HARNESS_FINISH_TOOL_NAME for item in tools):
-        tools = [*tools, _HARNESS_FINISH_TOOL]
-    return tools, names
-
-
-def _with_tool_protocol(system_prompt: str) -> str:
-    return f"{system_prompt}\n\n{_HARNESS_TOOL_PROTOCOL_PROMPT}"
-
-
-def _generate_harness_tool_calls(
-    client: LLMClient,
-    system_prompt: str,
-    payload: dict[str, Any],
-    tools: list[dict[str, Any]],
-) -> list[Any]:
-    generator = getattr(client, "generate_tool_calls", None)
-    if not callable(generator):
-        return []
-    return list(generator(system_prompt, payload, tools=tools, tool_choice="auto") or [])
-
-
-def _actions_from_tool_calls(calls: list[Any], names: dict[str, str]) -> dict[str, Any]:
-    """Map provider tool calls back to Harness actions.
-
-    ``names`` maps the sanitized model-facing function name back to the real
-    capability name; ``finish`` becomes the control action with a reply fragment.
-    """
-
-    actions: list[dict[str, Any]] = []
-    for call in calls:
-        name = str(getattr(call, "name", "") or "").strip()
-        parsed = dict(getattr(call, "parsed_arguments", None) or {})
-        if name == _HARNESS_FINISH_TOOL_NAME:
-            actions.append(
-                {
-                    "action": "finish",
-                    "status": str(parsed.get("status") or "completed"),
-                    "reply_fragment": str(parsed.get("reply") or ""),
-                }
-            )
-            continue
-        actions.append(
-            {
-                "action": "tool",
-                "tool_name": names.get(name, name),
-                "arguments": parsed,
-            }
-        )
-    return {"actions": actions}
 
 
 _HARNESS_FINISH_TOOL_NAME = "finish"
@@ -1308,6 +1395,34 @@ def _step_timeout_result(
         action_count=max(0, action_count),
         error=error,
     )
+
+
+def _duplicate_read_result(
+    tool_name: str,
+    previous: dict[str, Any],
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "already_called": True,
+        "notice": (
+            "相同的只读调用已经成功，结果已在当前 transcript；不要重复执行。"
+            "请使用已有结果完成，或换一个参数/工具。"
+        ),
+        "tool_name": tool_name,
+    }
+    previous_data = previous.get("data")
+    try:
+        serialized = json.dumps(previous_data, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        serialized = ""
+    if len(serialized) <= 2_000:
+        data["previous_result"] = previous_data
+    else:
+        data["previous_result_truncated"] = True
+        if isinstance(previous_data, dict):
+            for key in ("path", "sha256", "size", "kind"):
+                if key in previous_data:
+                    data[key] = previous_data[key]
+    return {"success": True, "data": data}
 
 
 def _bounded_capability_result(

@@ -50,7 +50,9 @@ import {
   WecomApprovalConfirmCardData,
 } from '../chatHelpers';
 import type { TraceLine } from '../chatTypes';
+import type { DashboardViewDescriptor } from '../dashboardTypes';
 import type { UseChatSession } from '../useChatSession';
+import DashboardView from './DashboardView';
 import ExecutionRecord from './ExecutionRecord';
 import HarnessArtifactDownloads from './HarnessArtifactDownloads';
 import KnowledgeCitationList from './KnowledgeCitationList';
@@ -75,12 +77,15 @@ export type MessageRender = {
   attachments: ChatAttachmentRead[];
   harnessArtifacts: HarnessWorkspaceArtifact[];
   statusOnly: boolean;
+  /** Dashboards emitted in this turn, rendered inline (not inside the trace). */
+  dashboards?: DashboardViewDescriptor[];
 };
 
 type MessageBubbleProps = {
   chat: UseChatSession;
   item: ChatMessage;
   render: MessageRender;
+  onOpenDocument?: (artifact: HarnessWorkspaceArtifact) => void;
 };
 
 function activeTeamProgress(item: ChatMessage): { phase: string; statusText: string } | null {
@@ -95,7 +100,7 @@ function activeTeamProgress(item: ChatMessage): { phase: string; statusText: str
   return statusText ? { phase, statusText } : null;
 }
 
-export default function MessageBubble({ chat, item, render }: MessageBubbleProps) {
+export default function MessageBubble({ chat, item, render, onOpenDocument }: MessageBubbleProps) {
   const {
     toggleTrace,
     rateMessage,
@@ -113,6 +118,7 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
     expanded,
     showInlineTrace,
     visibleContent,
+    dashboards = [],
     citations,
     scheduledDraft,
     wecomApprovalConfirm,
@@ -177,6 +183,7 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
               details={details}
               expanded={expanded}
               onToggle={toggleTrace}
+              showDashboards={false}
             />
           ) : null}
 
@@ -226,6 +233,14 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
             )
           ) : null}
 
+          {item.role === 'assistant' && dashboards.length > 0 && (
+            <div className="mt-2 flex flex-col gap-2">
+              {dashboards.map((descriptor) => (
+                <DashboardView key={descriptor.view_id} descriptor={descriptor} />
+              ))}
+            </div>
+          )}
+
           {!statusOnly && attachments.length > 0 && (
             <div className={CHAT_ATTACHMENT_LIST_CLASS}>
               {attachments.map((attachment) => (
@@ -254,6 +269,7 @@ export default function MessageBubble({ chat, item, render }: MessageBubbleProps
               artifacts={harnessArtifacts}
               tenantId={chat.tenantId}
               sessionId={chat.activeConversationId}
+              onOpenDocument={onOpenDocument}
             />
           )}
 

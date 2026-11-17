@@ -198,10 +198,12 @@ def build_slash_turn_plan(
     )
 
 
-def force_capability_for_requirement(
+def require_capability_for_requirement(
     requirement: TaskRequirement,
     projected_manifest: CapabilityManifest,
     descriptor: CapabilityDescriptor,
+    *,
+    completion_criterion: str,
 ) -> None:
     projected = model_descriptor(descriptor)
     target_manifests = [projected_manifest]
@@ -220,8 +222,23 @@ def force_capability_for_requirement(
     requirement.completion_criteria = _unique(
         [
             *requirement.completion_criteria,
-            f"成功调用用户通过斜杠指定的能力：{projected.name}",
+            completion_criterion,
         ]
+    )
+
+
+def force_capability_for_requirement(
+    requirement: TaskRequirement,
+    projected_manifest: CapabilityManifest,
+    descriptor: CapabilityDescriptor,
+) -> None:
+    require_capability_for_requirement(
+        requirement,
+        projected_manifest,
+        descriptor,
+        completion_criterion=(
+            "成功调用用户通过斜杠指定的能力：" + model_descriptor(descriptor).name
+        ),
     )
 
 

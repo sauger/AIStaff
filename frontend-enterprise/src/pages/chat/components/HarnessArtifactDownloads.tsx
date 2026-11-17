@@ -9,6 +9,9 @@ import {
   CHAT_ARTIFACTS_CLASS,
   CHAT_ARTIFACT_BUTTON_CLASS,
   CHAT_ARTIFACT_COPY_CLASS,
+  CHAT_ARTIFACT_DOCUMENT_CARD_CLASS,
+  CHAT_ARTIFACT_DOCUMENT_DOWNLOAD_CLASS,
+  CHAT_ARTIFACT_DOCUMENT_OPEN_CLASS,
   CHAT_ARTIFACT_HEADING_CLASS,
   CHAT_ARTIFACT_ICON_CLASS,
   CHAT_ARTIFACT_IMAGE_CARD_CLASS,
@@ -21,17 +24,20 @@ import {
   CHAT_ARTIFACT_META_CLASS,
   CHAT_ARTIFACT_NAME_CLASS,
 } from '../chatPageStyles';
+import { isSidebarDocumentArtifact } from '../chatHelpers';
 
 type HarnessArtifactDownloadsProps = {
   artifacts: HarnessWorkspaceArtifact[];
   tenantId: string;
   sessionId: string;
+  onOpenDocument?: (artifact: HarnessWorkspaceArtifact) => void;
 };
 
 export default function HarnessArtifactDownloads({
   artifacts,
   tenantId,
   sessionId,
+  onOpenDocument,
 }: HarnessArtifactDownloadsProps) {
   const [downloading, setDownloading] = useState('');
 
@@ -82,6 +88,41 @@ export default function HarnessArtifactDownloads({
                 sessionId={sessionId}
                 onDownload={() => void downloadArtifact(artifact)}
               />
+            );
+          }
+          if (isSidebarDocumentArtifact(artifact) && onOpenDocument && sessionId && tenantId) {
+            return (
+              <div className={CHAT_ARTIFACT_DOCUMENT_CARD_CLASS} key={identity}>
+                <button
+                  type="button"
+                  className={CHAT_ARTIFACT_DOCUMENT_OPEN_CLASS}
+                  aria-label={`打开文档 ${filename}`}
+                  onClick={() => onOpenDocument(artifact)}
+                >
+                  <span className={CHAT_ARTIFACT_ICON_CLASS}>
+                    <StaffdeckIcon name="file" size={17} />
+                  </span>
+                  <span className={CHAT_ARTIFACT_COPY_CLASS}>
+                    <span className={CHAT_ARTIFACT_NAME_CLASS} data-i18n-ignore>
+                      {filename}
+                    </span>
+                    <span className={CHAT_ARTIFACT_META_CLASS}>
+                      {artifactMeta(artifact)}
+                    </span>
+                  </span>
+                  <StaffdeckIcon name="arrow" size={15} />
+                </button>
+                <button
+                  type="button"
+                  className={CHAT_ARTIFACT_DOCUMENT_DOWNLOAD_CLASS}
+                  disabled={isDownloading || !sessionId || !tenantId}
+                  aria-label={`下载文件 ${filename}`}
+                  aria-busy={isDownloading}
+                  onClick={() => void downloadArtifact(artifact)}
+                >
+                  <StaffdeckIcon name="download" size={16} />
+                </button>
+              </div>
             );
           }
           return (

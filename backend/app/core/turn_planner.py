@@ -649,6 +649,8 @@ def _turn_context_summary(turn_context: ScreenTurnContext | None) -> dict[str, A
             "blank": turn_context.blank,
             "plan_id": turn_context.plan_id,
             "plan_status": turn_context.plan_status,
+            "plan_goal": turn_context.plan_goal,
+            "plan_slots": turn_context.plan_slots[:12],
             "selected": [
                 _without_empty(
                     {

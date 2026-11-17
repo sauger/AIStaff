@@ -1552,6 +1552,13 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyStore();
   }, [getSlot, notifyStore]);
 
+  const appendExternalAssistantMessage = useCallback(
+    (sessionId: string, message: ChatMessage) => {
+      appendRealtime(sessionId, { ...message, role: 'assistant' });
+    },
+    [appendRealtime],
+  );
+
   const appendQueuedTurnPreview = useCallback((turn: PreparedChatTurn) => {
     appendRealtime(turn.conversationId, queuedTurnPreview(turn));
   }, [appendRealtime]);
@@ -2165,6 +2172,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       || item.event === 'task_frame_finished'
       || item.event === 'harness_action_created'
       || item.event === 'harness_mcp_app_view'
+      || item.event === 'harness_dashboard_view'
       || item.event === 'harness_tool_completed'
       || item.event === 'harness_step_timeout'
     ) {
@@ -3614,6 +3622,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     rateMessage,
     setActiveCitation,
     activeCitation,
+    appendExternalAssistantMessage,
     // sidebar
     sidebarCollapsed,
     toggleSidebar,

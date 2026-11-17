@@ -62,7 +62,7 @@ describe('Harness artifact downloads', () => {
 
     expect(screen.getByText('Q2 财务报告.txt')).toBeTruthy();
     expect(screen.getByText(/最终交付版 · 2\.0 KB$/)).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: /Q2 财务报告\.txt$/ }));
+    await user.click(screen.getByRole('button', { name: /下载文件 Q2 财务报告\.txt$/ }));
 
     await waitFor(() => {
       expect(mocks.blob).toHaveBeenCalledWith(
@@ -76,6 +76,98 @@ describe('Harness artifact downloads', () => {
     expect(mocks.notifySuccess).toHaveBeenCalledWith(
       expect.stringContaining('Q2 财务报告.txt'),
     );
+  });
+
+  it('opens editable text documents through the sidebar handler instead of downloading', async () => {
+    const user = userEvent.setup();
+    const onOpenDocument = vi.fn();
+    mocks.blob.mockResolvedValue(new Blob(['artifact']));
+    render(
+      <HarnessArtifactDownloads
+        artifacts={[{ ...artifact, path: 'reports/结论说明.md', display_name: '结论说明.md' }]}
+        tenantId="tenant demo"
+        sessionId="session demo"
+        onOpenDocument={onOpenDocument}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '打开文档 结论说明.md' }));
+
+    expect(onOpenDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'reports/结论说明.md' }),
+    );
+    expect(mocks.blob).not.toHaveBeenCalled();
+  });
+
+  it('keeps a separate download action for editable documents', async () => {
+    const user = userEvent.setup();
+    mocks.blob.mockResolvedValue(new Blob(['artifact']));
+    render(
+      <HarnessArtifactDownloads
+        artifacts={[{ ...artifact, path: 'reports/结论说明.md', display_name: '结论说明.md' }]}
+        tenantId="tenant demo"
+        sessionId="session demo"
+        onOpenDocument={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '下载文件 结论说明.md' }));
+
+    await waitFor(() => {
+      expect(mocks.blob).toHaveBeenCalledWith(
+        '/api/chat/sessions/session%20demo/artifacts/task%2Fframe'
+          + '?tenant_id=tenant+demo&path=reports%2F%E7%BB%93%E8%AE%BA%E8%AF%B4%E6%98%8E.md',
+      );
+    });
+  });
+
+  it('opens PDF documents in the sidebar for inline preview', async () => {
+    const user = userEvent.setup();
+    const onOpenDocument = vi.fn();
+    const pdfArtifact = {
+      ...artifact,
+      path: 'reports/结论文档.pdf',
+      display_name: '结论文档.pdf',
+      content_type: 'application/pdf',
+    };
+    render(
+      <HarnessArtifactDownloads
+        artifacts={[pdfArtifact]}
+        tenantId="tenant demo"
+        sessionId="session demo"
+        onOpenDocument={onOpenDocument}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '打开文档 结论文档.pdf' }));
+    expect(onOpenDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'reports/结论文档.pdf' }),
+    );
+    expect(mocks.blob).not.toHaveBeenCalled();
+  });
+
+  it('falls back to download-only for non-document types', async () => {
+    const user = userEvent.setup();
+    mocks.blob.mockResolvedValue(new Blob(['artifact']));
+    const csvArtifact = {
+      ...artifact,
+      path: 'reports/数据表.csv',
+      display_name: '数据表.csv',
+    };
+    render(
+      <HarnessArtifactDownloads
+        artifacts={[csvArtifact]}
+        tenantId="tenant demo"
+        sessionId="session demo"
+        onOpenDocument={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /打开文档/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /下载文件 数据表\.csv$/ }));
+    await waitFor(() => {
+      expect(mocks.blob).toHaveBeenCalled();
+    });
   });
 
   it('keeps the action disabled without a persisted session', () => {

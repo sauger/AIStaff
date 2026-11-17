@@ -195,11 +195,23 @@ def model_descriptor(descriptor: CapabilityDescriptor) -> CapabilityDescriptor:
                 metadata[key] = value
     elif descriptor.kind == "internal":
         metadata["provider"] = "harness"
+    read_only = descriptor.read_only
+    if not read_only and str(metadata.get("side_effect") or "") == "read":
+        read_only = True
+    if not read_only and descriptor.kind in {"general_skill", "knowledge"}:
+        read_only = True
+    if (
+        not read_only
+        and descriptor.kind == "tool"
+        and str(metadata.get("method") or "").strip().upper() == "GET"
+    ):
+        read_only = True
     return descriptor.model_copy(
         update={
             "description": _compact_description(descriptor.description, 1_000),
             "input_schema": _model_input_schema(descriptor.input_schema),
             "metadata": metadata,
+            "read_only": read_only,
         }
     )
 

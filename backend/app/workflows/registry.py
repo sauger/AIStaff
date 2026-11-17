@@ -60,11 +60,15 @@ class StructuredStepError(ValueError):
         message: str,
         *,
         ask_fields: list[str] | None = None,
+        slot_updates: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.ask_fields = list(ask_fields or [])
+        # Optional structured follow-up payload (e.g. pending_edit) persisted
+        # alongside the awaiting-user stop by the runtime's slot_updates path.
+        self.slot_updates: dict[str, Any] | None = dict(slot_updates) if slot_updates else None
 
 
 BinderCallable = Callable[..., BindOutcome]

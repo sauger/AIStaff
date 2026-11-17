@@ -9,6 +9,7 @@ import {
   MarkdownMessage,
   canRateMessage,
   formatTraceLineDuration,
+  dashboardViewsFromTrace,
   harnessEventTraceLine,
   harnessWorkspaceArtifacts,
   knowledgeCitations,
@@ -384,6 +385,45 @@ describe('chat history consumer contract', () => {
     });
   });
 
+  it('collects distinct dashboards from trace lines', () => {
+    const lines = [
+      { id: 'a', kind: 'tool', text: 'x', state: 'completed', dashboard: { view_id: 'v1', title: 'A', kpi_count: 1, chart_count: 1 } },
+      { id: 'b', kind: 'tool', text: 'y', state: 'completed', dashboard: { view_id: 'v1', title: 'A', kpi_count: 1, chart_count: 1 } },
+      { id: 'c', kind: 'tool', text: 'z', state: 'completed' },
+      { id: 'd', kind: 'tool', text: 'w', state: 'completed', dashboard: { view_id: 'v2', title: 'B', kpi_count: 0, chart_count: 2 } },
+    ] as unknown as Parameters<typeof dashboardViewsFromTrace>[0];
+    expect(dashboardViewsFromTrace(lines).map((item) => item.view_id)).toEqual(['v1', 'v2']);
+    expect(dashboardViewsFromTrace(undefined)).toEqual([]);
+  });
+
+  it('maps the dashboard view event to a reference-only trace line', () => {
+    const line = harnessEventTraceLine('harness_dashboard_view', {
+      task_frame_id: 'task-sales',
+      view_id: 'dashview_abc',
+      tenant_id: 'tenant_demo',
+      title: '经营看板',
+      kpi_count: 3,
+      chart_count: 2,
+      tool_name: 'render_dashboard',
+    });
+
+    expect(line).toMatchObject({
+      id: 'harness_dashboard_task-sales_dashview_abc',
+      text: '展示数据大屏 经营看板',
+      detail: '3 个指标 · 2 个图表',
+      state: 'completed',
+      dashboard: {
+        view_id: 'dashview_abc',
+        tenant_id: 'tenant_demo',
+        title: '经营看板',
+        kpi_count: 3,
+        chart_count: 2,
+      },
+    });
+    expect(JSON.stringify(line)).not.toContain('rows');
+    expect(harnessEventTraceLine('harness_dashboard_view', { title: 'no id' })).toBeNull();
+  });
+
   it('keeps a switched SOP visible while it waits for user input', () => {
     const started = harnessEventTraceLine('task_frame_started', {
       task_frame_id: 'task-purchase',
@@ -414,6 +454,32 @@ describe('chat history consumer contract', () => {
       detail: '状态 awaiting_user · 步骤 collect_user_name · 执行 1 个动作',
       state: 'running',
     });
+  });
+
+  it('keeps embedded dashboard and MCP App views when mapping durable trace lines', () => {
+    const mapped = mapTraceLineRead({
+      id: 'harness_dashboard_task-sales_evt_1',
+      kind: 'tool',
+      text: '展示数据大屏 经营看板',
+      state: 'completed',
+      dashboard: {
+        view_id: 'dashview_abc',
+        tenant_id: 'tenant_demo',
+        title: '经营看板',
+        kpi_count: 2,
+        chart_count: 1,
+      },
+      mcpApp: {
+        server_id: 'server-weather',
+        resource_uri: 'ui://weather/card',
+        tool_name: 'weather.card',
+        visibility: ['model', 'app'],
+        mime_type: 'text/html;profile=mcp-app',
+      },
+    });
+
+    expect(mapped.dashboard?.view_id).toBe('dashview_abc');
+    expect(mapped.mcpApp?.resource_uri).toBe('ui://weather/card');
   });
 
   it('maps /trace duration fields and formats quiet per-line timings', () => {

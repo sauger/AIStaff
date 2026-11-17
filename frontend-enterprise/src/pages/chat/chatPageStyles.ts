@@ -197,6 +197,51 @@ export const CHAT_ARTIFACT_IMAGE_FOOTER_CLASS =
   'grid min-w-0 grid-cols-[minmax(0,1fr)_32px] items-center gap-[10px] border-t border-[#eef0f4] bg-white px-[10px] py-[8px]';
 export const CHAT_ARTIFACT_IMAGE_DOWNLOAD_CLASS =
   'inline-grid size-[32px] place-items-center rounded-[8px] border border-[#e3e7f1] bg-white text-[#464c5e] transition hover:border-[#c9d2e4] hover:bg-[#f7f8fa] disabled:cursor-wait disabled:opacity-60';
+export const CHAT_ARTIFACT_DOCUMENT_CARD_CLASS =
+  'grid min-h-[46px] w-full max-w-[320px] grid-cols-[minmax(0,1fr)_32px] items-stretch gap-[6px]';
+export const CHAT_ARTIFACT_DOCUMENT_OPEN_CLASS =
+  'grid min-h-[46px] w-full grid-cols-[32px_minmax(0,1fr)_18px] items-center gap-[9px] rounded-[10px] border border-[#e3e7f1] bg-[#fafbfc] py-[6px] pl-[8px] pr-[6px] text-left text-[#464c5e] transition-colors hover:border-[#c9d2e4] hover:bg-white disabled:cursor-wait disabled:opacity-60';
+export const CHAT_ARTIFACT_DOCUMENT_DOWNLOAD_CLASS =
+  'inline-grid size-full place-items-center rounded-[10px] border border-[#e3e7f1] bg-[#fafbfc] text-[#464c5e] transition hover:border-[#c9d2e4] hover:bg-white disabled:cursor-wait disabled:opacity-60';
+
+// ---------------------------------------------------------------------------
+// Document sidebar (侧栏文档 + 行内编辑)
+// ---------------------------------------------------------------------------
+export const CHAT_DOC_SIDEBAR_CLASS =
+  'flex min-h-0 w-[min(560px,46vw)] shrink-0 flex-col border-l border-[#e3e7f1] bg-white';
+export const CHAT_DOC_HEADER_CLASS =
+  'flex h-[56px] shrink-0 items-center gap-[8px] border-b border-[#f0f1f4] px-[16px]';
+export const CHAT_DOC_TITLE_CLASS =
+  'flex min-w-0 flex-1 items-center gap-[8px] text-[13px] font-semibold text-[#18181a]';
+export const CHAT_DOC_TITLE_ICON_CLASS =
+  'inline-grid size-[28px] shrink-0 place-items-center rounded-[8px] bg-[#eef0f4] text-[#464c5e]';
+export const CHAT_DOC_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto py-[10px]';
+export const CHAT_DOC_PDF_NOTE_CLASS =
+  'm-0 shrink-0 border-t border-[#f0f1f4] px-[16px] py-[8px] text-[11px] leading-[1.5] text-[#858b9c]';
+export const CHAT_DOC_STATUS_CLASS =
+  'grid place-items-center gap-[6px] px-[24px] py-[48px] text-center text-[13px] text-[#858b9c]';
+export const CHAT_DOC_LINE_WRAP_CLASS = 'flex flex-col';
+export const CHAT_DOC_LINE_CLASS =
+  'relative flex min-h-[26px] items-start gap-[10px] rounded-[8px] px-[8px] py-[1px] transition-colors hover:bg-[#f7f8fa]';
+export const CHAT_DOC_LINE_NUMBER_CLASS =
+  'w-[34px] shrink-0 select-none pt-[2px] text-right text-[11px] leading-[1.75] tabular-nums text-[#b3b8c4]';
+export const CHAT_DOC_LINE_TEXT_CLASS =
+  'min-w-0 flex-1 whitespace-pre-wrap break-words pr-[28px] text-[13px] leading-[1.75] text-[#18181a]';
+export const CHAT_DOC_LINE_EDIT_BTN_CLASS =
+  'absolute right-[8px] top-[1px] inline-grid size-[24px] place-items-center rounded-[7px] border-0 bg-transparent p-0 text-[#a2a8b8] transition-colors hover:bg-[#eef0f4] hover:text-[#18181a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c9d2e4]';
+export const CHAT_DOC_LINE_HIGHLIGHT_CLASS =
+  'rounded-[8px] bg-[#fff6dd] ring-1 ring-[#ffd66b] transition-colors duration-700';
+export const CHAT_DOC_EDIT_BOX_CLASS =
+  'mx-[10px] my-[4px] grid gap-[7px] rounded-[10px] border border-[#c9d2e4] bg-[#fafbfc] p-[10px]';
+export const CHAT_DOC_EDIT_TEXTAREA_CLASS =
+  'min-h-[64px] w-full resize-none rounded-[8px] border-0 bg-white px-[10px] py-[8px] text-[13px] leading-[1.6] text-[#18181a] shadow-[inset_0_0_0_1px_#e3e7f1] outline-none placeholder:text-[#b3b8c4] focus:shadow-[inset_0_0_0_1px_#1a71ff] disabled:opacity-60';
+export const CHAT_DOC_EDIT_ACTIONS_CLASS = 'flex items-center justify-between gap-[8px]';
+export const CHAT_DOC_EDIT_HINT_CLASS = 'text-[11px] leading-[1.4] text-[#b3b8c4]';
+export const CHAT_DOC_EDIT_ERROR_CLASS = 'm-0 text-[12px] leading-[1.5] text-[#d20b0b]';
+export const CHAT_DOC_EDIT_CANCEL_BTN_CLASS =
+  'inline-flex h-[28px] items-center rounded-[8px] border border-[#e3e7f1] bg-white px-[12px] text-[12px] font-medium text-[#464c5e] transition-colors hover:border-[#c9d2e4] hover:text-[#18181a] disabled:opacity-50';
+export const CHAT_DOC_EDIT_SUBMIT_BTN_CLASS =
+  'inline-flex h-[28px] items-center rounded-[8px] bg-[#18181a] px-[14px] text-[12px] font-medium text-white transition-colors hover:bg-[#303030] disabled:cursor-not-allowed disabled:opacity-40';
 
 // ---------------------------------------------------------------------------
 // Feedback actions

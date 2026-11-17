@@ -17,6 +17,7 @@ from app.api import (
     external_business_tasks,
     feedback,
     general_skills,
+    internal_screen,
     knowledge,
     knowledge_bases,
     knowledge_proposals,
@@ -149,6 +150,7 @@ app.include_router(auth.router)
 app.include_router(agents.scope_router)
 app.include_router(agents.enterprise_router)
 app.include_router(general_skills.router)
+app.include_router(internal_screen.router)
 app.include_router(knowledge_bases.router)
 app.include_router(knowledge.router)
 app.include_router(cabinet_router)

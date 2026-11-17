@@ -29,6 +29,9 @@ class CapabilityDescriptor(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     available: bool = True
     unavailable_reason: str | None = None
+    # True only for capabilities whose invocation has no external side effect.
+    # Harness uses this to keep batched actions safe and to collapse duplicate reads.
+    read_only: bool = False
 
 
 class CapabilityCatalogEntry(BaseModel):
@@ -71,6 +74,7 @@ class TaskRequirement(BaseModel):
     known_slots: dict[str, Any] = Field(default_factory=dict)
     completion_criteria: list[str] = Field(default_factory=list)
     required_capability_names: list[str] = Field(default_factory=list)
+    blocked_tool_prefixes: list[str] = Field(default_factory=list)
     required_knowledge_base_ids: list[str] = Field(default_factory=list)
     allowed_transitions: list[dict[str, Any]] = Field(default_factory=list)
     memory_projection: list[dict[str, str]] = Field(default_factory=list)

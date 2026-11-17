@@ -67,6 +67,7 @@ from app.tools.tool_schema import (
     MCPSyncResponse,
     ToolBucketRead,
     ToolCall,
+    ToolCapabilityScopeRequest,
     ToolCreateRequest,
     ToolError,
     ToolExecutionPolicy,
@@ -134,7 +135,11 @@ def tool_read(row: Tool, metadata: dict[str, Any] | None = None) -> ToolRead:
         url=row.url,
         headers=row.headers_json or {},
         auth=row.auth_json or {},
-        mcp_config={key: value for key, value in config.items() if key != "execution"},
+        mcp_config={
+            key: value
+            for key, value in config.items()
+            if key not in {"execution", "harness"}
+        },
         execution_policy=_read_execution_policy(config),
         input_schema=row.input_schema or {},
         output_schema=row.output_schema or {},
@@ -144,6 +149,11 @@ def tool_read(row: Tool, metadata: dict[str, Any] | None = None) -> ToolRead:
         login_guide_id=row.login_guide_id,
         enabled=row.enabled,
         metadata=dict(metadata or {}),
+        read_only=_tool_harness_flag(row, "read_only"),
+        required_general_skill_slug=str(
+            _tool_harness_config(row).get("required_general_skill_slug") or ""
+        ).strip()
+        or None,
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -215,7 +225,12 @@ def create_tool(
         url=request.url,
         headers_json=request.headers,
         auth_json=request.auth,
-        config_json=_tool_config(request.mcp_config, request.execution_policy),
+        config_json=_tool_config(
+            request.mcp_config,
+            request.execution_policy,
+            read_only=request.read_only,
+            required_general_skill_slug=request.required_general_skill_slug,
+        ),
         input_schema=request.input_schema,
         output_schema=request.output_schema,
         allowed_skills_json=request.allowed_skills,
@@ -515,6 +530,29 @@ def get_tool(
     return tool_read(row, metadata_by_id.get(row.id))
 
 
+@router.patch("/{tool_id}/capability-scope", response_model=ToolRead)
+def update_tool_capability_scope(
+    tool_id: str,
+    request: ToolCapabilityScopeRequest,
+    agent_id: str | None = Query(default=None),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ToolRead:
+    """Set an explicit capability scope without rewriting the tool row."""
+
+    row = _get_tool(db, request.tenant_id, tool_id)
+    ensure_agent_scope_manager(db, request.tenant_id, agent_id, current_user)
+    _ensure_tool_visible(db, request.tenant_id, row, agent_id)
+    row.capability_scope = request.capability_scope
+    row.capability_scope_inherited = False
+    row.updated_at = utc_now()
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    metadata_by_id = resource_binding_metadata(db, request.tenant_id, agent_id, "tool")
+    return tool_read(row, metadata_by_id.get(row.id))
+
+
 @router.put("/{tool_id}", response_model=ToolRead)
 def update_tool(
     tool_id: str,
@@ -549,6 +587,8 @@ def update_tool(
         request.mcp_config,
         request.execution_policy,
         existing=row.config_json,
+        read_only=request.read_only,
+        required_general_skill_slug=request.required_general_skill_slug,
     )
     row.config_json = updated_config
     row.input_schema = request.input_schema
@@ -813,19 +853,49 @@ def _normalize_probe_url(url: str) -> str:
     return stripped
 
 
+def _tool_harness_config(row: Tool) -> dict[str, Any]:
+    config = row.config_json if isinstance(row.config_json, dict) else {}
+    harness = config.get("harness") if isinstance(config, dict) else None
+    return dict(harness) if isinstance(harness, dict) else {}
+
+
+def _tool_harness_flag(row: Tool, key: str) -> bool | None:
+    value = _tool_harness_config(row).get(key)
+    return value if isinstance(value, bool) else None
+
+
 def _tool_config(
     mcp_config: dict[str, Any],
     execution_policy: object | None,
     *,
     existing: dict[str, Any] | None = None,
+    read_only: bool | None = None,
+    required_general_skill_slug: str | None = None,
 ) -> dict[str, Any]:
     config = {
-        key: value for key, value in (mcp_config or {}).items() if key != "execution"
+        key: value
+        for key, value in (mcp_config or {}).items()
+        if key not in {"execution", "harness"}
     }
     if execution_policy is not None:
         config["execution"] = execution_policy.model_dump(mode="json")
     elif isinstance((existing or {}).get("execution"), dict):
         config["execution"] = dict(existing["execution"])
+    harness = {}
+    if isinstance((existing or {}).get("harness"), dict):
+        harness = dict((existing or {})["harness"])
+    if read_only is not None:
+        harness["read_only"] = read_only
+    else:
+        harness.pop("read_only", None)
+    if required_general_skill_slug is not None:
+        normalized = required_general_skill_slug.strip()
+        if normalized:
+            harness["required_general_skill_slug"] = normalized
+        else:
+            harness.pop("required_general_skill_slug", None)
+    if harness:
+        config["harness"] = harness
     return config
 
 

@@ -1,5 +1,7 @@
 import type { ChatAttachmentRead, ChatMessage } from '@/types';
 
+import type { DashboardViewDescriptor } from './dashboardTypes';
+
 export type SessionSlot = {
   serverMessages: ChatMessage[];
   realtimeMessages: ChatMessage[];
@@ -67,6 +69,7 @@ export type TraceLine = {
   provisional?: boolean;
   depth?: number;
   mcpApp?: MCPAppViewDescriptor;
+  dashboard?: DashboardViewDescriptor;
   /** Wall-clock duration for a completed line, from /trace enrichment or live timing. */
   durationMs?: number;
   /** Model-only duration when wall-clock is unavailable (e.g. projected harness model rows). */

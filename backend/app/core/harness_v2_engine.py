@@ -17,6 +17,7 @@ from app.core.capability_discovery import (
     warm_capability_manifest,
 )
 from app.core.capability_manifest import CapabilityManifestBuilder
+from app.core.general_skill_routing import apply_general_skill_routes
 from app.core.harness_agent import (
     HarnessExecutionCancelled,
     HarnessExecutionFenced,
@@ -64,6 +65,7 @@ from app.core.task_request_compiler import (
 )
 from app.core.turn_planner import TurnPlanner, turn_plan_router_decision
 from app.db.models import (
+    AgentProfile,
     ChatSession,
     ExternalBusinessTask,
     HarnessRunRecord,
@@ -1002,6 +1004,24 @@ class HarnessV2Engine:
                 client_timezone=request.client_timezone,
                 current_speaker=current_speaker_for_requirement(request.speaker),
             )
+            applied_skill_routes: list[str] = []
+            if not self.slash_command and frame.kind == "conversation":
+                agent_profile = (
+                    self.db.get(AgentProfile, session.agent_id)
+                    if session.agent_id
+                    else None
+                )
+                routes = (
+                    (agent_profile.metadata_json or {}).get("general_skill_routes")
+                    if agent_profile is not None
+                    else None
+                )
+                applied_skill_routes = apply_general_skill_routes(
+                    requirement,
+                    model_manifest,
+                    manifest,
+                    routes,
+                )
             if (
                 self.slash_command
                 and self.slash_command.kind in {"skill", "tool"}
@@ -1060,6 +1080,15 @@ class HarnessV2Engine:
                 # each trace checkpoint so the stream relay can expose the
                 # running TaskFrame instead of revealing it only at the end.
                 self.db.commit()
+
+            if applied_skill_routes:
+                trace(
+                    "harness_general_skill_routed",
+                    {
+                        "routed_skills": applied_skill_routes,
+                        "skill_route_count": len(applied_skill_routes),
+                    },
+                )
 
             invoker = HarnessCapabilityInvoker(
                 self.db,
@@ -1144,6 +1173,7 @@ class HarnessV2Engine:
                             if (native_full_surface or _is_workflow_skill(active_skill))
                             else None
                         ),
+                        fold_schemas=not _is_workflow_skill(active_skill),
                     )
                 )
             )
@@ -1313,6 +1343,20 @@ class HarnessV2Engine:
                 break
 
         combined = _combine_results(row.task_id, results)
+        if combined.slot_updates:
+            # A workflow may accumulate slots across several steps (bind,
+            # structured handlers, reply nodes). Persist the merged result so
+            # the next turn's binder can resume the same clarification instead
+            # of seeing an empty or stale TaskFrame state.
+            row.slots_json = {
+                **dict(row.slots_json or {}),
+                **dict(combined.slot_updates or {}),
+            }
+            if self.session is not None:
+                self.session.slots_json = {
+                    **dict(self.session.slots_json or {}),
+                    **dict(combined.slot_updates or {}),
+                }
         if combined.status == "waiting_external_task":
             from app.tools.external_tasks import PERSISTED_TERMINAL_STATUSES
 
@@ -1700,9 +1744,32 @@ class HarnessV2Engine:
                 if row.kind == "conversation"
                 and row.status not in {"completed", "cancelled", "failed"}
             ]
+            # A completed plan-reply SOP frame carries the clarification
+            # state that the next turn's binder needs.  Keep those keys in
+            # the session; task-level binder checks reject stale answers.
+            clarification_slots = next(
+                (
+                    dict(item.slots_json or {})
+                    for item in reversed(records)
+                    if item.kind == "sop"
+                    and isinstance(item.slots_json, dict)
+                    and item.slots_json.get("clarification_plan_id")
+                ),
+                None,
+            )
             session.active_skill_id = None
             session.active_step_id = None
-            session.slots_json = {}
+            session.slots_json = {
+                key: clarification_slots[key]
+                for key in (
+                    "plan_draft",
+                    "plan_clarification",
+                    "clarification_plan_id",
+                    "clarification_task_id",
+                    "clarification_stale",
+                )
+                if clarification_slots is not None and key in clarification_slots
+            }
             session.awaiting_input_json = None
             session.last_agent_question = None
             self.store.set_active_task_frame(

@@ -49,10 +49,24 @@ class ToolCreateRequest(BaseModel):
     capability_scope: CapabilityScope = "general"
     login_guide_id: Optional[str] = None
     enabled: bool = True
+    # Optional Harness metadata.  When omitted, HTTP GET is treated as read-only.
+    read_only: Optional[bool] = None
+    required_general_skill_slug: Optional[str] = None
 
 
 class ToolUpdateRequest(ToolCreateRequest):
     capability_scope: Optional[CapabilityScope] = None
+
+
+class ToolCapabilityScopeRequest(BaseModel):
+    """Narrow update used by deployment scripts after an MCP sync.
+
+    Sync rewrites the tool row and may reset ``capability_scope``; the setup
+    script re-applies the workflow policy as the last step with this payload.
+    """
+
+    tenant_id: str
+    capability_scope: CapabilityScope
 
 
 class ToolRead(BaseModel):
@@ -77,6 +91,8 @@ class ToolRead(BaseModel):
     login_guide_id: Optional[str] = None
     enabled: bool
     metadata: dict[str, Any] = Field(default_factory=dict)
+    read_only: Optional[bool] = None
+    required_general_skill_slug: Optional[str] = None
     created_at: str
     updated_at: str
 

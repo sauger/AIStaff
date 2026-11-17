@@ -23,6 +23,7 @@ import {
   CHAT_MD_TABLE_CLASS,
   CHAT_MD_TABLE_SCROLL_CLASS,
 } from './chatPageStyles';
+import type { DashboardViewDescriptor } from './dashboardTypes';
 import type {
   ComposerAttachment,
   CotTraceIconName,
@@ -1422,6 +1423,8 @@ export function mapTraceLineRead(line: {
   duration_ms?: number | null;
   model_duration_ms?: number | null;
   depth?: number | null;
+  dashboard?: DashboardViewDescriptor | null;
+  mcpApp?: TraceLine['mcpApp'] | null;
 }): TraceLine {
   return {
     id: line.id,
@@ -1438,6 +1441,9 @@ export function mapTraceLineRead(line: {
     collapsible: Boolean(line.collapsible || line.code || line.output),
     durationMs: typeof line.duration_ms === 'number' ? line.duration_ms : undefined,
     modelDurationMs: typeof line.model_duration_ms === 'number' ? line.model_duration_ms : undefined,
+    // Durable /trace payloads carry the same embedded views as live events.
+    dashboard: line.dashboard ?? undefined,
+    mcpApp: line.mcpApp ?? undefined,
   };
 }
 
@@ -1650,6 +1656,32 @@ export function harnessEventTraceLine(
       icon: 'tool',
     };
   }
+  if (eventName === 'harness_dashboard_view') {
+    const viewId = typeof data.view_id === 'string' ? data.view_id.trim() : '';
+    if (!viewId) return null;
+    const title = typeof data.title === 'string' ? data.title : '';
+    const kpiCount = typeof data.kpi_count === 'number' ? data.kpi_count : 0;
+    const chartCount = typeof data.chart_count === 'number' ? data.chart_count : 0;
+    const detail = [
+      kpiCount > 0 ? `${kpiCount} 个指标` : '',
+      chartCount > 0 ? `${chartCount} 个图表` : '',
+    ].filter(Boolean).join(' · ');
+    return {
+      id: `harness_dashboard_${frameId}_${viewId}`,
+      kind: 'tool',
+      text: title ? `展示数据大屏 ${title}` : '展示数据大屏',
+      detail: detail || undefined,
+      dashboard: {
+        view_id: viewId,
+        tenant_id: typeof data.tenant_id === 'string' ? data.tenant_id : undefined,
+        title,
+        kpi_count: kpiCount,
+        chart_count: chartCount,
+      },
+      state: 'completed',
+      icon: 'tool',
+    };
+  }
   if (eventName === 'harness_tool_completed') {
     const success = data.success === true;
     const result = isPlainRecord(data.result) ? data.result : {};
@@ -1783,6 +1815,19 @@ export function canRateMessage(item: ChatMessage): boolean {
     && !item.id.startsWith('text_')
     && !item.id.startsWith('error_')
   );
+}
+
+export function dashboardViewsFromTrace(lines: TraceLine[] | undefined): DashboardViewDescriptor[] {
+  if (!lines || lines.length === 0) return [];
+  const seen = new Set<string>();
+  const views: DashboardViewDescriptor[] = [];
+  for (const line of lines) {
+    const descriptor = line.dashboard;
+    if (!descriptor || !descriptor.view_id || seen.has(descriptor.view_id)) continue;
+    seen.add(descriptor.view_id);
+    views.push(descriptor);
+  }
+  return views;
 }
 
 export function stripTrailingCitationSummary(content: string): string {
@@ -2244,8 +2289,22 @@ export function harnessWorkspaceArtifacts(
         ? { source: artifact.source }
         : {}),
     });
-  });
-  return result;
+  });  return result;
+}
+
+const SIDEBAR_DOCUMENT_PATTERN = /\.(?:md|markdown|txt|docx|pdf)$/i;
+
+/**
+ * 侧栏可打开的文档：Markdown/纯文本（可逐行编辑）、Word（按段落逐行编辑）、
+ * PDF（仅内嵌预览，二进制排版没有可回写的行锚点）。
+ */
+export function isSidebarDocumentArtifact(artifact: HarnessWorkspaceArtifact): boolean {
+  const contentType = artifact.content_type?.toLowerCase().split(';')[0].trim();
+  if (contentType === 'text/markdown' || contentType === 'text/plain') return true;
+  if (contentType === 'application/pdf') return true;
+  // path 是后端判定的依据，display_name 可能不带扩展名。
+  return SIDEBAR_DOCUMENT_PATTERN.test(artifact.path)
+    || SIDEBAR_DOCUMENT_PATTERN.test(artifact.display_name || '');
 }
 
 function isChatAttachment(value: unknown): value is ChatAttachmentRead {

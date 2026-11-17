@@ -27,7 +27,8 @@ class SopToolAuthorization:
         )
 
     def explicitly_allows(self, tool: Tool) -> bool:
-        return bool(self.tool_refs.intersection({tool.id, tool.name}))
+        leaf = str((tool.config_json or {}).get("tool") or "").strip()
+        return bool(self.tool_refs.intersection({tool.id, tool.name, leaf}))
 
 
 def current_sop_tool_authorization(

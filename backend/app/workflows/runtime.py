@@ -419,11 +419,13 @@ class WorkflowRuntime:
         except StructuredStepError as exc:
             self.context.llm_calls += 1
             if exc.ask_fields:
-                # 越界计划：失败并追问，绝不重试写。
+                # 越界计划：失败并追问，绝不重试写；随追问携带的结构化载荷
+                # （如 pending_edit）经 slot_updates 持久化到下一轮。
                 return self._result(
                     status="awaiting_user",
                     reply_fragment=exc.message,
                     task_summary=f"工作流节点 {node_id}（{handler_key}）计划越界，已停下追问。",
+                    slot_updates=exc.slot_updates,
                     structured_result={
                         "kind": handler_key,
                         "expected_fields": list(exc.ask_fields),
@@ -502,11 +504,24 @@ class WorkflowRuntime:
                 "EXPRESSION_UNRESOLVED",
                 f"节点 {node_id} 回复模板解析失败：{exc}",
             )
+        # A reply node may declaratively persist slots (e.g. clear a
+        # pending_edit after a successful edit spine); expressions allowed.
+        slot_updates: dict[str, Any] | None = None
+        raw_slots = metadata.get("slot_updates")
+        if isinstance(raw_slots, dict) and raw_slots:
+            try:
+                slot_updates = resolve_arguments(raw_slots, self._scopes())
+            except UnresolvedExpression as exc:
+                return self._failed(
+                    "EXPRESSION_UNRESOLVED",
+                    f"节点 {node_id} slot_updates 解析失败：{exc}",
+                )
         return self._result(
             status="completed",
             reply_fragment=reply,
             task_summary=f"工作流节点 {node_id}（reply）完成。",
             next_step_id=self._next_step_id(metadata),
+            slot_updates=slot_updates,
         )
 
     # -------------------------------------------------------------- helpers

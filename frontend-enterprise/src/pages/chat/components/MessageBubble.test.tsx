@@ -3,10 +3,17 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { I18nProvider } from '@/i18n';
 import type { AgentProfileRead, ChatMessage, ChatSlashCommand, TeamRead } from '@/types';
 
 import type { UseChatSession } from '../useChatSession';
 import MessageBubble, { type MessageRender } from './MessageBubble';
+
+vi.mock('./DashboardView', () => ({
+  default: ({ descriptor }: { descriptor: { view_id: string } }) => (
+    <div data-testid="dashboard-view">{descriptor.view_id}</div>
+  ),
+}));
 
 const weatherCommand: ChatSlashCommand = {
   kind: 'skill',
@@ -188,5 +195,76 @@ describe('MessageBubble team group identity', () => {
     expect(screen.getByText('已收到全部 2 项成员回复。')).toBeTruthy();
     expect(screen.getByRole('status', { name: '正在整理答案' })).toBeTruthy();
     expect(container.querySelector('button[aria-label="点赞"]')).toBeNull();
+  });
+});
+
+describe('MessageBubble inline dashboard', () => {
+  it('renders the dashboard outside the collapsed execution trace', () => {
+    const item: ChatMessage = {
+      id: 'message-dashboard-1',
+      role: 'assistant',
+      content: '已生成大屏',
+      created_at: '2026-11-05T00:00:00Z',
+    };
+    const messageRender: MessageRender = {
+      traceTurnId: 'turn-dashboard-1',
+      summary: { text: '执行记录', state: 'completed' },
+      details: [
+        {
+          id: 'harness_dashboard_turn-1_view-1',
+          kind: 'tool',
+          text: '展示数据大屏 经营看板',
+          state: 'completed',
+          dashboard: {
+            view_id: 'dashview_1',
+            tenant_id: 'tenant_demo',
+            title: '经营看板',
+            kpi_count: 2,
+            chart_count: 1,
+          },
+        },
+      ],
+      expanded: false,
+      showInlineTrace: true,
+      visibleContent: '已生成大屏',
+      citations: [],
+      scheduledDraft: null,
+      wecomApprovalConfirm: null,
+      wecomApprovalSubmitted: false,
+      scheduledTaskPrompt: false,
+      attachments: [],
+      harnessArtifacts: [],
+      statusOnly: false,
+      dashboards: [
+        {
+          view_id: 'dashview_1',
+          tenant_id: 'tenant_demo',
+          title: '经营看板',
+          kpi_count: 2,
+          chart_count: 1,
+        },
+      ],
+    };
+    const chat = {
+      toggleTrace: vi.fn(),
+      rateMessage: vi.fn(),
+      setActiveCitation: vi.fn(),
+      confirmScheduledTask: vi.fn(),
+      dismissScheduledTaskDraft: vi.fn(),
+      confirmWecomApproval: vi.fn(),
+      dismissWecomApproval: vi.fn(),
+      removeQueuedTurn: vi.fn(),
+      tenantId: 'tenant_demo',
+      activeConversationId: 'session-1',
+    } as unknown as UseChatSession;
+
+    render(
+      <I18nProvider>
+        <MessageBubble chat={chat} item={item} render={messageRender} />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTestId('dashboard-view').textContent).toBe('dashview_1');
+    expect(screen.getByText('已生成大屏')).toBeTruthy();
   });
 });

@@ -267,13 +267,20 @@ def db():
         yield session
 
 
-def _run_turn(db, screen: FakeScreen, *, message: str, context: ScreenTurnContext):
+def _run_turn(
+    db,
+    screen: FakeScreen,
+    *,
+    message: str,
+    context: ScreenTurnContext,
+    client_turn_id: str = "turn-1",
+):
     request = ChatTurnRequest(
         tenant_id="tenant-demo",
         session_id="sess-1",
         agent_id="agent-1",
         user_id="user-1",
-        client_turn_id="turn-1",
+        client_turn_id=client_turn_id,
         message=message,
         screen_context=context,
     )
@@ -319,7 +326,13 @@ def _tool_names(screen: FakeScreen) -> list[str]:
     return [name for name, _arguments in screen.calls]
 
 
-def test_t1_creates_a_sales_screen_through_the_sop(db):
+def test_t1_creates_a_blank_canvas_and_asks_for_data(db):
+    """Blank-first (design §6): turn 1 creates the canvas and asks one question.
+
+    The dataset answer arrives on the next turn; the plan-on-blank-screen path
+    is covered by test_t2 and the binder unit tests. This test pins the new
+    first-turn shape so it cannot silently regress to guessing a whole plan.
+    """
     screen = FakeScreen(components=[], revision=1)
     screen.next_plan = {
         "confirm": True,
@@ -338,10 +351,10 @@ def test_t1_creates_a_sales_screen_through_the_sop(db):
         },
     }
 
-    response = _run_turn(
+    first = _run_turn(
         db,
         screen,
-        message="帮我做一个销售经营大屏",
+        message="帮我建一个空白画布",
         context=ScreenTurnContext(
             project_id="proj_1",
             screen_id=None,
@@ -351,18 +364,45 @@ def test_t1_creates_a_sales_screen_through_the_sop(db):
         ),
     )
 
-    assert "方案" in response.reply
-    assert "销售经营大屏" in response.reply
+    assert "空白大屏" in first.reply
+    assert "用哪份数据" in first.reply
+    assert _tool_names(screen) == ["create_screen", "describe_dataset"]
+    assert screen.plan_calls == 0
+    assert _step_ids(db) == ["bind", "create_blank", "ask_catalog", "ask_data"]
+
+
+def test_t1b_plans_a_new_screen_without_creating_it(db):
+    screen = FakeScreen(components=[], revision=1)
+
+    response = _run_turn(
+        db,
+        screen,
+        message="帮我生成一个新的 ERP",
+        context=ScreenTurnContext(
+            project_id="proj_1",
+            screen_id=None,
+            screen_name=None,
+            revision=None,
+            component_count=None,
+        ),
+    )
+
+    assert "确认" in response.reply
+    assert "已创建" not in response.reply
     assert _tool_names(screen) == ["describe_dataset", "plan_screen"]
-    draft = screen.calls[1][1]["draft"]
-    assert "frame" not in draft and "operations" not in draft
-    assert "confirm" not in screen.calls[1][1]
-    assert screen.plan_calls == 1
+    assert "create_screen" not in _tool_names(screen)
+    arguments = screen.calls[1][1]
+    assert arguments["draft"]["goal"] == "帮我生成一个新的 ERP"
+    assert arguments["draft"]["assumptions"] == ["当前目录没有数值字段，暂时只能生成字段说明。"]
+    assert "slots" not in arguments["draft"]
+    assert "confirm" not in arguments
+    assert screen.plan_calls == 1  # model-first draft understanding, then deterministic fallback
     assert _step_ids(db) == [
         "bind",
         "describe_catalog",
         "draft_plan",
         "submit_plan",
+        "compose_plan_reply",
         "reply_plan",
     ]
 
@@ -405,6 +445,7 @@ def test_t2_fills_an_empty_current_screen(db):
     assert arguments["expectedRevision"] == 10
     assert "frame" not in arguments["draft"]
     assert "operations" not in arguments["draft"]
+    # Model-first draft understanding runs once before the deterministic fallback.
     assert screen.plan_calls == 1
 
 

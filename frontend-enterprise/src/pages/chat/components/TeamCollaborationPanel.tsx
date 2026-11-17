@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import type {
   AgentProfileRead,
   ChatMessage,
+  HarnessWorkspaceArtifact,
   KnowledgeCitation,
   TeamConversationMessageRead,
   TeamConversationRead,
@@ -156,11 +157,13 @@ export default function TeamCollaborationPanel({
   agents,
   conversation,
   onOpenCitation,
+  onOpenDocument,
 }: {
   team: TeamRead;
   agents: AgentProfileRead[];
   conversation?: TeamConversationRead;
   onOpenCitation?: (citation: KnowledgeCitation) => void;
+  onOpenDocument?: (artifact: HarnessWorkspaceArtifact, sessionId?: string) => void;
 }) {
   const loadedConversations = useTeamCollaborations(conversation ? undefined : team);
   const conversations = conversation ? [conversation] : loadedConversations;
@@ -460,6 +463,11 @@ export default function TeamCollaborationPanel({
                           artifacts={artifacts}
                           tenantId={TENANT_ID}
                           sessionId={conversation.session_id}
+                          onOpenDocument={
+                            onOpenDocument
+                              ? (artifact) => onOpenDocument(artifact, conversation.session_id)
+                              : undefined
+                          }
                         />
                         <KnowledgeCitationList
                           citations={citations}

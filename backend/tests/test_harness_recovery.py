@@ -201,3 +201,26 @@ def test_runtime_sweeper_recovers_expired_execution() -> None:
         turn = db.get(HarnessTurnRecord, "hturn-orphan")
         assert turn is not None and turn.error_json["code"] == "HARNESS_EXECUTION_LOST"
         assert db.get(ChatSession, "session-orphan").status == "active"
+
+
+def test_startup_recovery_handles_naive_lease_datetimes() -> None:
+    engine = _engine()
+    now = utc_now()
+    with Session(engine) as db:
+        _add_active_execution(db, lease_expires_at=now + timedelta(minutes=10))
+        for model, row_id in (
+            (HarnessRunRecord, "hrun-orphan"),
+            (HarnessTaskFrameRecord, "htask-orphan"),
+            (HarnessTurnRecord, "hturn-orphan"),
+        ):
+            row = db.get(model, row_id)
+            assert row is not None
+            row.lease_expires_at = row.lease_expires_at.replace(tzinfo=None)
+            db.add(row)
+        db.commit()
+
+        result = recover_orphan_harness_runs(db, startup=True, now=now)
+
+        assert result.run_count == 1
+        assert result.frame_count == 1
+        assert result.turn_count == 1

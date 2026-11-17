@@ -9,7 +9,7 @@ from app.core import turn_planner as turn_planner_module
 from app.core.turn_planner import TurnPlanner
 from app.db.models import ChatSession, ModelConfig, Skill
 from app.session.session_schema import ChatTurnRequest, TurnPlan
-from app.session.turn_context import ScreenIntent, ScreenTurnContext, SelectedComponent
+from app.session.turn_context import ScreenTurnContext, SelectedComponent
 
 
 def _request(**overrides: object) -> ChatTurnRequest:
@@ -68,6 +68,29 @@ def test_valid_screen_context_parses() -> None:
         )
     ]
     assert "screen_context" not in request.model_dump()
+
+
+def test_screen_context_accepts_an_optional_clarification_answer() -> None:
+    context = _screen_context(
+        clarification_answer={
+            "planId": "plan_1",
+            "questionId": "q_focus",
+            "optionIds": ["focus.avg_progress"],
+            "text": "",
+            "labels": ["平均进度"],
+            "datasetVersionIds": ["ver_1"],
+            "draftPatch": {
+                "sources": ["ver_1"],
+                "slots": [{"title": "平均进度", "role": "metric"}],
+            },
+            "suggestedOptionIds": [],
+        }
+    )
+
+    assert context.clarification_answer is not None
+    assert context.clarification_answer.planId == "plan_1"
+    assert context.clarification_answer.draftPatch["sources"] == ["ver_1"]
+    assert _screen_context().clarification_answer is None
 
 
 def test_unknown_schema_id_is_rejected() -> None:
@@ -257,8 +280,6 @@ def test_sop_payload_without_metadata_stays_backward_compatible(monkeypatch) -> 
 
 
 def test_planner_prompt_documents_structured_turn_context() -> None:
-    from pathlib import Path
-
     from app.core.turn_planner import PROMPT_PATH
 
     text = PROMPT_PATH.read_text(encoding="utf-8")

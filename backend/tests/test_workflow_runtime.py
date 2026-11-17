@@ -825,3 +825,64 @@ def test_engine_branch_skips_nodes_without_runtime_action(monkeypatch) -> None:
     result, _, _ = _engine_result(monkeypatch, skill)
 
     assert result is None
+
+
+def test_structured_step_awaiting_carries_slot_updates() -> None:
+    from app.workflows.registry import STRUCTURED_STEPS, StructuredStepError
+
+    def handler(**_kwargs):
+        raise StructuredStepError(
+            "FIELD_MAPPING_MISSING",
+            "用哪个字段做分类、哪个做数值？",
+            ask_fields=["field_mapping"],
+            slot_updates={
+                "pending_edit": {"target_component_id": "cmp_1", "component_type": "pie"}
+            },
+        )
+
+    STRUCTURED_STEPS["g4_test_asker"] = handler
+    try:
+        skill = _workflow_skill(
+            node_metadata={"runtime_action": "structured_llm", "handler": "g4_test_asker"}
+        )
+        runtime = WorkflowRuntime(
+            pack=WorkflowPack.from_skill(skill) or pytest.fail("workflow pack missing"),
+            invoker=FakeInvoker(),
+            manifest=_manifest(),
+            trace=TraceRecorder(),
+            task_frame_id=TASK_FRAME_ID,
+            skill_id=skill.skill_id,
+            allowed_tool_refs=set(),
+            turn_context=_turn_context(),
+            checkpoint={},
+            slots={},
+            llm_generate=lambda _system, _payload: {},
+        )
+
+        result = runtime.run_step(node_id="resolve", node=_node(skill, "resolve"))
+    finally:
+        STRUCTURED_STEPS.pop("g4_test_asker", None)
+
+    assert result.status == "awaiting_user"
+    # 随追问携带的结构化载荷必须能持久化到下一轮（agent_loop 按 slot_updates 合并）。
+    assert result.slot_updates == {
+        "pending_edit": {"target_component_id": "cmp_1", "component_type": "pie"}
+    }
+
+
+def test_reply_node_persists_declared_slot_updates() -> None:
+    skill = _workflow_skill(
+        node_metadata={
+            "runtime_action": "reply",
+            "template": "已完成。",
+            "slot_updates": {"pending_edit": None},
+        }
+    )
+    runtime = _runtime(skill)
+
+    result = runtime.run_step(node_id="resolve", node=_node(skill, "resolve"))
+
+    assert result.status == "completed"
+    assert result.reply_fragment == "已完成。"
+    # 执行成功后清空 pending_edit（设计 §6.3）。
+    assert result.slot_updates == {"pending_edit": None}

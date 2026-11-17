@@ -27,6 +27,9 @@ class ScreenIntent(BaseModel):
     # True when this turn starts a new generation task (second generation on
     # the same screen, explicit new screen, or a confirmed new generation).
     new_generation: bool = False
+    # 组件名，仅当用户原话点名（"把部门合同额改成饼图"）时填写；
+    # 不从 selected 推断补写。空口点名不是选中。
+    component: str | None = None
     dataset: str | None = None
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
@@ -37,12 +40,54 @@ class ScreenIntent(BaseModel):
     reason: str = ""
 
 
-class SelectedComponent(BaseModel):
-    """One user-selected screen component, without props/style/frame payloads."""
+class ClarificationAnswer(BaseModel):
+    """One structured answer to a plan clarification (ADR-0009 / screen/v1).
+
+    The ai-screen service validates the answer against the active task and its
+    pending plan, then forwards this normalized payload. ``optionIds`` are
+    server-generated and must be treated as opaque; ``draftPatch`` is the
+    fragment to merge. ``planDraft`` is the full current plan when the server
+    sends one, and it wins over the session copy. ``planDraftHash`` is recorded
+    for the caller and is not a compare-and-swap token.
+    """
+
+    planId: str | None = None
+    questionId: str = ""
+    optionIds: list[str] = Field(default_factory=list)
+    text: str = ""
+    labels: list[str] = Field(default_factory=list)
+    datasetVersionIds: list[str] = Field(default_factory=list)
+    draftPatch: dict[str, Any] = Field(default_factory=dict)
+    suggestedOptionIds: list[str] = Field(default_factory=list)
+    planDraft: dict[str, Any] | None = None
+    planDraftHash: str | None = None
+
+
+class BindingSummary(BaseModel):
+    """Lightweight data-binding summary of one component.
+
+    Only what intent routing and field-mapping questions need: which dataset
+    version feeds the component and which dimension/measure fields it uses.
+    """
+
+    datasetVersionId: str
+    dimensions: list[str] = Field(default_factory=list)
+    measures: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ComponentSummary(BaseModel):
+    """One screen component listed for name resolution and real options."""
 
     component_id: str
     name: str | None = None
     component_type: str | None = None
+    locked: bool = False
+
+
+class SelectedComponent(ComponentSummary):
+    """One user-selected screen component, without props/style/frame payloads."""
+
+    binding: BindingSummary | None = None
 
 
 class ScreenTurnContext(BaseModel):
@@ -61,10 +106,18 @@ class ScreenTurnContext(BaseModel):
     revision: int | None = None
     component_count: int | None = None
     blank: bool | None = None
+    # Primary selection = the last component the user selected; None when
+    # nothing is selected or an old client does not send the field.
+    primary_component_id: str | None = None
+    components: list[ComponentSummary] = Field(default_factory=list)
     selected: list[SelectedComponent] = Field(default_factory=list)
     editor_dirty: bool = False
     plan_id: str | None = None
     plan_status: str | None = None
+    # Compact active-plan projection for intent understanding. The full draft
+    # stays in ai-screen; this is only enough to keep the conversation anchored.
+    plan_goal: str | None = None
+    plan_slots: list[str] = Field(default_factory=list)
     confirm_plan: bool = False
     session_id: str | None = None
     intent: ScreenIntent | None = None
@@ -76,4 +129,7 @@ class ScreenTurnContext(BaseModel):
     placement: str | None = None
     workspace: dict[str, Any] | None = None
     entry: str | None = None
+    # ADR-0009: present only on a turn that answers a plan clarification.
+    # Non-clarification turns omit it or send null; old senders keep working.
+    clarification_answer: ClarificationAnswer | None = None
 

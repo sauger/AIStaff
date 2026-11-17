@@ -7189,3 +7189,11 @@ body,
   opacity: 0.75;
   pointer-events: none;
 }
+
+/* Inline wall preview on the public share page */
+.dash-public-wall {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 12px;
+}

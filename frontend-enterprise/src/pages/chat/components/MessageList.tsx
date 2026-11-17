@@ -15,12 +15,14 @@ import {
   scheduledDraftForMessage,
   wecomApprovalConfirmForMessage,
   wecomApprovalSubmittedForMessage,
+  dashboardViewsFromTrace,
   stripTrailingCitationSummary,
   traceDetails,
   traceLineAllowed,
   traceSummary,
 } from '../chatHelpers';
 import { staffdeckDisplayText } from '@/employee';
+import type { HarnessWorkspaceArtifact } from '@/types';
 import type { UseChatSession } from '../useChatSession';
 import ChatEmptyState from './ChatEmptyState';
 import KnowledgeProposalPanel from './KnowledgeProposalPanel';
@@ -34,9 +36,11 @@ import TeamCollaborationPanel, {
 export default function MessageList({
   chat,
   emptyState,
+  onOpenDocument,
 }: {
   chat: UseChatSession;
   emptyState?: ReactNode;
+  onOpenDocument?: (artifact: HarnessWorkspaceArtifact, sessionId?: string) => void;
 }) {
   const {
     displayedMessages,
@@ -78,6 +82,7 @@ export default function MessageList({
                 agents={chat.agents}
                 conversation={entry.conversation}
                 onOpenCitation={chat.setActiveCitation}
+                onOpenDocument={onOpenDocument}
               />
             ) : null;
           }
@@ -101,6 +106,7 @@ export default function MessageList({
           const visibleTrace = forceRunningTrace ? traceLines : allowedTrace;
           const summary = trace && visibleTrace.length > 0 ? traceSummary(trace, visibleTrace) : null;
           const details = traceDetails(visibleTrace);
+          const dashboards = dashboardViewsFromTrace(trace?.lines);
           const traceActive = isCurrentStreamingTrace(traceTurnId, item);
           const summaryForRender = summary && traceActive && !trace?.completedAt
             ? { ...summary, state: 'running' as const }
@@ -170,6 +176,7 @@ export default function MessageList({
             && citations.length === 0
             && attachments.length === 0
             && harnessArtifacts.length === 0
+            && dashboards.length === 0
           ) {
             return null;
           }
@@ -178,6 +185,7 @@ export default function MessageList({
             traceTurnId,
             summary: summaryForRender,
             details,
+            dashboards,
             expanded,
             showInlineTrace,
             visibleContent,
@@ -192,7 +200,15 @@ export default function MessageList({
             statusOnly,
           };
 
-          return <MessageBubble key={`${item.id}:message`} chat={chat} item={item} render={render} />;
+          return (
+            <MessageBubble
+              key={`${item.id}:message`}
+              chat={chat}
+              item={item}
+              render={render}
+              onOpenDocument={onOpenDocument}
+            />
+          );
         })}
       </div>
 

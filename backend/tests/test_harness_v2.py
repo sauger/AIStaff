@@ -868,6 +868,9 @@ def test_turn_planner_exposes_sops_but_not_runtime_capabilities(monkeypatch) -> 
         {
             "skill_id": "refund",
             "name": "退款流程",
+            # _sop_payload 契约（WP1）：同时透出 SOP 声明的 goal，
+            # 供 TurnPlanner 判断路由，不再只给 id/name/description。
+            "goal": ["完成退款审核"],
         }
     ]
     assert "available_skills" not in payloads[0]
@@ -3429,11 +3432,13 @@ def test_harness_agent_executes_consecutive_json_actions_in_order(
                         capability_id="skill-first",
                         name="skill.first",
                         kind="tool",
+                        read_only=True,
                     ),
                     CapabilityDescriptor(
                         capability_id="skill-second",
                         name="skill.second",
                         kind="tool",
+                        read_only=True,
                     ),
                 ]
             ),
@@ -3810,6 +3815,534 @@ def test_harness_agent_rejects_describe_result_from_another_snapshot() -> None:
 
     assert activated == set()
     assert requirement.capability_manifest.available == []
+
+
+def test_harness_agent_folds_activated_manifest_after_one_full_exposure(
+    monkeypatch,
+) -> None:
+    actions = iter(
+        [
+            {
+                "action": "tool",
+                "tool_name": "capability_describe",
+                "arguments": {"capabilities": ["orders.lookup"]},
+            },
+            {
+                "action": "tool",
+                "tool_name": "orders.lookup",
+                "arguments": {"order_id": "ORDER-1"},
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "订单已查询。",
+                "task_summary": "查询完成。",
+            },
+        ]
+    )
+    payloads: list[dict[str, object]] = []
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, payload):
+            payloads.append(payload)
+            return next(actions)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    requirement = TaskRequirement(
+        task_frame_id="task-fold-manifest",
+        kind="conversation",
+        goal="查询订单",
+        capability_manifest=CapabilityManifest(
+            available=[
+                CapabilityDescriptor(
+                    capability_id="harness.read-file",
+                    name="read_file",
+                    kind="tool",
+                    description="读取工作区文件。路径必须来自本轮产物。",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"path": {"type": "string", "description": "路径"}},
+                        "required": ["path"],
+                    },
+                ),
+                CapabilityDescriptor(
+                    capability_id="builtin.discovery.describe",
+                    name="capability_describe",
+                    kind="internal",
+                ),
+            ],
+            snapshot_revision="revision-1",
+        ),
+    )
+    full_schema = {
+        "type": "object",
+        "properties": {
+            "order_id": {"type": "string", "description": "订单号"},
+        },
+        "required": ["order_id"],
+    }
+
+    def invoke_tool(name: str, _arguments: dict[str, object]) -> dict[str, object]:
+        if name == "capability_describe":
+            return {
+                "success": True,
+                "data": {
+                    "snapshot_revision": "revision-1",
+                    "activated_capabilities": [
+                        {
+                            "capability_id": "tool-orders",
+                            "name": "orders.lookup",
+                            "kind": "tool",
+                            "description": "查询订单。第一句保留。后面的字段说明不该再整包重发。",
+                            "input_schema": full_schema,
+                        }
+                    ],
+                },
+            }
+        return {"success": True, "data": {"status": "paid"}}
+
+    result = HarnessTaskAgent().run(
+        requirement,
+        _model_config(),
+        invoke_tool,
+        max_actions=3,
+    )
+
+    def available(payload: dict[str, object]) -> dict[str, dict[str, object]]:
+        task = payload["task_requirement"]
+        assert isinstance(task, dict)
+        manifest = task["capability_manifest"]
+        assert isinstance(manifest, dict)
+        rows = manifest["available"]
+        assert isinstance(rows, list)
+        return {str(row["name"]): row for row in rows if isinstance(row, dict)}
+
+    assert result.status == "completed"
+    assert len(payloads) == 3
+    first = available(payloads[0])
+    second = available(payloads[1])
+    third = available(payloads[2])
+    assert "orders.lookup" not in first
+    assert second["orders.lookup"]["input_schema"] == full_schema
+    assert third["orders.lookup"]["description"] == "查询订单"
+    assert third["orders.lookup"]["input_schema"] == {
+        "required": ["order_id"],
+        "schema_seen": True,
+    }
+    assert "properties" in first["read_file"]["input_schema"]
+    assert "properties" in second["read_file"]["input_schema"]
+    assert "properties" in third["read_file"]["input_schema"]
+    stored = {
+        item.name: item for item in requirement.capability_manifest.available
+    }
+    assert stored["orders.lookup"].input_schema == full_schema
+
+
+def test_harness_agent_rejects_write_and_finish_in_action_batch(monkeypatch) -> None:
+    outputs = iter(
+        [
+            {
+                "actions": [
+                    {
+                        "action": "tool",
+                        "tool_name": "write_file",
+                        "arguments": {"path": "out.txt", "content": "x"},
+                    },
+                    {
+                        "action": "finish",
+                        "status": "completed",
+                        "reply_fragment": "不应执行",
+                    },
+                ]
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "已拒绝批量写操作。",
+            },
+        ]
+    )
+    payloads: list[dict[str, object]] = []
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, payload):
+            payloads.append(payload)
+            return next(outputs)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    invoked: list[str] = []
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-reject-write-batch",
+            kind="conversation",
+            goal="批量写文件",
+            capability_manifest=CapabilityManifest(
+                available=[
+                    CapabilityDescriptor(
+                        capability_id="builtin.fs.write_file",
+                        name="write_file",
+                        kind="file",
+                        input_schema={"type": "object"},
+                        read_only=False,
+                    )
+                ],
+                snapshot_revision="revision-batch",
+            ),
+        ),
+        _model_config(),
+        lambda name, _arguments: invoked.append(name) or {"success": True},
+        max_actions=2,
+    )
+
+    assert result.status == "completed"
+    assert invoked == []
+    repair = payloads[1]["protocol_repair"]
+    assert repair["action_sequence_rules"]["finish_must_be_standalone"] is True
+    assert repair["action_sequence_rules"]["only_read_only_tools"] is True
+
+
+def test_harness_agent_blocks_duplicate_successful_read(monkeypatch) -> None:
+    outputs = iter(
+        [
+            {
+                "action": "tool",
+                "tool_name": "orders.lookup",
+                "arguments": {"order_id": "ORDER-1"},
+            },
+            {
+                "action": "tool",
+                "tool_name": "orders.lookup",
+                "arguments": {"order_id": "ORDER-1"},
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "已查询。",
+            },
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, _payload):
+            return next(outputs)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    invoked: list[str] = []
+    trace_events: list[tuple[str, dict[str, object]]] = []
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-duplicate-read",
+            kind="conversation",
+            goal="查询订单",
+            capability_manifest=CapabilityManifest(
+                available=[
+                    CapabilityDescriptor(
+                        capability_id="tool-orders",
+                        name="orders.lookup",
+                        kind="tool",
+                        read_only=True,
+                    )
+                ],
+                snapshot_revision="revision-dup",
+            ),
+        ),
+        _model_config(),
+        lambda name, _arguments: invoked.append(name)
+        or {"success": True, "data": {"status": "paid"}},
+        max_actions=3,
+        trace_sink=lambda event_type, payload: trace_events.append(
+            (event_type, payload)
+        ),
+    )
+
+    assert result.status == "completed"
+    assert invoked == ["orders.lookup"]
+    assert any(event == "harness_duplicate_read_blocked" for event, _ in trace_events)
+
+
+def test_harness_agent_does_not_fold_file_tool_after_describe(monkeypatch) -> None:
+    outputs = iter(
+        [
+            {
+                "action": "tool",
+                "tool_name": "capability_describe",
+                "arguments": {"capabilities": ["read_file"]},
+            },
+            {
+                "action": "tool",
+                "tool_name": "read_file",
+                "arguments": {"path": "report.txt"},
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "已读取。",
+            },
+        ]
+    )
+    payloads: list[dict[str, object]] = []
+    file_schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    }
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, payload):
+            payloads.append(payload)
+            return next(outputs)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    requirement = TaskRequirement(
+        task_frame_id="task-file-not-folded",
+        kind="conversation",
+        goal="读取文件",
+        capability_manifest=CapabilityManifest(
+            available=[
+                CapabilityDescriptor(
+                    capability_id="harness.read-file",
+                    name="read_file",
+                    kind="file",
+                    description="读取工作区文件。",
+                    input_schema=file_schema,
+                    read_only=True,
+                ),
+                CapabilityDescriptor(
+                    capability_id="builtin.discovery.describe",
+                    name="capability_describe",
+                    kind="internal",
+                ),
+            ],
+            snapshot_revision="revision-file",
+        ),
+    )
+
+    def invoke_tool(name: str, _arguments: dict[str, object]) -> dict[str, object]:
+        if name == "capability_describe":
+            return {
+                "success": True,
+                "data": {
+                    "snapshot_revision": "revision-file",
+                    "activated_capabilities": [
+                        {
+                            "capability_id": "harness.read-file",
+                            "name": "read_file",
+                            "kind": "file",
+                            "description": "读取工作区文件。",
+                            "input_schema": file_schema,
+                            "read_only": True,
+                        }
+                    ],
+                },
+            }
+        return {"success": True, "data": {"content": "hello"}}
+
+    result = HarnessTaskAgent().run(
+        requirement,
+        _model_config(),
+        invoke_tool,
+        max_actions=3,
+    )
+
+    def available(payload: dict[str, object]) -> dict[str, dict[str, object]]:
+        task = payload["task_requirement"]
+        assert isinstance(task, dict)
+        manifest = task["capability_manifest"]
+        assert isinstance(manifest, dict)
+        rows = manifest["available"]
+        assert isinstance(rows, list)
+        return {str(row["name"]): row for row in rows if isinstance(row, dict)}
+
+    assert result.status == "completed"
+    assert len(payloads) == 3
+    for payload in payloads[1:]:
+        assert available(payload)["read_file"]["input_schema"] == file_schema
+
+
+def test_harness_agent_redescribes_folded_capability_with_full_schema(monkeypatch) -> None:
+    outputs = iter(
+        [
+            {
+                "action": "tool",
+                "tool_name": "capability_describe",
+                "arguments": {"capabilities": ["orders.lookup"]},
+            },
+            {
+                "action": "tool",
+                "tool_name": "orders.lookup",
+                "arguments": {"order_id": "ORDER-1"},
+            },
+            {
+                "action": "tool",
+                "tool_name": "capability_describe",
+                "arguments": {"capabilities": ["orders.lookup"]},
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "已查询。",
+            },
+        ]
+    )
+    payloads: list[dict[str, object]] = []
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, payload):
+            payloads.append(payload)
+            return next(outputs)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    full_schema = {
+        "type": "object",
+        "properties": {"order_id": {"type": "string"}},
+        "required": ["order_id"],
+    }
+    requirement = TaskRequirement(
+        task_frame_id="task-redescribe",
+        kind="conversation",
+        goal="查询订单",
+        capability_manifest=CapabilityManifest(
+            available=[
+                CapabilityDescriptor(
+                    capability_id="builtin.discovery.describe",
+                    name="capability_describe",
+                    kind="internal",
+                )
+            ],
+            snapshot_revision="revision-redescribe",
+        ),
+    )
+
+    def invoke_tool(name: str, _arguments: dict[str, object]) -> dict[str, object]:
+        if name == "capability_describe":
+            return {
+                "success": True,
+                "data": {
+                    "snapshot_revision": "revision-redescribe",
+                    "activated_capabilities": [
+                        {
+                            "capability_id": "tool-orders",
+                            "name": "orders.lookup",
+                            "kind": "tool",
+                            "description": "查询订单。第一句。",
+                            "input_schema": full_schema,
+                            "read_only": True,
+                        }
+                    ],
+                },
+            }
+        return {"success": True, "data": {"status": "paid"}}
+
+    result = HarnessTaskAgent().run(
+        requirement,
+        _model_config(),
+        invoke_tool,
+        max_actions=4,
+    )
+
+    def available(payload: dict[str, object]) -> dict[str, dict[str, object]]:
+        task = payload["task_requirement"]
+        assert isinstance(task, dict)
+        manifest = task["capability_manifest"]
+        assert isinstance(manifest, dict)
+        rows = manifest["available"]
+        assert isinstance(rows, list)
+        return {str(row["name"]): row for row in rows if isinstance(row, dict)}
+
+    assert result.status == "completed"
+    assert available(payloads[2])["orders.lookup"]["input_schema"] == {
+        "required": ["order_id"],
+        "schema_seen": True,
+    }
+    assert available(payloads[3])["orders.lookup"]["input_schema"] == full_schema
+
+
+def test_harness_agent_does_not_activate_policy_blocked_capability(monkeypatch) -> None:
+    outputs = iter(
+        [
+            {
+                "action": "tool",
+                "tool_name": "capability_describe",
+                "arguments": {"capabilities": ["tokenop.export_platform_usage_details"]},
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "该请求不能取数。",
+            },
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, _payload):
+            return next(outputs)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    requirement = TaskRequirement(
+        task_frame_id="task-policy-blocked",
+        kind="conversation",
+        goal="跨口径合计",
+        blocked_tool_prefixes=["tokenop."],
+        capability_manifest=CapabilityManifest(
+            available=[
+                CapabilityDescriptor(
+                    capability_id="builtin.discovery.describe",
+                    name="capability_describe",
+                    kind="internal",
+                )
+            ],
+            snapshot_revision="revision-policy",
+        ),
+    )
+
+    def invoke_tool(name: str, _arguments: dict[str, object]) -> dict[str, object]:
+        if name == "capability_describe":
+            return {
+                "success": True,
+                "data": {
+                    "snapshot_revision": "revision-policy",
+                    "activated_capabilities": [
+                        {
+                            "capability_id": "tool-export",
+                            "name": "tokenop.export_platform_usage_details",
+                            "kind": "tool",
+                            "input_schema": {"type": "object"},
+                            "read_only": True,
+                        }
+                    ],
+                },
+            }
+        raise AssertionError("blocked capability must not be invoked")
+
+    result = HarnessTaskAgent().run(
+        requirement,
+        _model_config(),
+        invoke_tool,
+        max_actions=2,
+    )
+
+    assert result.status == "completed"
+    assert "tokenop.export_platform_usage_details" not in {
+        item.name for item in requirement.capability_manifest.available
+    }
 
 
 def test_harness_agent_keeps_knowledge_results_and_citations_linked(

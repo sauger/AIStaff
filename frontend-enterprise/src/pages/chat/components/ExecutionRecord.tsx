@@ -35,6 +35,7 @@ import {
 } from '../chatPageStyles';
 import { formatTraceLineDuration, traceLineIconName, traceSummaryIconName } from '../chatHelpers';
 import type { CotTraceIconName, TraceLine } from '../chatTypes';
+import DashboardView from './DashboardView';
 import MCPAppView from './MCPAppView';
 
 const COT_ICON_MAP: Record<CotTraceIconName, ComponentType<SVGProps<SVGSVGElement>>> = {
@@ -62,6 +63,8 @@ type ExecutionRecordProps = {
   details: TraceLine[];
   expanded: boolean;
   onToggle: (turnId: string, isExpanded: boolean) => void;
+  /** Dashboards normally render inline in the message, not inside the trace. */
+  showDashboards?: boolean;
 };
 
 export default function ExecutionRecord({
@@ -70,6 +73,7 @@ export default function ExecutionRecord({
   details,
   expanded,
   onToggle,
+  showDashboards = true,
 }: ExecutionRecordProps) {
   const { t } = useI18n();
 
@@ -132,6 +136,9 @@ export default function ExecutionRecord({
                     </details>
                   )}
                   {line.mcpApp && <MCPAppView descriptor={line.mcpApp} />}
+                  {showDashboards && line.dashboard && (
+                    <DashboardView descriptor={line.dashboard} />
+                  )}
                 </span>
               </div>
             );
