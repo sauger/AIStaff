@@ -61,7 +61,7 @@ import {
 import type { UseChatSession } from '../useChatSession';
 import SlashCommandChip from './SlashCommandChip';
 
-export default function Composer({ chat }: { chat: UseChatSession }) {
+export default function Composer({ chat, variant = 'default' }: { chat: UseChatSession; variant?: 'default' | 'workbench' }) {
   const { t } = useI18n();
   const {
     input,
@@ -184,9 +184,10 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
     void send();
   };
 
+  const isWorkbench = variant === 'workbench';
   return (
-    <div className={CHAT_INPUT_SHELL_CLASS}>
-      <div className={CHAT_COMPOSER_STAGE_CLASS}>
+    <div className={cn(CHAT_INPUT_SHELL_CLASS, isWorkbench && 'cw-composer-shell')}>
+      <div className={cn(CHAT_COMPOSER_STAGE_CLASS, isWorkbench && 'cw-composer-stage')}>
         {showModelSetupNotice && (
           <div className="mb-[10px] flex flex-col items-start justify-between gap-[10px] rounded-[12px] border border-[#f3d28b] bg-[#fff8e8] px-[14px] py-[10px] text-[#6f4500] shadow-[0_8px_24px_rgba(92,62,0,0.08)] sm:flex-row sm:items-center">
             <div className="flex min-w-0 items-center gap-[9px]">
@@ -206,7 +207,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
             )}
           </div>
         )}
-        {showComposerAvatar && displayedProfile && (
+        {(!isWorkbench && showComposerAvatar && displayedProfile) && (
           <HoverCard openDelay={80} closeDelay={80}>
             <HoverCardTrigger asChild>
               <button
@@ -287,7 +288,11 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
           </HoverCard>
         )}
         <form
-          className={cn(CHAT_COMPOSER_FORM_CLASS, composerDragActive && CHAT_COMPOSER_FORM_DRAG_CLASS)}
+          className={cn(
+            CHAT_COMPOSER_FORM_CLASS,
+            isWorkbench && 'cw-composer-form',
+            composerDragActive && CHAT_COMPOSER_FORM_DRAG_CLASS,
+          )}
           onDragEnter={handleComposerDragEnter}
           onDragOver={handleComposerDragOver}
           onDragLeave={handleComposerDragLeave}
@@ -459,6 +464,17 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
 
           <div className={cn('flex items-center justify-between gap-[10px]', !composerActive && 'opacity-95')}>
             <div className={CHAT_COMPOSER_CONTEXT_ROW_CLASS}>
+              {isWorkbench ? (
+                <button
+                  type="button"
+                  className={CHAT_COMPOSER_PLUS_BTN_CLASS}
+                  aria-label="添加附件"
+                  title="添加附件"
+                  onClick={() => handleComposerPlusAction('upload')}
+                >
+                  <StaffdeckIcon name="plus" size={16} />
+                </button>
+              ) : (
               <DropdownMenu open={composerPlusOpen} onOpenChange={setComposerPlusOpen}>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -481,6 +497,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+              )}
               {composerIntent === 'scheduled_task' && (
                 <button
                   type="button"
@@ -513,7 +530,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
                   <span>定时任务</span>
                 </button>
               )}
-              <div className={CHAT_COMPOSER_HINT_CLASS}>Enter 发送 / Shift+Enter 换行</div>
+              {!isWorkbench && <div className={CHAT_COMPOSER_HINT_CLASS}>Enter 发送 / Shift+Enter 换行</div>}
             </div>
             <div className={CHAT_COMPOSER_ACTIONS_ROW_CLASS}>
               <DropdownMenu>
@@ -560,7 +577,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
               )}
               <button
                 type="submit"
-                className={CHAT_COMPOSER_SEND_BTN_CLASS}
+                className={cn(CHAT_COMPOSER_SEND_BTN_CLASS, isWorkbench && 'cw-composer-send')}
                 disabled={sendDisabled}
                 aria-label={currentSessionRunning ? '加入发送队列' : '发送'}
                 title={currentSessionRunning ? '加入发送队列' : '发送'}

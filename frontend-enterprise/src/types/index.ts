@@ -860,6 +860,8 @@ export type TurnTraceRead = {
 export type TraceSummary = {
   session_id: string;
   user_id?: string;
+  agent_id?: string;
+  title?: string;
   active_skill_id?: string;
   active_step_id?: string;
   last_decision?: Record<string, unknown>;

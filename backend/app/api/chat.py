@@ -100,6 +100,7 @@ from app.session.session_schema import (
     ChatAttachmentRead,
     ChatSessionCreateRequest,
     ChatSessionRead,
+    ChatSessionSearchRead,
     ChatSessionUpdateRequest,
     ChatTurnRequest,
     ChatTurnResponse,
@@ -2207,14 +2208,7 @@ def create_chat_session(
     return session_read(row)
 
 
-@router.get("/sessions", response_model=list[ChatSessionRead])
-def list_chat_sessions(
-    tenant_id: str = Query(...),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> list[ChatSessionRead]:
-    _ensure_request_tenant(tenant_id, current_user)
-    ensure_tenant(db, tenant_id)
+def _visible_chat_sessions(db: Session, tenant_id: str, current_user: User) -> list[ChatSession]:
     rows = list(
         db.exec(
             select(ChatSession)
@@ -2266,6 +2260,15 @@ def list_chat_sessions(
     )
     rows = [row for row in rows if row.id not in hidden_session_ids]
     _cleanup_stale_completed_sessions(db, tenant_id, rows)
+    return rows
+
+
+def _chat_session_reads(
+    db: Session,
+    tenant_id: str,
+    current_user: User,
+    rows: list[ChatSession],
+) -> list[ChatSessionRead]:
     scheduled_session_ids = {
         session_id
         for session_id in db.exec(
@@ -2290,6 +2293,121 @@ def list_chat_sessions(
         )
         for row in rows
     ]
+
+
+def _scope_history_sessions(
+    rows: list[ChatSession],
+    *,
+    agent_id: str | None,
+    team_id: str | None,
+) -> list[ChatSession]:
+    if team_id:
+        return [row for row in rows if row.team_id == team_id]
+    if agent_id:
+        return [row for row in rows if row.agent_id == agent_id and not row.team_id]
+    raise HTTPException(status_code=400, detail="agent_id or team_id is required")
+
+
+def _like_contains(term: str) -> str:
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _session_field_matches(row: ChatSession, needle: str) -> bool:
+    folded = needle.casefold()
+    return any(
+        folded in (value or "").casefold()
+        for value in (row.title, row.summary, row.last_agent_question)
+    )
+
+
+def _content_match_session_ids(
+    db: Session,
+    tenant_id: str,
+    session_ids: list[str],
+    needle: str,
+) -> set[str]:
+    if not session_ids:
+        return set()
+    pattern = _like_contains(needle)
+    hit_ids: list[str] = []
+    for start in range(0, len(session_ids), 400):
+        chunk = session_ids[start:start + 400]
+        hit_ids.extend(
+            db.exec(
+                select(Message.session_id).where(
+                    Message.tenant_id == tenant_id,
+                    Message.session_id.in_(chunk),  # type: ignore[attr-defined]
+                    Message.content.ilike(pattern, escape="\\"),
+                )
+            ).all()
+        )
+    unique_hits = list(dict.fromkeys(hit_ids))
+    if not unique_hits:
+        return set()
+    messages: list[Message] = []
+    for start in range(0, len(unique_hits), 400):
+        chunk = unique_hits[start:start + 400]
+        messages.extend(
+            db.exec(
+                select(Message).where(
+                    Message.tenant_id == tenant_id,
+                    Message.session_id.in_(chunk),  # type: ignore[attr-defined]
+                )
+            ).all()
+        )
+    grouped: dict[str, list[Message]] = {}
+    for message in messages:
+        grouped.setdefault(message.session_id, []).append(message)
+    folded = needle.casefold()
+    matched: set[str] = set()
+    for session_id, session_messages in grouped.items():
+        visible = visible_message_rows(session_messages)
+        if any(folded in visible_message_content(message).casefold() for message in visible):
+            matched.add(session_id)
+    return matched
+
+
+@router.get("/sessions", response_model=list[ChatSessionRead])
+def list_chat_sessions(
+    tenant_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> list[ChatSessionRead]:
+    _ensure_request_tenant(tenant_id, current_user)
+    ensure_tenant(db, tenant_id)
+    rows = _visible_chat_sessions(db, tenant_id, current_user)
+    return _chat_session_reads(db, tenant_id, current_user, rows)
+
+
+@router.get("/sessions/search", response_model=ChatSessionSearchRead)
+def search_chat_sessions(
+    tenant_id: str = Query(...),
+    q: str = Query(..., min_length=1, max_length=200),
+    agent_id: str | None = Query(None),
+    team_id: str | None = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> ChatSessionSearchRead:
+    term = q.strip()
+    if not term:
+        raise HTTPException(status_code=400, detail="q is required")
+    _ensure_request_tenant(tenant_id, current_user)
+    ensure_tenant(db, tenant_id)
+    rows = _scope_history_sessions(
+        _visible_chat_sessions(db, tenant_id, current_user),
+        agent_id=agent_id,
+        team_id=team_id,
+    )
+    content_ids = _content_match_session_ids(db, tenant_id, [row.id for row in rows], term)
+    matched = [row for row in rows if row.id in content_ids or _session_field_matches(row, term)]
+    page = matched[offset:offset + limit]
+    return ChatSessionSearchRead(
+        items=_chat_session_reads(db, tenant_id, current_user, page),
+        total=len(matched),
+    )
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionRead)

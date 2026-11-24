@@ -40,16 +40,6 @@ function renderLogin(onLogin = vi.fn()) {
   return onLogin;
 }
 
-async function showFormAndEnterCredentials(
-  user: ReturnType<typeof userEvent.setup>,
-  username = 'admin',
-  password = 'secret',
-) {
-  await user.click(screen.getByRole('button', { name: '登录' }));
-  await user.type(screen.getByLabelText('账号'), username);
-  await user.type(screen.getByLabelText('密码'), password);
-}
-
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -57,27 +47,22 @@ afterEach(() => {
 });
 
 describe('LoginPage', () => {
-  it('shows the original landing hero before revealing credentials', async () => {
-    const user = userEvent.setup();
+  it('renders the centered design login card immediately', () => {
     renderLogin();
 
-    expect(screen.getByText('我们来做什么？')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: /RapidStaff/ })).toBeTruthy();
-    expect(screen.getAllByText('RapidStaff').length).toBeGreaterThan(0);
-    expect(screen.getByAltText('RapidStaff 产品预览')).toBeTruthy();
-    expect(screen.queryByText('StaffDeck')).toBeNull();
-    expect(screen.queryByLabelText('账号')).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: '登录' }));
-
+    expect(screen.getByRole('img', { name: 'RapidStaff 数字员工' })).toBeTruthy();
     expect(screen.getByLabelText('账号')).toBeTruthy();
     expect(screen.getByLabelText('密码')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '立即登录' })).toBeTruthy();
+    expect(screen.getByText('记住密码')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '忘记密码?' })).toBeTruthy();
+    expect(screen.queryByText('我们来做什么？')).toBeNull();
+    expect(screen.queryByAltText('RapidStaff 产品预览')).toBeNull();
   });
 
   it('toggles the password between hidden and visible text', async () => {
     const user = userEvent.setup();
     renderLogin();
-    await user.click(screen.getByRole('button', { name: '登录' }));
     const password = screen.getByLabelText('密码');
 
     expect(password.getAttribute('type')).toBe('password');
@@ -93,8 +78,9 @@ describe('LoginPage', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderLogin();
 
-    await showFormAndEnterCredentials(user, '  admin  ', '  secret  ');
-    await user.click(screen.getByRole('button', { name: '登录' }));
+    await user.type(screen.getByLabelText('账号'), '  admin  ');
+    await user.type(screen.getByLabelText('密码'), '  secret  ');
+    await user.click(screen.getByRole('button', { name: '立即登录' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/login', expect.objectContaining({
@@ -112,11 +98,37 @@ describe('LoginPage', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(session)));
     const onLogin = renderLogin();
 
-    await showFormAndEnterCredentials(user);
-    await user.click(screen.getByRole('button', { name: '登录' }));
+    await user.type(screen.getByLabelText('账号'), 'admin');
+    await user.type(screen.getByLabelText('密码'), 'secret');
+    await user.click(screen.getByRole('button', { name: '立即登录' }));
 
     await waitFor(() => expect(onLogin).toHaveBeenCalledWith(session));
     expect(JSON.parse(window.localStorage.getItem(ENTERPRISE_AUTH_STORAGE_KEY) || 'null'))
       .toEqual(session);
+  });
+
+  it('shows a notice for missing credentials and for password recovery', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    await user.click(screen.getByRole('button', { name: '立即登录' }));
+    expect(screen.getByRole('status').textContent).toBe('请输入账号');
+
+    await user.click(screen.getByRole('button', { name: '忘记密码?' }));
+    expect(screen.getByRole('status').textContent).toBe('密码找回尚未接入，请联系管理员。');
+  });
+
+  it('remembers only the username across sessions', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(session)));
+    renderLogin();
+
+    await user.click(screen.getByText('记住密码'));
+    await user.type(screen.getByLabelText('账号'), 'admin');
+    await user.type(screen.getByLabelText('密码'), 'secret');
+    await user.click(screen.getByRole('button', { name: '立即登录' }));
+
+    await waitFor(() => expect(window.localStorage.getItem('staffdeck_login_username')).toBe('admin'));
+    expect(window.localStorage.getItem('staffdeck_login_password')).toBeNull();
   });
 });

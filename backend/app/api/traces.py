@@ -19,16 +19,19 @@ router = APIRouter(
 @router.get("")
 def list_traces(
     tenant_id: str = Query(...),
+    agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[dict]:
     ensure_current_user_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
-    sessions = db.exec(
-        select(ChatSession)
-        .where(ChatSession.tenant_id == tenant_id, ChatSession.user_id == current_user.id)
-        .order_by(ChatSession.updated_at.desc())
-    ).all()
+    statement = select(ChatSession).where(
+        ChatSession.tenant_id == tenant_id,
+        ChatSession.user_id == current_user.id,
+    )
+    if agent_id:
+        statement = statement.where(ChatSession.agent_id == agent_id)
+    sessions = db.exec(statement.order_by(ChatSession.updated_at.desc())).all()
     traces: list[dict] = []
     for chat_session in sessions:
         events = db.exec(
@@ -50,6 +53,8 @@ def list_traces(
             {
                 "session_id": chat_session.id,
                 "user_id": chat_session.user_id,
+                "agent_id": chat_session.agent_id,
+                "title": chat_session.title,
                 "active_skill_id": chat_session.active_skill_id,
                 "active_step_id": chat_session.active_step_id,
                 "last_decision": last_decision,

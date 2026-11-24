@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import {
   CHAT_DEBUG_PANEL_CLASS,
   CHAT_MESSAGES_CLASS,
@@ -37,10 +39,17 @@ export default function MessageList({
   chat,
   emptyState,
   onOpenDocument,
+  className,
+  stackClassName,
+  variant = 'default',
 }: {
   chat: UseChatSession;
   emptyState?: ReactNode;
   onOpenDocument?: (artifact: HarnessWorkspaceArtifact, sessionId?: string) => void;
+  /** 覆盖滚动容器样式（工作台三栏布局使用更宽的左右留白）。 */
+  className?: string;
+  stackClassName?: string;
+  variant?: 'default' | 'workbench';
 }) {
   const {
     displayedMessages,
@@ -69,10 +78,10 @@ export default function MessageList({
   const timelineEntries = mergeTeamChatTimeline(renderMessages, teamCollaborations);
 
   return (
-    <div className={CHAT_MESSAGES_CLASS} ref={chatMessagesRef} onScroll={handleChatMessagesScroll}>
+    <div className={className || CHAT_MESSAGES_CLASS} ref={chatMessagesRef} onScroll={handleChatMessagesScroll}>
       {timelineEntries.length === 0 && (emptyState ?? <ChatEmptyState chat={chat} />)}
 
-      <div className={CHAT_MESSAGE_STACK_CLASS}>
+      <div className={stackClassName || CHAT_MESSAGE_STACK_CLASS}>
         {timelineEntries.map((entry) => {
           if (entry.kind === 'collaboration') {
             return chat.displayedTeam ? (
@@ -206,6 +215,8 @@ export default function MessageList({
               chat={chat}
               item={item}
               render={render}
+              variant={variant}
+              showAssistantSender={variant === 'workbench'}
               onOpenDocument={onOpenDocument}
             />
           );
@@ -213,7 +224,7 @@ export default function MessageList({
       </div>
 
       {currentScheduledDraft && !hasVisibleMessageScheduledDraft && (
-        <div className={CHAT_MESSAGE_STACK_CLASS}>
+        <div className={stackClassName || CHAT_MESSAGE_STACK_CLASS}>
           <ScheduledDraftCard
             draft={currentScheduledDraft}
             createdTask={activeConversationId ? createdScheduledTasks[`session:${activeConversationId}`] : undefined}
@@ -236,4 +247,3 @@ export default function MessageList({
     </div>
   );
 }
-import type { ReactNode } from 'react';

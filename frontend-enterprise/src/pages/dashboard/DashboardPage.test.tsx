@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { I18nProvider } from '@/i18n';
@@ -91,5 +91,41 @@ describe('DashboardPage team scope compatibility', () => {
       expect(url).not.toContain('team%3A');
       expect(url).not.toContain('/agents/team');
     });
+  });
+  it('exposes a 运行轨迹 tab that navigates to the traces route', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/work-record')) {
+        return jsonResponse({ reply_stats: { total: 0, today: 0, by_day: {} }, events: [] });
+      }
+      if (url.includes('/api/enterprise/agents')) return jsonResponse([agent]);
+      if (url.includes('/api/enterprise/feedback/summary')) {
+        return jsonResponse({ total_feedback: 0, up_count: 0, down_count: 0, bucket_counts: [] });
+      }
+      return jsonResponse([]);
+    }));
+
+    function LocationProbe() {
+      return <div data-testid="location">{useLocation().pathname}</div>;
+    }
+
+    render(
+      <I18nProvider>
+        <TooltipProvider>
+          <MemoryRouter initialEntries={['/enterprise/dashboard']}>
+            <LocationProbe />
+            <DashboardPage
+              currentUser={{ id: 'user-1', tenant_id: 'tenant_demo', username: 'demo', role: 'admin' }}
+              isAdmin
+            />
+          </MemoryRouter>
+        </TooltipProvider>
+      </I18nProvider>,
+    );
+
+    const tab = await screen.findByRole('tab', { name: /运行轨迹/ });
+    fireEvent.mouseDown(tab);
+    fireEvent.click(tab);
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/enterprise/traces'));
   });
 });

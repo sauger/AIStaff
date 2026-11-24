@@ -102,7 +102,7 @@ const STEPS: QuickStartStep[] = [
     target: "open-chat",
     side: "right",
     nextLabel: "开始对话",
-    nextRoute: EnterpriseRoute.Gallery,
+    nextRoute: EnterpriseRoute.Chat,
   },
 ];
 

@@ -1,4 +1,3 @@
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import EmployeeAvatar from '@/components/EmployeeAvatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -198,55 +197,69 @@ export default function ChatDialogs({ chat }: { chat: UseChatSession }) {
           }
         }}
       >
-        <DialogContent className="gap-0 overflow-hidden rounded-[16px] p-0">
-          <DialogHeader className="px-[16px] pt-[16px] pb-[12px]">
-            <DialogTitle className="text-[14px] leading-[normal] font-medium text-[#18181a]">
+        <DialogContent
+          showCloseButton={false}
+          className="w-[min(476px,calc(100vw-32px))] max-w-[476px] gap-0 rounded-[12px] bg-white p-[24px] shadow-[0_24px_100px_rgba(0,0,0,0.13)] ring-0 sm:max-w-[476px]"
+        >
+          <DialogHeader className="mb-[18px] text-left">
+            <DialogTitle className="text-[20px] leading-[24px] font-semibold text-[#272b34]">
               重命名
             </DialogTitle>
           </DialogHeader>
-          <div className="px-[16px] pb-[4px]">
-            <Input
-              autoFocus
-              maxLength={80}
-              value={renameTitle}
-              onChange={(event) => setRenameTitle(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void saveRename();
-                }
-              }}
-              placeholder="输入会话名称"
-            />
-          </div>
-          <div className="flex items-center justify-end gap-[8px] pt-[12px] pr-[16px] pb-[16px] pl-[12px]">
-            <Button
-              variant="outline"
-              className="h-[32px] w-[80px] rounded-[10px] border-[#e3e7f1] bg-white px-[12px] py-[8px] text-[14px] font-normal text-[#464c5e] hover:border-[#e3e7f1] hover:bg-[#f6f6f6] hover:text-[#18181a]"
+          <Input
+            autoFocus
+            maxLength={80}
+            value={renameTitle}
+            onChange={(event) => setRenameTitle(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void saveRename();
+              }
+            }}
+            placeholder="输入会话名称"
+          />
+          <div className="mt-[22px] flex items-center justify-end gap-[8px]">
+            <button
+              type="button"
+              className="cw-dialog-cancel"
               onClick={() => {
                 setRenameSession(null);
                 setRenameTitle('');
               }}
             >
               取消
-            </Button>
-            <Button
-              className="h-[32px] w-[80px] rounded-[10px] bg-[#18181a] px-[12px] py-[8px] text-[14px] font-normal text-white hover:bg-[#303030]"
-              onClick={() => void saveRename()}
-            >
+            </button>
+            <button type="button" className="cw-dialog-confirm" onClick={() => void saveRename()}>
               保存
-            </Button>
+            </button>
           </div>
         </DialogContent>
       </Dialog>
 
-      <ConfirmDialog
-        open={Boolean(pendingDelete)}
-        onOpenChange={(open) => !open && setPendingDelete(null)}
-        title="删除会话"
-        description="删除后无法恢复该会话及其消息记录，确定继续吗？"
-        onConfirm={() => void confirmDeleteSession()}
-      />
+      <Dialog open={Boolean(pendingDelete)} onOpenChange={(open) => !open && setPendingDelete(null)}>
+        <DialogContent
+          showCloseButton={false}
+          className="w-[min(476px,calc(100vw-32px))] max-w-[476px] gap-0 rounded-[12px] bg-white p-[24px] shadow-[0_24px_100px_rgba(0,0,0,0.13)] ring-0 sm:max-w-[476px]"
+        >
+          <DialogHeader className="mb-[18px] text-left">
+            <DialogTitle className="text-[20px] leading-[24px] font-semibold text-[#272b34]">
+              删除会话
+            </DialogTitle>
+          </DialogHeader>
+          <p className="m-0 text-[14px] leading-[20px] text-[#8c9092]">
+            删除后无法恢复该会话及其消息记录，确定继续吗？
+          </p>
+          <div className="mt-[22px] flex items-center justify-end gap-[8px]">
+            <button type="button" className="cw-dialog-cancel" onClick={() => setPendingDelete(null)}>
+              取消
+            </button>
+            <button type="button" className="cw-dialog-confirm" onClick={() => void confirmDeleteSession()}>
+              删除
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

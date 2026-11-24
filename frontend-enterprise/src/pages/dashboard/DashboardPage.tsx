@@ -9,6 +9,7 @@ import IconAccount from '../../assets/icons/sys-accounts.svg?react';
 import IconProfileFile from '../../assets/icons/profile-file.svg?react';
 import IconProfileAlarm from '../../assets/icons/profile-alarm.svg?react';
 import IconProfileHistory from '../../assets/icons/profile-history.svg?react';
+import IconProfileTrace from '../../assets/icons/profile-trace.svg?react';
 import IconProfileCalendar from '../../assets/icons/profile-calendar.svg?react';
 import { api, TENANT_ID } from '../../api/client';
 import type { EnterpriseAuthUser } from '../../auth';
@@ -20,6 +21,7 @@ import StaffdeckIcon from '../../components/StaffdeckIcon';
 import ScheduledTasksTab from './ScheduledTasksTab';
 import MemoriesTab from './MemoriesTab';
 import ConversationLogsTab from './ConversationLogsTab';
+import TracesPage from '../TracesPage';
 import WorkRecordTab from './WorkRecordTab';
 import EvolutionPanel from './EvolutionPanel';
 import { employeeDashboardMetrics } from './employeeDashboardMetrics';
@@ -389,6 +391,9 @@ export default function DashboardPage({
           {canEditSelectedAgent && <EvolutionPanel agentId={selectedAgent.id} />}
         </>
       )}
+      {profileTab === 'traces' && (
+        <TracesPage agentId={selectedAgent.id} agentName={selectedAgent.name} />
+      )}
       {profileTab === 'scheduled' && <ScheduledTasksTab />}
       {profileTab === 'memories' && <MemoriesTab currentUser={currentUser} agent={selectedAgent} />}
       {profileTab === 'logs' && <ConversationLogsTab />}
@@ -443,7 +448,7 @@ function MetricTile({ label, value }: { label: string; value: number }) {
   );
 }
 
-type ProfileTabKey = 'work' | 'scheduled' | 'memories' | 'logs';
+type ProfileTabKey = 'work' | 'traces' | 'scheduled' | 'memories' | 'logs';
 
 const PROFILE_TABS: {
   key: ProfileTabKey;
@@ -452,6 +457,7 @@ const PROFILE_TABS: {
   route: EnterpriseRoute;
 }[] = [
   { key: 'work', label: '工作记录', Icon: IconProfileFile, route: EnterpriseRoute.Dashboard },
+  { key: 'traces', label: '运行轨迹', Icon: IconProfileTrace, route: EnterpriseRoute.Traces },
   { key: 'scheduled', label: '定时任务', Icon: IconProfileAlarm, route: EnterpriseRoute.ScheduledTasks },
   { key: 'memories', label: '记忆', Icon: IconProfileHistory, route: EnterpriseRoute.Memories },
   { key: 'logs', label: '对话日志', Icon: IconProfileCalendar, route: EnterpriseRoute.Feedback },

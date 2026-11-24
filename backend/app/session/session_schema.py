@@ -351,6 +351,11 @@ class ChatSessionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ChatSessionSearchRead(BaseModel):
+    items: list[ChatSessionRead]
+    total: int
+
+
 class MessageRead(BaseModel):
     id: str
     tenant_id: str

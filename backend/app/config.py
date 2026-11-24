@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # SkillCard.metadata.workflow.runtime=="workflow_v1" 的 SOP 才走声明式节点
     # 执行，排障时可一键回退到旧执行路径。
     workflow_runtime_enabled: bool = False
+    # 部署档位：dev=本地开发，保留默认种子口令与旧执行路径回退；
+    # demo=客户演示，启动时校验演示所依赖的配置，样例数据只允许写入演示空间；
+    # prod=生产，关键配置缺失时启动直接失败，不允许静默降级。
+    deployment_profile: str = "dev"
+    # 非 dev 档的种子口令。留空时 demo/prod 会生成一次性随机口令并写入
+    # user_data_dir()/demo_credentials.txt，避免把 admin/admin 带到演示环境。
+    demo_admin_password: str = ""
+    demo_user_password: str = ""
     tool_timeout_seconds: float = 8.0
     external_task_poll_seconds: float = 2.0
     external_task_callback_base_url: str = ""
@@ -161,6 +169,46 @@ class Settings(BaseSettings):
     @property
     def general_skill_runtime_package_list(self) -> list[str]:
         return [item.strip() for item in self.general_skill_runtime_packages.split(",") if item.strip()]
+
+    @property
+    def normalized_deployment_profile(self) -> str:
+        return (self.deployment_profile or "dev").strip().lower()
+
+
+DEPLOYMENT_PROFILES = frozenset({"dev", "demo", "prod"})
+
+
+def runtime_profile_problems(settings: Settings) -> list[str]:
+    """Return human-readable reasons the current profile cannot run safely.
+
+    ``dev`` only reports an unknown profile value: local development keeps the
+    historical defaults (seed accounts, legacy execution fallback) on purpose.
+    ``demo`` and ``prod`` must fail fast instead of silently degrading the SOP
+    runtime, because a degraded demo still answers — just not through the
+    workflow the customer is being shown.
+    """
+
+    profile = settings.normalized_deployment_profile
+    if profile not in DEPLOYMENT_PROFILES:
+        return [
+            f"DEPLOYMENT_PROFILE={settings.deployment_profile!r} 无效，"
+            f"只接受 {'/'.join(sorted(DEPLOYMENT_PROFILES))}"
+        ]
+
+    problems: list[str] = []
+    if profile in {"demo", "prod"} and not settings.workflow_runtime_enabled:
+        problems.append(
+            "必须设置 WORKFLOW_RUNTIME_ENABLED=true："
+            "关闭时声明式 SOP 会静默回退到自由规划，演示/生产看到的不是同一条执行路径"
+        )
+    if profile == "prod":
+        if settings.app_secret == "change-me-in-development":
+            problems.append("必须设置非默认 APP_SECRET")
+        elif len(settings.app_secret) < 16:
+            problems.append("APP_SECRET 长度必须 >= 16")
+        if settings.allow_local_artifact_links:
+            problems.append("必须关闭 ALLOW_LOCAL_ARTIFACT_LINKS")
+    return problems
 
 
 @lru_cache

@@ -198,6 +198,72 @@ describe('MessageBubble team group identity', () => {
   });
 });
 
+describe('MessageBubble workbench identity', () => {
+  it('renders the employee portrait and sender above a workbench reply', () => {
+    const item: ChatMessage = {
+      id: 'message-workbench-1',
+      role: 'assistant',
+      content: '整理分工草稿，供你确认。',
+      created_at: '2026-11-18T00:00:00Z',
+    };
+    const messageRender: MessageRender = {
+      traceTurnId: 'turn-workbench-1',
+      summary: null,
+      details: [],
+      expanded: false,
+      showInlineTrace: false,
+      visibleContent: item.content,
+      citations: [],
+      scheduledDraft: null,
+      scheduledTaskPrompt: false,
+      attachments: [],
+      harnessArtifacts: [],
+      statusOnly: false,
+      wecomApprovalConfirm: null,
+      wecomApprovalSubmitted: false,
+    };
+    const agent = {
+      id: 'agent-project-manager',
+      tenant_id: 'tenant_demo',
+      name: '项目经理',
+      is_overall: false,
+      status: 'active',
+      metadata: { employee_profile: { role_key: 'project_manager', role_name: '项目推进经理' } },
+      resources: [],
+      created_at: '2026-11-18T00:00:00Z',
+      updated_at: '2026-11-18T00:00:00Z',
+    } as AgentProfileRead;
+    const chat = {
+      displayedAgent: agent,
+      displayedTeam: null,
+      slashCommands: [],
+      toggleTrace: vi.fn(),
+      rateMessage: vi.fn(),
+      setActiveCitation: vi.fn(),
+      confirmScheduledTask: vi.fn(),
+      dismissScheduledTaskDraft: vi.fn(),
+      removeQueuedTurn: vi.fn(),
+      tenantId: 'tenant_demo',
+      activeConversationId: 'session-workbench-1',
+    } as unknown as UseChatSession;
+
+    const { container } = render(
+      <MessageBubble
+        chat={chat}
+        item={item}
+        render={messageRender}
+        variant="workbench"
+        showAssistantSender
+      />,
+    );
+
+    expect(container.querySelector('.cw-message-avatar')).toBeTruthy();
+    expect(container.querySelector('.cw-message-avatar-art svg')).toBeTruthy();
+    expect(screen.getByText('项目经理')).toBeTruthy();
+    expect(screen.getByText('整理分工草稿，供你确认。')).toBeTruthy();
+  });
+});
+
 describe('MessageBubble inline dashboard', () => {
   it('renders the dashboard outside the collapsed execution trace', () => {
     const item: ChatMessage = {

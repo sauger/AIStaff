@@ -2,7 +2,7 @@ import EmployeeAvatar from '@/components/EmployeeAvatar';
 import StaffdeckIcon from '@/components/StaffdeckIcon';
 import IconThumbUp from '@/assets/icons/thumb-up.svg?react';
 import IconThumbDown from '@/assets/icons/thumb-down.svg?react';
-import { employeeDisplayName } from '@/employee';
+import { employeeDisplayName, employeeProfile } from '@/employee';
 import { cn } from '@/lib/utils';
 import type {
   ChatAttachmentRead,
@@ -52,6 +52,8 @@ import {
 import type { TraceLine } from '../chatTypes';
 import type { DashboardViewDescriptor } from '../dashboardTypes';
 import type { UseChatSession } from '../useChatSession';
+import EmployeeMascot from '../workbench/EmployeeMascot';
+import { artForRole } from '../workbench/employeeArt';
 import DashboardView from './DashboardView';
 import ExecutionRecord from './ExecutionRecord';
 import HarnessArtifactDownloads from './HarnessArtifactDownloads';
@@ -86,6 +88,8 @@ type MessageBubbleProps = {
   item: ChatMessage;
   render: MessageRender;
   onOpenDocument?: (artifact: HarnessWorkspaceArtifact) => void;
+  variant?: 'default' | 'workbench';
+  showAssistantSender?: boolean;
 };
 
 function activeTeamProgress(item: ChatMessage): { phase: string; statusText: string } | null {
@@ -100,7 +104,14 @@ function activeTeamProgress(item: ChatMessage): { phase: string; statusText: str
   return statusText ? { phase, statusText } : null;
 }
 
-export default function MessageBubble({ chat, item, render, onOpenDocument }: MessageBubbleProps) {
+export default function MessageBubble({
+  chat,
+  item,
+  render,
+  onOpenDocument,
+  variant = 'default',
+  showAssistantSender = false,
+}: MessageBubbleProps) {
   const {
     toggleTrace,
     rateMessage,
@@ -133,15 +144,41 @@ export default function MessageBubble({ chat, item, render, onOpenDocument }: Me
   const sentSlashCommand = item.role === 'user'
     ? slashCommandMessage(visibleContent, chat.slashCommands)
     : null;
-  const groupAssistantMessage = item.role === 'assistant' && Boolean(chat.displayedTeam);
+  const workbench = variant === 'workbench';
+  const groupAssistantMessage = !workbench && item.role === 'assistant' && Boolean(chat.displayedTeam);
   const groupSenderName = chat.displayedAgent
     ? employeeDisplayName(chat.displayedAgent)
     : '项目领导';
   const teamProgress = item.role === 'assistant' ? activeTeamProgress(item) : null;
+  const workbenchAssistant = workbench && item.role === 'assistant';
+  const assistantProfile = employeeProfile(chat.displayedAgent);
+  const assistantArtId = artForRole(assistantProfile.roleKey, assistantProfile.roleName);
+  const assistantSender = showAssistantSender && item.role === 'assistant'
+    ? employeeDisplayName(chat.displayedAgent)
+    : '';
 
   return (
-    <div className={cn(CHAT_MESSAGE_ITEM_CLASS, queuedMessage && CHAT_QUEUED_MESSAGE_ITEM_CLASS)}>
-      <div className={cn(chatRowClass(item.role), groupAssistantMessage && CHAT_GROUP_MESSAGE_ROW_CLASS)}>
+    <div
+      className={cn(CHAT_MESSAGE_ITEM_CLASS, queuedMessage && CHAT_QUEUED_MESSAGE_ITEM_CLASS)}
+      data-message-role={item.role}
+    >
+      <div
+        className={cn(
+          'cw-message-row',
+          chatRowClass(item.role),
+          workbenchAssistant && 'cw-workbench-message-row',
+          groupAssistantMessage && CHAT_GROUP_MESSAGE_ROW_CLASS,
+        )}
+      >
+        {workbenchAssistant && (
+          <div className="cw-message-avatar" aria-hidden="true">
+            <EmployeeMascot
+              artId={assistantArtId}
+              portrait
+              className="cw-message-avatar-art"
+            />
+          </div>
+        )}
         {groupAssistantMessage && (
           <EmployeeAvatar
             agent={chat.displayedAgent}
@@ -150,7 +187,18 @@ export default function MessageBubble({ chat, item, render, onOpenDocument }: Me
             className={CHAT_GROUP_MESSAGE_AVATAR_CLASS}
           />
         )}
-        <div className={groupAssistantMessage ? CHAT_GROUP_MESSAGE_CONTENT_CLASS : 'contents'}>
+        <div
+          className={
+            groupAssistantMessage
+              ? CHAT_GROUP_MESSAGE_CONTENT_CLASS
+              : workbenchAssistant
+                ? 'cw-workbench-message-content'
+                : 'contents'
+          }
+        >
+          {assistantSender && (
+            <span className="cw-message-sender" data-i18n-ignore>{assistantSender}</span>
+          )}
           {groupAssistantMessage && (
             <span className={CHAT_GROUP_MESSAGE_SENDER_CLASS} data-i18n-ignore>
               {groupSenderName}
@@ -159,6 +207,7 @@ export default function MessageBubble({ chat, item, render, onOpenDocument }: Me
           )}
           <div
             className={cn(
+              'cw-message-bubble',
               chatBubbleClass(item.role, item.isError),
               queuedMessage && CHAT_QUEUED_BUBBLE_CLASS,
             )}

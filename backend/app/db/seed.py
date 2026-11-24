@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import sys
 from pathlib import Path
 
@@ -913,8 +914,34 @@ def _seed_mcp_servers(session: Session) -> None:
         session.add(server)
 
 
+def _seed_password(settings: object, field: str) -> str:
+    """Return a configured seed password, or ``""`` when the operator left it blank."""
+
+    return str(getattr(settings, field, "") or "").strip()
+
+
+def _write_demo_credentials(username: str, password: str) -> Path:
+    """Persist a generated demo credential outside the repository work tree."""
+
+    target = paths.user_data_dir() / "demo_credentials.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        f"tenant=tenant_demo\nusername={username}\npassword={password}\n",
+        encoding="utf-8",
+    )
+    try:
+        target.chmod(0o600)
+    except OSError:
+        # Windows 或只读挂载卷不保证 posix 权限，口令文件已经落在用户数据目录。
+        pass
+    return target
+
+
 def seed_demo_data(session: Session) -> None:
     settings = get_settings()
+    # dev 档保留历史默认口令（桌面/单机版依赖 admin/admin 首次登录）；
+    # demo/prod 档必须显式提供口令，或由系统生成一次性随机口令。
+    allow_default_credentials = settings.normalized_deployment_profile == "dev"
     if not session.get(Tenant, "tenant_demo"):
         session.add(Tenant(id="tenant_demo", name="Demo Enterprise"))
 
@@ -925,31 +952,45 @@ def seed_demo_data(session: Session) -> None:
         select(User).where(User.tenant_id == "tenant_demo", User.username == "user_demo")
     ).first()
     if not demo_user:
-        session.add(
-            User(
-                id="user_demo",
-                tenant_id="tenant_demo",
-                username="user_demo",
-                display_name="Demo User",
-                password_hash=hash_password("demo"),
+        demo_user_password = _seed_password(settings, "demo_user_password")
+        if demo_user_password or allow_default_credentials:
+            session.add(
+                User(
+                    id="user_demo",
+                    tenant_id="tenant_demo",
+                    username="user_demo",
+                    display_name="Demo User",
+                    password_hash=hash_password(demo_user_password or "demo"),
+                )
             )
-        )
 
     # 桌面/单机版默认管理员账号（admin / admin）。权限只读取数据库 role 字段。
+    # demo/prod 档不写默认口令：优先用 DEMO_ADMIN_PASSWORD，缺省生成一次性随机
+    # 口令并落盘到 user_data_dir()，避免 admin/admin 跟着演示环境一起交付。
     admin_user = session.exec(
         select(User).where(User.tenant_id == "tenant_demo", User.username == "admin")
     ).first()
     if not admin_user:
-        session.add(
-            User(
-                id="admin",
-                tenant_id="tenant_demo",
-                username="admin",
-                display_name="Administrator",
-                role="admin",
-                password_hash=hash_password("admin"),
+        admin_password = _seed_password(settings, "demo_admin_password")
+        if not admin_password and not allow_default_credentials:
+            admin_password = secrets.token_urlsafe(12)
+            credential_file = _write_demo_credentials("admin", admin_password)
+            print(
+                f"[seed] deployment_profile={settings.normalized_deployment_profile}："
+                f"已生成一次性管理员口令，见 {credential_file}",
+                file=sys.stderr,
             )
-        )
+        if admin_password or allow_default_credentials:
+            session.add(
+                User(
+                    id="admin",
+                    tenant_id="tenant_demo",
+                    username="admin",
+                    display_name="Administrator",
+                    role="admin",
+                    password_hash=hash_password(admin_password or "admin"),
+                )
+            )
     elif admin_user.role != "admin":
         admin_user.role = "admin"
         admin_user.updated_at = utc_now()

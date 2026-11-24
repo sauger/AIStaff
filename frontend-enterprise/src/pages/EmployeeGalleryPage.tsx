@@ -34,11 +34,14 @@ export default function EmployeeGalleryPage({
   isAdmin = false,
   onStartChat,
   onLogout,
+  embedded = false,
 }: {
   currentUser?: EnterpriseAuthUser;
   isAdmin?: boolean;
   onStartChat?: (agent: AgentProfileRead) => void | Promise<void>;
   onLogout?: () => void;
+  /** 嵌在对话工作台顶栏下时不再渲染自己的账户头，避免两层顶栏。 */
+  embedded?: boolean;
 }) {
   const [agents, setAgents] = useState<AgentProfileRead[]>([]);
   const [teams, setTeams] = useState<TeamRead[]>([]);
@@ -248,6 +251,23 @@ export default function EmployeeGalleryPage({
     }
   }
 
+  const searchField = (
+    <div className="flex h-[50px] w-full items-center gap-[6px] rounded-[20px] bg-white px-[20px] text-[#757F9C] shadow-[0_0_6px_rgba(0,0,0,0.05)]">
+      <IconSearch className="size-[20px] shrink-0" />
+      <input
+        autoComplete="off"
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-bwignore="true"
+        value={searchTerm}
+        onChange={(event) => setSearchTerm(event.target.value)}
+        placeholder="搜索"
+        aria-label="搜索数字员工"
+        className="min-w-0 flex-1 border-0 bg-transparent text-[14px] text-[#18181A] outline-none placeholder:text-[#757F9C]"
+      />
+    </div>
+  );
+
   const hasSearchTerm = Boolean(searchTerm.trim());
   const emptyText = hasSearchTerm ? '没有匹配的数字员工' : '暂无数字员工';
   const emptyDescription = hasSearchTerm
@@ -260,26 +280,13 @@ export default function EmployeeGalleryPage({
 
   return (
     <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]" aria-busy={loading}>
-      <AppHeader
-        onLogout={onLogout}
-        userName={currentUser?.username}
-        left={(
-          <div className="flex h-[50px] w-full items-center gap-[6px] rounded-[20px] bg-white px-[20px] text-[#757F9C] shadow-[0_0_6px_rgba(0,0,0,0.05)]">
-            <IconSearch className="size-[20px] shrink-0" />
-            <input
-              autoComplete="off"
-              data-1p-ignore="true"
-              data-lpignore="true"
-              data-bwignore="true"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="搜索"
-              aria-label="搜索数字员工"
-              className="min-w-0 flex-1 border-0 bg-transparent text-[14px] text-[#18181A] outline-none placeholder:text-[#757F9C]"
-            />
-          </div>
-        )}
-      />
+      {embedded ? searchField : (
+        <AppHeader
+          onLogout={onLogout}
+          userName={currentUser?.username}
+          left={searchField}
+        />
+      )}
 
       <UnderlineTabs
         className="mt-[36px] mb-[16px] max-[560px]:w-full"

@@ -940,7 +940,7 @@ function TeamGroupAvatar({
   );
 }
 
-function ChatSessionFilter({
+export function ChatSessionFilter({
   sessionFilter,
   sessionFilterOptions,
   onSessionFilterChange,
@@ -1089,7 +1089,7 @@ function ChatHandoffButton({
   );
 }
 
-function ChatSessionRow({
+export function ChatSessionRow({
   session,
   agent,
   team,

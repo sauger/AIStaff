@@ -2138,6 +2138,19 @@ def _workflow_frame_result(
         )
 
     if not bool(getattr(get_settings(), "workflow_runtime_enabled", False)):
+        # 开关关闭时旧执行路径仍然可用，但声明式 SOP 会静默降级。留一条可检索的
+        # trace，避免"演示看起来能跑、实际上没进 SOP"被当成正常。
+        if _is_workflow_skill(active_skill):
+            trace(
+                "workflow_runtime_disabled",
+                {
+                    "skill_id": str(getattr(active_skill, "skill_id", "") or ""),
+                    "node_id": str(frame.target_step_id or session.active_step_id or ""),
+                    "deployment_profile": str(
+                        getattr(get_settings(), "deployment_profile", "dev") or "dev"
+                    ),
+                },
+            )
         return None
     if frame.kind != "sop" or active_skill is None:
         return None

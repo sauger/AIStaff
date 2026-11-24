@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="180 869 190 171" width="190" height="171" fill="none"><defs><filter id="filter19_f_99_3218" x="186" y="932" width="178" height="107" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix" />
+<feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+<feGaussianBlur stdDeviation="14.5" result="effect1_foregroundBlur_99_3218" />
+</filter>
+<linearGradient id="paint27_linear_99_3218" x1="275" y1="891.375" x2="275" y2="933" gradientUnits="userSpaceOnUse">
+<stop stop-color="white" />
+<stop offset="1" stop-color="#ECECE9" />
+</linearGradient>
+<linearGradient id="paint28_linear_99_3218" x1="193.805" y1="989.64" x2="193.805" y2="998.64" gradientUnits="userSpaceOnUse">
+<stop stop-color="#EEEEEB" />
+<stop offset="1" stop-color="#D6D6D2" />
+</linearGradient>
+<linearGradient id="paint29_linear_99_3218" x1="280.021" y1="948" x2="280.021" y2="991.726" gradientUnits="userSpaceOnUse">
+<stop stop-color="white" />
+<stop offset="1" stop-color="#F0F0EE" />
+</linearGradient>
+<filter id="filter18_f_99_3218" x="186" y="931" width="178" height="107" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix" />
+<feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+<feGaussianBlur stdDeviation="14.5" result="effect1_foregroundBlur_99_3218" />
+</filter>
+</defs>
+<path d="M246 922H250V941H246V922Z" fill="#D6D6D2" />
+<path d="M300 922H304V941H300V922Z" fill="#D6D6D2" />
+<path d="M245.182 912H304.818C306.273 912 307 912.75 307 914.25L306.273 930.375C306.273 932.125 305.424 933 303.727 933H246.273C244.576 933 243.727 932.125 243.727 930.375L243 914.625C243 912.875 243.727 912 245.182 912Z" fill="url(#paint27_linear_99_3218)" stroke-width="0.72" stroke="#E6E6E2" />
+<g filter="url(#filter19_f_99_3218)">
+<path d="M215 961L335 961V1010H215L215 961Z" fill="#5E5E5E" fill-opacity="0.26" />
+</g>
+<path d="M225 968H231V1005H225.4L225 968Z" fill="#DADAD6" />
+<path d="M319 968H325L324.6 1005H319V968Z" fill="#DADAD6" />
+<path d="M218 997H225L224.263 1020H219.474L218 997Z" fill="#D7D7D3" />
+<path d="M325 997H332L330.526 1020H325.737L325 997Z" fill="#D7D7D3" />
+<path d="M215 990H335L333.922 997.2C333.922 998.4 333.324 999 332.126 999H217.874C216.676 999 216.078 998.4 216.078 997.2L215 990Z" fill="url(#paint28_linear_99_3218)" />
+<path d="M217.155 942.452C217.155 941.484 217.754 941 218.952 941H331.048C332.246 941 332.845 941.484 332.845 942.452L335 991H215L217.155 942.452Z" fill="url(#paint29_linear_99_3218)" stroke-width="0.72" stroke="#EAEAE6" />
+<path d="M215 991H335" stroke-width="1.08" stroke="white" />
+</svg>

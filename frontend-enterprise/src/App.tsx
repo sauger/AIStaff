@@ -45,7 +45,6 @@ import AgentsPage from "./pages/AgentsPage";
 import ChannelsPage from "./pages/ChannelsPage";
 import EmployeeAccessChannelsPage from "./pages/channels/EmployeeAccessChannelsPage";
 import ChatPage from "./pages/chat/ChatPage";
-import ChatGalleryPage from "./pages/chat/ChatGalleryPage";
 import DashboardPage from "./pages/dashboard/DashboardPage";
 import EmptyEmployeeState from "./components/EmptyEmployeeState";
 import DistillPage from "./pages/DistillPage";
@@ -393,6 +392,7 @@ function Shell({
     "/enterprise/access-channels",
     "/enterprise/scheduled-tasks",
     "/enterprise/memories",
+    "/enterprise/traces",
     "/enterprise/feedback",
     "/enterprise/knowledge",
     "/enterprise/cabinet",
@@ -531,7 +531,7 @@ function Shell({
           navigate(EnterpriseRoute.Dashboard);
         }}
         onOpenChat={() => {
-          navigate(EnterpriseRoute.Gallery);
+          navigate(EnterpriseRoute.Chat);
         }}
         modelSetupAttention={isAdmin && showModelSetupNotice}
       />
@@ -667,6 +667,17 @@ function Shell({
                     currentUser={auth.user}
                     isAdmin={isAdmin}
                     profileTab="memories"
+                    onLogout={onLogout}
+                  />
+                }
+              />
+              <Route
+                path="/enterprise/traces"
+                element={
+                  <DashboardPage
+                    currentUser={auth.user}
+                    isAdmin={isAdmin}
+                    profileTab="traces"
                     onLogout={onLogout}
                   />
                 }
@@ -827,7 +838,7 @@ function Shell({
                       onLogout={onLogout}
                     />
                   ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                    <Navigate to={EnterpriseRoute.Chat} replace />
                   )
                 }
               />
@@ -841,7 +852,7 @@ function Shell({
                       onLogout={onLogout}
                     />
                   ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                    <Navigate to={EnterpriseRoute.Chat} replace />
                   )
                 }
               />
@@ -854,7 +865,7 @@ function Shell({
                       onLogout={onLogout}
                     />
                   ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                    <Navigate to={EnterpriseRoute.Chat} replace />
                   )
                 }
               />
@@ -876,7 +887,7 @@ function Shell({
                   isAdmin ? (
                     <AccountsPage currentUser={auth.user} onLogout={onLogout} />
                   ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                    <Navigate to={EnterpriseRoute.Chat} replace />
                   )
                 }
               />
@@ -886,7 +897,7 @@ function Shell({
                   isAdmin ? (
                     <ModelsPage currentUser={auth.user} onLogout={onLogout} />
                   ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                    <Navigate to={EnterpriseRoute.Chat} replace />
                   )
                 }
               />
@@ -896,7 +907,7 @@ function Shell({
                   isAdmin ? (
                     <RuntimeSettingsPage currentUser={auth.user} />
                   ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                    <Navigate to={EnterpriseRoute.Chat} replace />
                   )
                 }
               />
@@ -1107,10 +1118,10 @@ function AuthedApp({
 }) {
   const location = useLocation();
   if (location.pathname === "/") {
-    return <Navigate to={EnterpriseRoute.Gallery} replace />;
+    return <Navigate to={EnterpriseRoute.Chat} replace />;
   }
   if (location.pathname === "/chat" || location.pathname === "/chat/") {
-    return <Navigate to={EnterpriseRoute.Gallery} replace />;
+    return <Navigate to={EnterpriseRoute.Chat} replace />;
   }
   if (location.pathname.startsWith("/chat/draft/")) {
     const nextPath = location.pathname.replace(/^\/chat/, EnterpriseRoute.Chat);
@@ -1121,7 +1132,7 @@ function AuthedApp({
     return <Navigate to={`${nextPath}${location.search}`} replace />;
   }
   if (location.pathname === "/enterprise/chat" || location.pathname === "/enterprise/chat/") {
-    return <Navigate to={EnterpriseRoute.Gallery} replace />;
+    return <Navigate to={EnterpriseRoute.Chat} replace />;
   }
   if (location.pathname.startsWith("/enterprise/chat/draft/")) {
     const nextPath = location.pathname.replace(/^\/enterprise\/chat/, EnterpriseRoute.Chat);
@@ -1136,9 +1147,12 @@ function AuthedApp({
       <Routes>
         <Route
           path="/workspace"
-          element={<Navigate to="/workspace/gallery" replace />}
+          element={<Navigate to={EnterpriseRoute.Chat} replace />}
         />
-        <Route path="/workspace/gallery" element={<ChatGalleryPage />} />
+        <Route
+          path="/workspace/gallery"
+          element={<Navigate to={EnterpriseRoute.Chat} replace />}
+        />
         <Route path="/workspace/chat" element={<ChatPage />} />
         <Route
           path="/workspace/chat/draft/:draftAgentId"

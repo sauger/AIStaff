@@ -1,40 +1,133 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useState } from 'react';
 
+import artwork from '../assets/staffdeck/login-employees.svg?raw';
 import { api, TENANT_ID } from '../api/client';
 import { setEnterpriseAuthSession, type EnterpriseAuthSession } from '../auth';
-import AppHeader from '../components/AppHeader';
-import BrandLogo from '../components/BrandLogo';
-import IconFieldClear from '../assets/icons/field-clear.svg?react';
-import IconFieldEye from '../assets/icons/field-eye.svg?react';
-import IconFieldEyeOn from '../assets/icons/field-eye-on.svg?react';
-import loginPreview from '../assets/staffdeck/login-preview.png';
+
+import './LoginPage.css';
 
 export type LoginPageProps = {
   onLogin: (session: EnterpriseAuthSession) => void;
 };
 
+const REMEMBERED_USERNAME_KEY = 'staffdeck_login_username';
+
+function rememberedUsername(): string {
+  try {
+    return window.localStorage.getItem(REMEMBERED_USERNAME_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function LoginField({
+  password = false,
+  value,
+  invalid,
+  onChange,
+}: {
+  password?: boolean;
+  value: string;
+  invalid: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label className="login-field" data-invalid={invalid ? 'true' : undefined}>
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 18 18"
+        fill="none"
+        stroke="#8C9092"
+        strokeWidth="1.2"
+        aria-hidden="true"
+      >
+        {password ? (
+          <>
+            <rect x="2" y="9" width="14" height="7" rx="2" />
+            <path d="M5 9V5a4 4 0 0 1 8 0v4M7 12.5h4" />
+          </>
+        ) : (
+          <>
+            <rect x="2" y="2" width="14" height="14" rx="4.5" />
+            <path d="M7 12.5h4" />
+          </>
+        )}
+      </svg>
+      <input
+        required
+        aria-label={password ? '密码' : '账号'}
+        placeholder={password ? '请输入密码' : '请输入账号'}
+        type={password && !visible ? 'password' : 'text'}
+        autoComplete={password ? 'current-password' : 'username'}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {password && (
+        <button
+          type="button"
+          className="login-eye"
+          aria-label={visible ? '隐藏密码' : '显示密码'}
+          aria-pressed={visible}
+          onClick={() => setVisible(!visible)}
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 18 18"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            {visible ? (
+              <>
+                <path d="M1 9s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z" />
+                <circle cx="9" cy="9" r="2" />
+              </>
+            ) : (
+              <>
+                <path d="M2 6s3 4 7 4 7-4 7-4M4 9l-2 3m7-2v3m5-4 2 3" />
+              </>
+            )}
+          </svg>
+        </button>
+      )}
+    </label>
+  );
+}
+
 /**
- * Signed-out landing / login page. Mirrors Figma node 68:201 (`Login_light`):
- * a full-bleed hero with the RapidStaff wordmark and a product-preview placeholder
- * anchored to the bottom. Clicking "登录" slides the credentials form (node 68:1563)
- * down into view in place of the call-to-action button.
+ * Design login page (`LoginPage.jsx` in the RapidStaff prototype): one centered
+ * card with the animated employee artwork, account/password fields, remember
+ * option and the primary login action. Login is wired to the StaffDeck API.
  */
 export default function LoginPage({ onLogin }: LoginPageProps) {
-  const [showForm, setShowForm] = useState(false);
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(rememberedUsername);
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [usernameError, setUsernameError] = useState('');
-  const [passwordError, setPasswordError] = useState('');
+  const [remember, setRemember] = useState(() => Boolean(rememberedUsername()));
+  const [remembered] = useState(rememberedUsername);
+  const [notice, setNotice] = useState('');
+  const [invalid, setInvalid] = useState<'username' | 'password' | 'both' | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function login() {
     const trimmedUsername = username.trim();
     const trimmedPassword = password.trim();
-    setUsernameError(trimmedUsername ? '' : '请输入账号');
-    setPasswordError(trimmedPassword ? '' : '请输入密码');
-    if (!trimmedUsername || !trimmedPassword) return;
+    if (!trimmedUsername) {
+      setInvalid('username');
+      setNotice('请输入账号');
+      return;
+    }
+    if (!trimmedPassword) {
+      setInvalid('password');
+      setNotice('请输入密码');
+      return;
+    }
 
+    setInvalid(null);
+    setNotice('');
     setLoading(true);
     try {
       const session = await api.post<EnterpriseAuthSession>('/api/auth/login', {
@@ -43,138 +136,100 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         password: trimmedPassword,
       });
       setEnterpriseAuthSession(session);
+      try {
+        if (remember) window.localStorage.setItem(REMEMBERED_USERNAME_KEY, trimmedUsername);
+        else window.localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+      } catch {
+        // Login still succeeds when storage is unavailable.
+      }
       onLogin(session);
     } catch (error) {
-      const messageText = error instanceof Error ? error.message : '登录失败';
-      setUsernameError('账号输入错误');
-      setPasswordError(messageText || '密码输入错误');
+      setInvalid('both');
+      setNotice(error instanceof Error && error.message ? error.message : '登录失败');
     } finally {
       setLoading(false);
     }
   }
 
-  function onFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter') void login();
-  }
-
-  const inputBaseClass =
-    'flex h-[44px] w-full items-center gap-[8px] rounded-[10px] border bg-white px-[16px] transition-colors';
-
   return (
-    <div className="relative flex min-h-screen flex-col bg-white">
-      <AppHeader
-        className="h-[60px] shrink-0 px-[32px]"
-        left={<BrandLogo markSize={28} />}
-        right={null}
-      />
-
-      <main className="flex flex-1 flex-col items-center px-[32px]">
-        <div className="flex flex-col items-center pt-[60px]">
-          <span className="flex items-center justify-center rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-[#f6f6f6] px-[20px] py-[6px] text-[14px] text-[#464c5e]">
-            我们来做什么？
-          </span>
-          <h1 className="mt-[6px] text-center text-[54px] font-semibold leading-[80px] tracking-[1.08px] text-[#18181a]">
-            RapidStaff
-            <br />
-            数字员工运营平台
-          </h1>
-
-          {!showForm ? (
+    <main className="login-page">
+      <section className="login-card" aria-label="登录 RapidStaff">
+        <div
+          className="login-art"
+          role="img"
+          aria-label="RapidStaff 数字员工"
+          dangerouslySetInnerHTML={{ __html: artwork }}
+        />
+        <form
+          className="login-form"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            void login();
+          }}
+        >
+          <LoginField
+            value={username}
+            invalid={invalid === 'username' || invalid === 'both'}
+            onChange={(value) => {
+              setUsername(value);
+              setInvalid(null);
+              setNotice('');
+            }}
+          />
+          <LoginField
+            password
+            value={password}
+            invalid={invalid === 'password' || invalid === 'both'}
+            onChange={(value) => {
+              setPassword(value);
+              setInvalid(null);
+              setNotice('');
+            }}
+          />
+          <div className="login-options">
+            <label className="login-remember">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(event) => {
+                  const next = event.target.checked;
+                  setRemember(next);
+                  if (!next) {
+                    try {
+                      window.localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+                    } catch {
+                      // Ignore storage failures.
+                    }
+                  } else if (remembered) {
+                    try {
+                      window.localStorage.setItem(REMEMBERED_USERNAME_KEY, remembered);
+                    } catch {
+                      // Ignore storage failures.
+                    }
+                  }
+                }}
+              />
+              记住密码
+            </label>
             <button
               type="button"
-              onClick={() => setShowForm(true)}
-              className="mt-[24px] flex items-center justify-center rounded-[10px] bg-[#18181a] px-[36px] py-[10px] text-[16px] font-normal text-white transition-colors hover:bg-[#18181a]/90"
+              className="login-forgot"
+              onClick={() => setNotice('密码找回尚未接入，请联系管理员。')}
             >
-              登录
+              忘记密码?
             </button>
-          ) : (
-            <form
-              className="mt-[24px] flex w-[320px] flex-col duration-300 ease-out animate-in fade-in slide-in-from-top-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void login();
-              }}
-            >
-              <div
-                className={`${inputBaseClass} ${usernameError ? 'border-[#f54a45]' : username ? 'border-[#18181a]' : 'border-[#e3e7f1]'}`}
-              >
-                <input
-                  value={username}
-                  autoComplete="username"
-                  placeholder="请输入账号（首次使用请输入admin）"
-                  aria-label="账号"
-                  onChange={(event) => {
-                    setUsername(event.target.value);
-                    if (usernameError) setUsernameError('');
-                  }}
-                  onKeyDown={onFieldKeyDown}
-                  className="min-w-0 flex-1 border-0 bg-transparent text-[14px] text-[#18181a] outline-none placeholder:text-[#757f9c]"
-                />
-                {username && (
-                  <button
-                    type="button"
-                    aria-label="清空账号"
-                    onClick={() => {
-                      setUsername('');
-                      setUsernameError('');
-                    }}
-                    className="grid size-[18px] shrink-0 place-items-center text-[#667085] outline-none transition-colors hover:text-[#464c5e]"
-                  >
-                    <IconFieldClear className="size-[18px]" />
-                  </button>
-                )}
-              </div>
-
-              <div
-                className={`mt-[24px] ${inputBaseClass} ${passwordError ? 'border-[#f54a45]' : password ? 'border-[#18181a]' : 'border-[#e3e7f1]'}`}
-              >
-                <input
-                  value={password}
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="current-password"
-                  placeholder="请输入密码（首次使用请输入admin）"
-                  aria-label="密码"
-                  onChange={(event) => {
-                    setPassword(event.target.value);
-                    if (passwordError) setPasswordError('');
-                  }}
-                  onKeyDown={onFieldKeyDown}
-                  className="min-w-0 flex-1 border-0 bg-transparent text-[14px] text-[#18181a] outline-none placeholder:text-[#757f9c]"
-                />
-                <button
-                  type="button"
-                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  className="grid size-[18px] shrink-0 place-items-center text-[#677185] outline-none transition-colors hover:text-[#464c5e]"
-                >
-                  {showPassword ? (
-                    <IconFieldEyeOn className="size-[18px]" />
-                  ) : (
-                    <IconFieldEye className="size-[18px]" />
-                  )}
-                </button>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="mt-[24px] flex h-[40px] w-[120px] items-center justify-center self-center rounded-[10px] bg-[#18181a] text-[16px] font-normal text-white transition-colors hover:bg-[#18181a]/90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {loading ? '登录中…' : '登录'}
-              </button>
-            </form>
-          )}
-        </div>
-
-        <div className="mt-[32px] flex w-full justify-center">
-          <img
-            src={loginPreview}
-            alt="RapidStaff 产品预览"
-            className="h-auto w-full max-w-[1200px] select-none object-contain"
-            draggable={false}
-          />
-        </div>
-      </main>
-    </div>
+          </div>
+          <button className="login-submit" type="submit" disabled={loading}>
+            {loading ? '登录中…' : '立即登录'}
+          </button>
+        </form>
+        {notice && (
+          <p className="login-notice" role="status" data-tone={invalid ? 'error' : undefined}>
+            {notice}
+          </p>
+        )}
+      </section>
+    </main>
   );
 }

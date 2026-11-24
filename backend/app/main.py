@@ -86,8 +86,15 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    from app.config import runtime_profile_problems
     from app.dashboard.share import warn_default_app_secret
 
+    profile_problems = runtime_profile_problems(settings)
+    if profile_problems:
+        raise RuntimeError(
+            f"部署档位校验失败（DEPLOYMENT_PROFILE={settings.deployment_profile}）："
+            + "；".join(profile_problems)
+        )
     warn_default_app_secret()
     acquire_runtime_instance_lock()
     try:

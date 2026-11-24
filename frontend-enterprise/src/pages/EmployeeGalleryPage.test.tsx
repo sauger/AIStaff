@@ -166,6 +166,20 @@ describe('EmployeeGalleryPage teams tab', () => {
     expect(screen.queryByRole('region', { name: '团队' })).toBeNull();
   });
 
+  it('keeps search and drops the account header when embedded in the workbench', async () => {
+    stubGalleryFetch([]);
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={['/workspace/gallery']}>
+          <EmployeeGalleryPage embedded />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+    expect(screen.getByLabelText('搜索数字员工')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '账户菜单' })).toBeNull();
+    expect(await screen.findByText('暂无数字员工')).toBeTruthy();
+  });
+
   it('shows the teams empty state when there are no teams', async () => {
     const user = userEvent.setup();
     stubGalleryFetch([]);

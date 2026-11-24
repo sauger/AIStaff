@@ -142,6 +142,7 @@ import {
   writeQueuedChatTurns,
   type PreparedChatTurn,
 } from './chatQueueStorage';
+import { latestAgentSession } from './workbench/agentWorkspace';
 import { buildSessionFilterOptions } from './sessionFilterOptions';
 
 const CHAT_BASE_PATH = '/workspace/chat';
@@ -3524,8 +3525,37 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     navigate(`${CHAT_BASE_PATH}/draft/${encodeURIComponent(agentId)}`);
   }, [navigate, persistChatSessionAgentFilter, userId]);
 
+  const openAgentWorkspace = useCallback((agentId: string) => {
+    if (!agentId) return;
+    const latest = latestAgentSession(sessions, agentId);
+    if (!latest) {
+      openDraftForAgent(agentId);
+      return;
+    }
+    setSelectedAgentId(agentId);
+    persistChatSessionAgentFilter(agentId);
+    persistSharedAgentScope(agentId, userId);
+    emitAgentScopeChange(agentId);
+    navigate(chatSessionPath(latest.id));
+  }, [navigate, openDraftForAgent, persistChatSessionAgentFilter, sessions, userId]);
+
+  const openAgentConfig = useCallback((agentId: string) => {
+    if (!agentId) return;
+    persistSharedAgentScope(agentId, userId);
+    emitAgentScopeChange(agentId);
+    navigate('/enterprise/persona');
+  }, [navigate, userId]);
+
   const openGallery = useCallback(() => {
     navigate('/workspace/gallery');
+  }, [navigate]);
+
+  const openWorkbench = useCallback(() => {
+    navigate(CHAT_BASE_PATH);
+  }, [navigate]);
+
+  const openWelcome = useCallback(() => {
+    navigate(`${CHAT_BASE_PATH}?welcome=1`);
   }, [navigate]);
 
   const changeSessionAgentFilter = useCallback((value: string) => {
@@ -3629,7 +3659,11 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     openSession,
     refreshAgents: loadAgents,
     openDraftForAgent,
+    openAgentWorkspace,
+    openAgentConfig,
     openGallery,
+    openWorkbench,
+    openWelcome,
     openRename,
     requestDelete,
     logout: redirectToLogin,
