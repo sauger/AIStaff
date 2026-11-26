@@ -21,6 +21,8 @@ type EmployeeMascotProps = {
   resultReady?: boolean;
   label?: string;
   className?: string;
+  /** 覆盖该员工的墨团主色（保证同屏颜色不重复）。 */
+  color?: string;
 };
 
 /**
@@ -34,19 +36,20 @@ export default function EmployeeMascot({
   resultReady = false,
   label,
   className = 'cw-employee-art',
+  color,
 }: EmployeeMascotProps) {
   const { appearance } = useEmployeeAppearance();
   const instanceId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const markup = useMemo(() => {
     const raw = appearance === 'ink'
-      ? inkWorkstationMarkup(artId, portrait)
+      ? inkWorkstationMarkup(artId, portrait, color)
       : rawArtFor(artId);
     const posed = portrait
-      ? portraitBody(raw, appearance, artId)
+      ? portraitBody(raw, appearance, artId, color)
       : (resultReady ? attachCompletedResult(raw) : raw);
     const scope = `${appearance}-${portrait ? `${artId}-portrait` : artId}-${resultReady ? 'result-' : ''}${instanceId}`;
     return scopeSvg(posed, scope);
-  }, [artId, appearance, instanceId, portrait, resultReady]);
+  }, [artId, appearance, instanceId, portrait, resultReady, color]);
 
   return (
     <div

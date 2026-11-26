@@ -11,6 +11,8 @@ export type IdentityCardEmployee = {
   stats: Array<{ value: string | number; label: string }>;
   /** 缺省视为在线，避免没传状态的卡片被画成离线。 */
   online?: boolean;
+  /** 该员工的墨团主色，保证同屏颜色不重复。 */
+  color?: string;
 };
 
 /** 393×350 portal 身份卡：毛玻璃小卡 + 头像 + 简介 + 资料/技能/SOP 统计。 */
@@ -30,7 +32,7 @@ export default function EmployeeIdentityCard({
       <div className="cw-identity-surface" />
       <div className="cw-identity-avatar">
         {appearance === 'ink' ? (
-          <span className="cw-ink-avatar" dangerouslySetInnerHTML={{ __html: inkAvatarMarkup(employee.artId) }} />
+          <span className="cw-ink-avatar" dangerouslySetInnerHTML={{ __html: inkAvatarMarkup(employee.artId, employee.color) }} />
         ) : (
           <img src={employeeAvatarSrc(employee.artId)} alt={`${employee.name}头像`} />
         )}

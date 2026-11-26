@@ -15,7 +15,7 @@ export default function WorkbenchEmptyState({
   const name = agent ? employeeDisplayName(agent) : '数字员工';
   return (
     <div className="cw-conversation-empty">
-      {yardEmployee && <EmployeeIdleAvatar artId={yardEmployee.artId} name={name} />}
+      {yardEmployee && <EmployeeIdleAvatar artId={yardEmployee.artId} color={yardEmployee.color} name={name} />}
       <h2>和{name}开始协作</h2>
       <p>描述你的目标，或添加相关文档。</p>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { ART_ASSETS } from './employeeArt';
 import EmployeeTeamSelect, { type TeamSelectOption } from './EmployeeTeamSelect';
@@ -13,9 +13,8 @@ function emptyDeskFits(count: number, teamSelected: boolean): boolean {
 }
 
 /**
- * 员工工位栏：380px，2×170 卡片网格；团队筛选跟随当前会话。
- * 工位数据全部来自后端员工列表，不做人数截断；
- * 只在网格还有空位时补一个空闲工位。
+ * 员工工位栏：展开 300px / 折叠 72px；2×140 卡片网格。
+ * 顶部品牌、底部个人中心由 ChatWorkbench 注入，保证和设计稿一致。
  */
 export default function EmployeeYard({
   employees,
@@ -27,6 +26,8 @@ export default function EmployeeYard({
   onCollapsedChange,
   defaultTeamId = 'all',
   className,
+  brand,
+  account,
 }: {
   employees: YardEmployee[];
   teams: Array<{ id: string; name: string; memberIds: string[] }>;
@@ -37,6 +38,8 @@ export default function EmployeeYard({
   onCollapsedChange?: (next: boolean) => void;
   defaultTeamId?: string;
   className?: string;
+  brand?: ReactNode;
+  account?: ReactNode;
 }) {
   const [filter, setFilter] = useState(defaultTeamId || 'all');
   useEffect(() => {
@@ -82,44 +85,56 @@ export default function EmployeeYard({
       className={`cw-employees-panel ${collapsed ? 'cw-collapsed' : ''} ${className || ''}`}
       aria-label="数字员工"
     >
-      <div className="cw-employee-toolbar">
-        {!collapsed && (
-          <EmployeeTeamSelect value={filter} options={options} onChange={setFilter} />
-        )}
-        <button
-          type="button"
-          className="cw-collapse-button"
-          aria-label={collapsed ? '展开员工面板' : '收起员工面板'}
-          aria-expanded={!collapsed}
-          onClick={() => onCollapsedChange?.(!collapsed)}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 16 16"
-            aria-hidden="true"
-            style={{ transform: collapsed ? 'rotate(180deg)' : undefined }}
-          >
-            <path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="cw-employee-grid">
-          {visible.map((employee, index) => (
-            <EmployeeYardCard
-              key={employee.id}
-              employee={employee}
-              selected={selectedId === employee.id}
-              onSelect={onSelect}
-              phase={(index * 0.61) % 3}
-            />
-          ))}
-          {showEmptyDesk && <EmptyDesk />}
-          {visible.length === 0 && <p className="cw-yard-empty">该团队暂无员工</p>}
+      {brand && <div className="cw-yard-brand">{brand}</div>}
+      {collapsed ? (
+        <div className="cw-yard-collapsed-tools">
+          <CollapseButton collapsed={collapsed} onClick={() => onCollapsedChange?.(false)} />
+        </div>
+      ) : (
+        <div className="cw-yard-content">
+          <div className="cw-employee-toolbar">
+            <EmployeeTeamSelect value={filter} options={options} onChange={setFilter} />
+            <CollapseButton collapsed={collapsed} onClick={() => onCollapsedChange?.(true)} />
+          </div>
+          <div className="cw-employee-grid">
+            {visible.map((employee, index) => (
+              <EmployeeYardCard
+                key={employee.id}
+                employee={employee}
+                selected={selectedId === employee.id}
+                onSelect={onSelect}
+                phase={(index * 0.61) % 3}
+              />
+            ))}
+            {showEmptyDesk && <EmptyDesk />}
+            {visible.length === 0 && <p className="cw-yard-empty">该团队暂无员工</p>}
+          </div>
         </div>
       )}
+      {account && <div className="cw-yard-account">{account}</div>}
     </aside>
+  );
+}
+
+function CollapseButton({ collapsed, onClick }: { collapsed: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="cw-collapse-button"
+      aria-label={collapsed ? '展开员工面板' : '收起员工面板'}
+      aria-expanded={!collapsed}
+      onClick={onClick}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        aria-hidden="true"
+        style={{ transform: collapsed ? 'rotate(180deg)' : undefined }}
+      >
+        <path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
   );
 }
 

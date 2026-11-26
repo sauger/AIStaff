@@ -23,9 +23,10 @@ import DocumentOverlay from './DocumentOverlay';
 import EmployeeDetailPanel from './EmployeeDetailPanel';
 import EmployeeYard from './EmployeeYard';
 import WorkbenchEmptyState from './WorkbenchEmptyState';
-import WorkbenchHeader from './WorkbenchHeader';
 import type { YardEmployee } from './EmployeeYardCard';
-import { artForRole } from './employeeArt';
+import { artForRole, roleColor, YARD_COLORS } from './employeeArt';
+import WorkbenchAccount from './WorkbenchAccount';
+import WorkbenchBrand from './WorkbenchBrand';
 import { useWorkbenchBreakpoints } from './useMediaQuery';
 
 /**
@@ -78,6 +79,26 @@ export default function ChatWorkbench({
   const yardAgents = visibleEmployeeAgents(chat.agents, chat.auth?.user).filter(
     (agent) => !agent.is_overall,
   );
+  // 设计稿明确的角色先用稿子里的颜色；其余员工按 id 稳定顺序从色池补未使用的颜色。
+  const usedColors = new Set<string>();
+  const colorByAgentId = new Map<string, string>();
+  const colorOrder = [...yardAgents].sort((a, b) => a.id.localeCompare(b.id));
+  const pendingColors: Array<{ agent: (typeof yardAgents)[number]; fallback?: string }> = [];
+  for (const agent of colorOrder) {
+    const profile = employeeProfile(agent);
+    const baseColor = roleColor(profile.roleKey, profile.roleName);
+    if (baseColor && !usedColors.has(baseColor)) {
+      usedColors.add(baseColor);
+      colorByAgentId.set(agent.id, baseColor);
+    } else {
+      pendingColors.push({ agent, fallback: baseColor || undefined });
+    }
+  }
+  for (const { agent, fallback } of pendingColors) {
+    const color = YARD_COLORS.find((candidate) => !usedColors.has(candidate)) || fallback || '#000000';
+    usedColors.add(color);
+    colorByAgentId.set(agent.id, color);
+  }
   const readTimes = chat.sessionReadTimes ?? {};
   const yardEmployees: YardEmployee[] = yardAgents.map((agent) => {
     const profile = employeeProfile(agent);
@@ -87,6 +108,7 @@ export default function ChatWorkbench({
       id: agent.id,
       name: employeeDisplayName(agent),
       artId: artForRole(profile.roleKey, profile.roleName),
+      color: colorByAgentId.get(agent.id),
       roleName: profile.roleName,
       online: agent.status === 'active',
       intro: description
@@ -208,8 +230,8 @@ export default function ChatWorkbench({
   if (welcome) {
     return (
       <div className="cw-root">
-        <WorkbenchHeader chat={chat} />
         <div ref={workspaceRef} className="cw-workspace cw-welcome-workspace">
+          <div className="cw-welcome-brand"><WorkbenchBrand /></div>
           <div className="cw-welcome-intro">
             <h1>从一个问题或一项任务开始</h1>
           </div>
@@ -234,7 +256,6 @@ export default function ChatWorkbench({
 
   return (
     <div className="cw-root">
-      <WorkbenchHeader chat={chat} />
       <div
         ref={workspaceRef}
         className={[
@@ -253,6 +274,8 @@ export default function ChatWorkbench({
           collapsed={yardCollapsed}
           onCollapsedChange={setYardCollapsed}
           onSelect={(employee) => chat.openAgentWorkspace(employee.id)}
+          brand={<WorkbenchBrand collapsed={yardCollapsed} />}
+          account={<WorkbenchAccount chat={chat} collapsed={yardCollapsed} />}
         />
         <main className="cw-chat-panel">
           {heading}
@@ -261,6 +284,7 @@ export default function ChatWorkbench({
             variant="workbench"
             className="cw-conversation"
             stackClassName="cw-conversation-stack"
+            assistantColor={colorByAgentId.get(chat.displayedAgent?.id || '')}
             emptyState={emptyState}
             onOpenDocument={onOpenDocument}
           />
@@ -280,7 +304,7 @@ export default function ChatWorkbench({
 
       {isMobile && (
         <Sheet open={mobileEmployeesOpen} onOpenChange={setMobileEmployeesOpen}>
-          <SheetContent side="left" className="w-[min(420px,92vw)] overflow-y-auto p-0">
+          <SheetContent side="left" className="!w-[min(420px,92vw)] overflow-y-auto p-0">
             <SheetHeader className="border-b border-[#f0f1f4] px-[16px] py-[14px]">
               <SheetTitle className="text-[16px]">选择数字员工</SheetTitle>
             </SheetHeader>
@@ -288,6 +312,8 @@ export default function ChatWorkbench({
               employees={yardEmployees}
               teams={yardTeams}
               defaultTeamId={activeTeamId}
+              brand={<WorkbenchBrand />}
+              account={<WorkbenchAccount chat={chat} />}
               onSelect={(employee) => {
                 chat.openAgentWorkspace(employee.id);
                 setMobileEmployeesOpen(false);
@@ -298,7 +324,7 @@ export default function ChatWorkbench({
       )}
       {isTablet && (
         <Sheet open={detailsOpen} onOpenChange={setDetailsOpen}>
-          <SheetContent side="right" className="w-[min(360px,92vw)] overflow-y-auto p-0">
+          <SheetContent side="right" className="!w-[min(360px,92vw)] overflow-y-auto p-0">
             <SheetHeader className="border-b border-[#f0f1f4] px-[16px] py-[14px]">
               <SheetTitle className="text-[16px]">员工与会话</SheetTitle>
             </SheetHeader>

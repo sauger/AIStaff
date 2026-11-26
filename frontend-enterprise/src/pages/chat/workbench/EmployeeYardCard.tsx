@@ -16,6 +16,8 @@ import type { EmployeeDeskStatus } from './employeeDeskStatus';
 
 export type YardEmployee = IdentityCardEmployee & {
   id: string;
+  /** 每个员工独立的墨团主色。 */
+  color?: string;
   /** 工位画法：工作中 / 离线 / 完成未读 / 空闲站立。 */
   deskStatus?: EmployeeDeskStatus;
 };
@@ -114,11 +116,12 @@ export default function EmployeeYardCard({
         </span>
         {deskStatus === 'working' ? (
           <div className="cw-employee-working-art">
-            <EmployeeWorkScene artId={employee.artId} name={employee.name} />
+            <EmployeeWorkScene artId={employee.artId} name={employee.name} color={employee.color} />
           </div>
         ) : (
           <EmployeeMascot
             artId={employee.artId}
+            color={employee.color}
             motion={deskStatus === 'unread' ? 'completed' : 'idle'}
             resultReady={deskStatus === 'unread'}
             label={deskStatus === 'unread' ? `${employee.name}有未读完成结果` : undefined}

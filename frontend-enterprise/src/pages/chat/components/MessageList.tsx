@@ -42,6 +42,7 @@ export default function MessageList({
   className,
   stackClassName,
   variant = 'default',
+  assistantColor,
 }: {
   chat: UseChatSession;
   emptyState?: ReactNode;
@@ -50,6 +51,8 @@ export default function MessageList({
   className?: string;
   stackClassName?: string;
   variant?: 'default' | 'workbench';
+  /** 工作台里当前员工的实际分配色，保证消息头像和工位颜色一致。 */
+  assistantColor?: string;
 }) {
   const {
     displayedMessages,

@@ -90,6 +90,7 @@ type MessageBubbleProps = {
   onOpenDocument?: (artifact: HarnessWorkspaceArtifact) => void;
   variant?: 'default' | 'workbench';
   showAssistantSender?: boolean;
+  assistantColor?: string;
 };
 
 function activeTeamProgress(item: ChatMessage): { phase: string; statusText: string } | null {
@@ -111,6 +112,7 @@ export default function MessageBubble({
   onOpenDocument,
   variant = 'default',
   showAssistantSender = false,
+  assistantColor,
 }: MessageBubbleProps) {
   const {
     toggleTrace,
@@ -175,6 +177,7 @@ export default function MessageBubble({
             <EmployeeMascot
               artId={assistantArtId}
               portrait
+              color={assistantColor}
               className="cw-message-avatar-art"
             />
           </div>

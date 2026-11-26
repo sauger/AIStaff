@@ -1,6 +1,7 @@
 import rawBackend from '@/assets/employee-art/backend.svg?raw';
 import rawBackendAvatar from '@/assets/employee-art/backend-avatar.svg';
 import rawBrand from '@/assets/employee-art/brand.svg';
+import rawBrandMark from '@/assets/employee-art/brand-mark.svg';
 import rawDesign from '@/assets/employee-art/design.svg?raw';
 import rawDesignAvatar from '@/assets/employee-art/design-avatar.svg';
 import rawEmpty from '@/assets/employee-art/empty.svg';
@@ -59,6 +60,7 @@ const AVATAR_ART: Record<EmployeeArtId, string> = {
 
 export const ART_ASSETS = {
   brand: rawBrand,
+  brandMark: rawBrandMark,
   empty: rawEmpty,
   tick: rawTick,
   workDesk,
@@ -73,10 +75,26 @@ export const INK_COLORS: Record<EmployeeArtId, string> = {
   token: '#FF8D28',
   backend: '#00C0E8',
   frontend: '#34C759',
-  ops: '#C4C4C3',
+  ops: '#8B5E3C',
   qa: '#0088FF',
   sales: '#CF2BE4',
 };
+
+/** 工位颜色池：同一屏内按员工序号取色，保证每个人颜色不同。 */
+export const YARD_COLORS = [
+  '#000000',
+  '#6155F5',
+  '#FF383C',
+  '#FF8D28',
+  '#00C0E8',
+  '#34C759',
+  '#8B5E3C',
+  '#0088FF',
+  '#CF2BE4',
+  '#F5B400',
+  '#FF6B9A',
+  '#12B5A5',
+] as const;
 
 /** role_key / role_name → 原型工位插画。 */
 const ROLE_MATCHERS: Array<{ art: EmployeeArtId; keys: RegExp }> = [
@@ -97,6 +115,15 @@ function hashString(value: string): number {
     hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
   }
   return hash;
+}
+
+/** 仅返回设计稿明确给出的角色颜色；未命中角色返回 null，由调用方补色。 */
+export function roleColor(roleKey: string, roleName: string): string | null {
+  const haystack = `${roleKey || ''} ${roleName || ''}`.toLowerCase();
+  for (const matcher of ROLE_MATCHERS) {
+    if (matcher.keys.test(haystack)) return INK_COLORS[matcher.art];
+  }
+  return null;
 }
 
 export function artForRole(roleKey: string, roleName: string): EmployeeArtId {
@@ -131,8 +158,12 @@ export function scopeSvg(raw: string, suffix: string): string {
 const scopeCache = new Map<string, string>();
 
 /** 小墨团形象：替换 fill="black" 为角色色，白色眼睛包一层 .idle-gaze 供动效使用。 */
-export function inkMarkup(artId: EmployeeArtId, full = true, working = false): string {
-  const color = INK_COLORS[artId];
+export function inkMarkup(
+  artId: EmployeeArtId,
+  full = true,
+  working = false,
+  color = INK_COLORS[artId],
+): string {
   let raw = rawInk.replace(/fill="black"/g, `fill="${color}"`);
   if (working) raw = raw.replace(/<path class="ink-arm"[^>]*\/>/g, '');
   raw = raw.replace(
@@ -142,15 +173,20 @@ export function inkMarkup(artId: EmployeeArtId, full = true, working = false): s
   return full ? raw : raw.replace(/<svg[^>]*>/, '').replace('</svg>', '');
 }
 
-export function inkAvatarMarkup(artId: EmployeeArtId): string {
-  return inkMarkup(artId);
+export function inkAvatarMarkup(artId: EmployeeArtId, color?: string): string {
+  return inkMarkup(artId, true, false, color);
 }
 
 const portraitCache = new Map<string, string>();
 
 /** 头像特写：取 .idle-body，viewBox 收紧到 x+55 y+5 85 90。 */
-export function portraitBody(raw: string, appearance: string, artId: EmployeeArtId): string {
-  const key = `${appearance}:${artId}`;
+export function portraitBody(
+  raw: string,
+  appearance: string,
+  artId: EmployeeArtId,
+  color?: string,
+): string {
+  const key = `${appearance}:${artId}:${color || ''}`;
   const cached = portraitCache.get(key);
   if (cached) return cached;
   const doc = new DOMParser().parseFromString(raw, 'image/svg+xml');
@@ -169,14 +205,18 @@ export function portraitBody(raw: string, appearance: string, artId: EmployeeArt
 }
 
 /** 墨团模式下把工位插画替换为彩色墨团（保留原 SVG 画布尺寸）。 */
-export function inkWorkstationMarkup(artId: EmployeeArtId, portrait = false): string {
+export function inkWorkstationMarkup(
+  artId: EmployeeArtId,
+  portrait = false,
+  color?: string,
+): string {
   const doc = new DOMParser().parseFromString(RAW_ART[artId], 'image/svg+xml');
   const svg = doc.documentElement;
   const viewBox = (svg.getAttribute('viewBox') || '10 189 190 171').split(' ').map(Number);
   const [x, y] = viewBox;
   const body = svg.querySelector('.idle-body');
   if (body && viewBox.length === 4) {
-    body.innerHTML = `<g transform="translate(${x + 35} ${y - (portrait ? 25 : 17)})">${inkMarkup(artId, false)}</g>`;
+    body.innerHTML = `<g transform="translate(${x + 35} ${y - (portrait ? 25 : 17)})">${inkMarkup(artId, false, false, color)}</g>`;
   }
   return new XMLSerializer().serializeToString(svg);
 }

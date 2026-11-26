@@ -46,9 +46,16 @@
   padding: 0 24px 0 20px;
 }
 .cw-brand {
-  width: 190px;
-  height: 50px;
+  width: 195px;
+  height: 42px;
   object-fit: contain;
+  display: block;
+}
+.cw-brand-mark {
+  width: 44px;
+  height: 43px;
+  object-fit: contain;
+  display: block;
 }
 .cw-account {
   display: flex;
@@ -94,33 +101,104 @@
 /* ---------- 工作区三栏 ---------- */
 .cw-workspace {
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr) 300px;
-  height: calc(100dvh - 74px);
+  grid-template-columns: 300px minmax(0, 1fr) 300px;
+  height: 100dvh;
   min-height: 640px;
 }
 .cw-workspace.cw-sidebar-collapsed {
-  grid-template-columns: 88px minmax(0, 1fr) 300px;
+  grid-template-columns: 72px minmax(0, 1fr) 300px;
 }
 
 /* ---------- 员工工位栏 ---------- */
 .cw-employees-panel {
   background: #fff;
   min-height: 0;
-  overflow: auto;
-  padding: 24px 20px 30px;
+  overflow: hidden;
+  padding: 32px 0;
+  display: flex;
+  flex-direction: column;
   scrollbar-width: thin;
 }
 .cw-employees-panel.cw-collapsed {
-  padding: 24px 16px;
+  padding: 32px 0;
+  align-items: center;
+}
+.cw-yard-brand {
+  flex: none;
+  height: 42px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+}
+.cw-employees-panel.cw-collapsed .cw-yard-brand {
+  height: 43px;
+  padding: 0;
+  justify-content: center;
+}
+.cw-yard-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 10px;
+  margin-top: 24px;
+  scrollbar-width: thin;
+}
+.cw-yard-collapsed-tools {
+  margin-top: 17px;
+  flex: none;
+}
+.cw-yard-account {
+  flex: none;
+  margin-top: auto;
+  height: 48px;
+  padding: 0 16px;
+}
+.cw-employees-panel.cw-collapsed .cw-yard-account {
+  width: 72px;
+  padding: 0;
+  display: grid;
+  place-items: center;
 }
 .cw-employee-toolbar {
   display: flex;
   gap: 16px;
-  margin-left: 16px;
   margin-bottom: 24px;
+  padding: 0 10px;
 }
 .cw-employees-panel.cw-collapsed .cw-employee-toolbar {
   margin-left: 0;
+}
+.cw-account-trigger {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 48px;
+  padding: 0 4px;
+  border-radius: 12px;
+  text-align: left;
+}
+.cw-account-trigger-collapsed {
+  width: 48px;
+  padding: 0;
+  justify-content: center;
+}
+.cw-account-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  line-height: 22px;
+  color: #18181a;
+}
+.cw-account-chevron {
+  flex: none;
+  color: #8c9092;
+}
+@media (hover: hover) and (pointer: fine) {
+  .cw-account-trigger:hover { background: rgba(0, 0, 0, 0.04); }
 }
 .cw-collapse-button {
   width: 48px;
@@ -138,12 +216,13 @@
 }
 .cw-employee-grid {
   display: grid;
-  grid-template-columns: repeat(2, 170px);
+  grid-template-columns: repeat(2, 140px);
+  width: 280px;
   padding-bottom: 20px;
 }
 .cw-employee {
-  height: 170px;
-  width: 170px;
+  height: 140px;
+  width: 140px;
   padding: 0;
   position: relative;
   display: flex;
@@ -180,12 +259,12 @@
   height: 14px;
 }
 .cw-employee-art {
-  width: 190px;
-  height: 171px;
+  width: 156.47px;
+  height: 140.82px;
   max-width: none;
   position: absolute;
-  top: 19px;
-  left: -10px;
+  top: 15.65px;
+  left: -8.24px;
   z-index: -1;
   transition: transform 200ms var(--cw-ease-out);
   pointer-events: none;
@@ -197,16 +276,16 @@
 }
 .cw-empty-desk {
   position: relative;
-  height: 170px;
-  padding-top: 19px;
+  height: 140px;
+  padding-top: 15.65px;
   transform-origin: top left;
 }
 .cw-empty-desk img {
-  width: 190px;
-  height: 171px;
+  width: 156.47px;
+  height: 140.82px;
   position: absolute;
-  top: 19px;
-  left: -10px;
+  top: 15.65px;
+  left: -8.24px;
 }
 .cw-yard-empty {
   font-size: 14px;
@@ -507,8 +586,8 @@
 /* ---------- 团队筛选 ---------- */
 .cw-filter-wrap {
   background: var(--cw-bg);
-  width: 260px;
-  height: 48px;
+  width: 196px;
+  height: 46px;
   border-radius: 12px;
   position: relative;
 }
@@ -800,11 +879,11 @@
   flex-direction: column;
 }
 .cw-chat-heading {
-  height: 64px;
+  height: 68px;
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 20px 24px 0;
+  padding: 40px 24px 0;
   flex-shrink: 0;
 }
 .cw-chat-heading-title {
@@ -831,7 +910,7 @@
   display: none;
 }
 .cw-conversation {
-  padding: 0 107px 28px 104px;
+  padding: 0 24px 28px;
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -842,7 +921,8 @@
   display: flex;
   min-width: 0;
   width: 100%;
-  max-width: none;
+  max-width: 1000px;
+  margin: 0 auto;
   flex-direction: column;
   gap: 20px;
 }
@@ -965,19 +1045,22 @@
 
 /* ---------- Composer 工作台变体：20px 圆角 + 44px 圆形发送 ---------- */
 .cw-composer-shell {
-  padding: 6px 107px 24px 104px;
+  padding: 6px 24px 24px;
 }
 .cw-composer-stage {
-  max-width: none;
+  max-width: 1000px;
+  margin: 0 auto;
 }
 .cw-composer-form {
   border-radius: 20px;
   height: 140px;
-  padding: 22px 23px;
+  padding: 24px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: none;
 }
 .cw-composer-send {
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   background: #18181a;
   color: #fff;
@@ -989,12 +1072,12 @@
   cursor: not-allowed;
 }
 
-/* ---------- 详情栏 300px（Figma 底色 #F9FAFD） ---------- */
+/* ---------- 详情栏 300px（设计稿透明底） ---------- */
 .cw-detail-panel {
   position: relative;
   min-height: 0;
   border-left: 1px solid var(--cw-line);
-  background: #f9fafd;
+  background: transparent;
   padding: 24px 20px 20px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -1019,19 +1102,19 @@
 }
 .cw-profile-avatar {
   display: block;
-  width: 122px;
+  width: 120px;
   margin: 0 auto 0;
 }
 .cw-profile-avatar .cw-employee-idle-avatar {
   display: block;
-  width: 122px;
-  height: 122px;
+  width: 120px;
+  height: 120px;
   animation: none;
   transform: none;
 }
 .cw-profile-avatar .cw-idle-portrait-art {
-  width: 122px;
-  height: 122px;
+  width: 120px;
+  height: 120px;
 }
 .cw-team-avatar-stack {
   display: flex;
@@ -1276,7 +1359,13 @@
   display: block;
   position: relative;
   background: #fff;
-  min-height: max(740px, calc(100dvh - 74px));
+  min-height: max(740px, 100dvh);
+}
+.cw-welcome-brand {
+  position: absolute;
+  top: 32px;
+  left: 20px;
+  z-index: 2;
 }
 .cw-welcome-workspace > .cw-chat-panel,
 .cw-welcome-workspace > .cw-detail-panel {
@@ -1363,31 +1452,8 @@
 }
 
 /* ---------- 断点 ---------- */
-@media (max-width: 1550px) {
-  .cw-workspace { grid-template-columns: 300px minmax(0, 1fr) 270px; }
-  .cw-workspace.cw-sidebar-collapsed { grid-template-columns: 68px minmax(0, 1fr) 270px; }
-  .cw-employees-panel { padding: 20px 10px; }
-  .cw-employee-toolbar { margin-left: 10px; gap: 10px; }
-  .cw-filter-wrap { width: 210px; }
-  .cw-employee-grid { grid-template-columns: repeat(2, 140px); }
-  .cw-employee { width: 140px; height: 145px; }
-  .cw-employee-art,
-  .cw-empty-desk img {
-    width: 156.47px;
-    height: 140.82px;
-    left: -8.24px;
-    top: 16px;
-  }
-  .cw-empty-desk { height: 145px; }
-  .cw-employee-name { font-size: 13px; }
-  .cw-employee-working-art { transform: scale(0.8235); transform-origin: top left; left: -8.24px; }
-  .cw-conversation { padding-left: 48px; padding-right: 40px; }
-  .cw-composer-shell { padding: 6px 40px 20px 48px; }
-  .cw-detail-panel { padding-left: 15px; padding-right: 15px; }
-  .cw-account::before { margin-right: 0; }
-}
 @media (max-width: 1150px) {
-  .cw-employee-grid { grid-template-columns: repeat(2, 110px); }
+  .cw-employee-grid { width: 220px; grid-template-columns: repeat(2, 110px); }
   .cw-employee { width: 110px; height: 125px; }
   .cw-employee-art,
   .cw-empty-desk img {
@@ -1412,6 +1478,7 @@
   .cw-workspace.cw-sidebar-collapsed {
     grid-template-columns: 240px minmax(0, 1fr);
   }
+  .cw-employee-grid { width: 220px; }
   .cw-workspace > .cw-detail-panel { display: none; }
   .cw-mobile-detail-toggle {
     display: block;
@@ -1424,13 +1491,10 @@
 }
 /* ≤767：单列会话 + 抽屉 */
 @media (max-width: 767px) {
-  .cw-workbench-header { height: 64px; padding-left: 12px; padding-right: 14px; }
-  .cw-brand { width: 160px; }
-  .cw-account::before { display: none; }
   .cw-workspace,
   .cw-workspace.cw-sidebar-collapsed {
     display: block;
-    height: calc(100dvh - 64px);
+    height: 100dvh;
     min-height: 0;
   }
   .cw-workspace > .cw-employees-panel { display: none; }
@@ -1475,7 +1539,7 @@
   .cw-doc-overlay-body > * { max-width: 100%; }
   .cw-welcome-workspace {
     height: auto;
-    min-height: calc(100dvh - 64px);
+    min-height: 100dvh;
     padding: 40px 12px;
     overflow: auto;
   }

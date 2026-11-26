@@ -150,7 +150,7 @@ export default function EmployeeDetailPanel({
       </button>
       <div className="cw-profile">
         <div className="cw-profile-avatar">
-          <EmployeeIdleAvatar artId={artId} name={displayName()} />
+          <EmployeeIdleAvatar artId={artId} color={yardEmployee?.color} name={displayName()} />
         </div>
         <strong>{displayName()}</strong>
         <p>{introText()}</p>
