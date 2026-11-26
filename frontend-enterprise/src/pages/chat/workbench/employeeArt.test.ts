@@ -10,6 +10,7 @@ import {
   inkMarkup,
   inkWorkstationMarkup,
   portraitBody,
+  rawArtFor,
   scopeSvg,
 } from './employeeArt';
 
@@ -60,6 +61,12 @@ describe('employeeArt', () => {
     expect(markup).toContain('href="/assets/completed-sign.svg"');
     expect(markup).toContain('class="result-paper"');
     expect(markup).toContain('visibility="hidden"');
+  });
+
+  it('tucks the completed arm behind the scarf in the original art', () => {
+    const markup = attachCompletedResult(rawArtFor('sales'), '/assets/completed-sign.svg');
+    expect(markup.indexOf('class="summon-wave"')).toBeGreaterThan(-1);
+    expect(markup.indexOf('class="summon-wave"')).toBeLessThan(markup.indexOf('class="idle-scarf"'));
   });
 
   it('produces a portrait crop with a tightened viewBox when a body exists', () => {

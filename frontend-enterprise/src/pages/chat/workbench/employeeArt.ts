@@ -249,7 +249,14 @@ export function attachCompletedResult(raw: string, signHref = completedSignUrl):
   const sign = `<g class="summon-wave" style="transform-origin:${x + 117}px ${y + 54}px">`
     + `<image href="${href}" x="${x + 115}" y="${y + 25}" width="44" height="44"/>${handMarkup}</g>`;
   const paper = RESULT_PAPER.replace('__X__', String(x + 72)).replace('__Y__', String(y + 88));
-  svg.insertAdjacentHTML('beforeend', sign + paper);
+  // 手臂画在围巾后面、结果纸画在桌上；否则举手会盖住围巾。
+  const scarf = svg.querySelector('.idle-scarf');
+  if (scarf) {
+    scarf.insertAdjacentHTML('beforebegin', sign);
+    svg.insertAdjacentHTML('beforeend', paper);
+  } else {
+    svg.insertAdjacentHTML('beforeend', sign + paper);
+  }
   return new XMLSerializer().serializeToString(svg);
 }
 
