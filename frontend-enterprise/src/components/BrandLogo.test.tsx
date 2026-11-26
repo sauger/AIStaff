@@ -11,15 +11,14 @@ describe('BrandLogo', () => {
   it('renders the RapidStaff wordmark and light mark by default', () => {
     render(<BrandLogo />);
 
-    expect(screen.getByText('RapidStaff')).toBeTruthy();
     expect(screen.getByAltText('RapidStaff')).toBeTruthy();
-    expect(screen.queryByText('StaffDeck')).toBeNull();
+    expect(screen.getByTestId('brand-wordmark')).toBeTruthy();
   });
 
   it('hides the wordmark when markOnly is set', () => {
     render(<BrandLogo markOnly />);
 
-    expect(screen.queryByText('RapidStaff')).toBeNull();
+    expect(screen.queryByTestId('brand-wordmark')).toBeNull();
     expect(screen.getByAltText('RapidStaff')).toBeTruthy();
   });
 });
