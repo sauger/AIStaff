@@ -64,7 +64,8 @@
   不是用户原话：不要复述它，也不要把它当成新需求或 requirement。
 - `selected` 非空：用户已在画布选中这些组件，优先把本轮请求理解为对这些组件的修改。
 - `component_count == 0`：当前是空白屏；用户说「生成/加一个/做一个」指向为当前屏补齐内容，
-  不是新建另一张屏。
+  不是新建另一张屏。这类请求的 screen_intent.kind 一律给 create（不是 modify_screen、
+  target=current、placement_confirmed=false）：空白屏上没有可修改的组件，也没有可"再改"的整屏。
 - `component_count > 0` 且 `selected` 为空：不要替用户假设目标组件；用户说「这个/它」时
   仍可选择 SOP，由运行时绑定层决定是否向用户提问。
 - `turn_context` 缺失：按普通对话/SOP 规则处理，不推断任何编辑器状态。
@@ -73,6 +74,8 @@
 - 只要 stage_data.turn_context 存在，就必须输出 screen_intent；它是给大屏绑定层的判据，不是给用户看的回复。
 - kind 只能是 create / modify_selected / modify_screen / query / confirm / cancel / help。
 - confidence 用 0~1 表示你对 kind 的把握；低于 0.75 时宁可给 help 或带 missing，不要猜写屏。
+- 「确认方案」（可以/就这样/按这个生成）只体现在 screen_intent.kind=confirm；顶层 decision 没有
+  confirm 这个取值，确认方案时 decision 用 continue_active，不要写 confirm，否则整轮计划会解析失败。
 - target：用户明确说“新建/另建/新开”才用 new；说“当前屏/这个屏/上面”用 current；否则 unspecified。
 - placement_confirmed：只有用户在本轮明确选择“新建一张”或“在某一屏上改”时才为 true；只说“生成/做一个”不算。
 - new_generation：只有用户明确要求“再生成一张/另做一张/重新做一个”时才为 true；它和 placement_confirmed 一起用于切换任务，不要拿它替代 target。
@@ -81,11 +84,13 @@
 - 组件修改三类示例：
   - 选中或点名组件 + 具体改法（“把选中的组件改为饼图”“部门合同额换成折线”“标题改成合同额”）→
     kind=modify_selected，target=current；点名时 component 填该名字。
-  - 整屏重做/新建/整体布局（“重新做一张”“另建一张”“整体换个布局”）→ kind=create，按 target 规则给 new/current。
+  - 整屏重做/新建（“重新做一张”“另建一张”“整屏重做”）→ kind=create，按 target 规则给 new/current。
+  - 整屏级但不是新方案（“整体换个布局”“这张屏换成蓝色主题”“再加一个饼图”）→
+    kind=modify_screen，target=current：改的还是当前这张屏，不切换任务。
   - 完全无法判断（“这个不太对”“帮我弄一下”）→ 低 confidence，kind 给 help 或带 ambiguities 写明歧义；
     不要硬判 create，也不要猜目标组件。
 - 用户问数字/汇总/趋势事实（“合同额多少”“项目进度怎么样”）用 query，不要启动方案。
-- 用户只回复“可以/就这样/按这个生成/确认”且 turn_context.plan_status 是 needs_confirmation 或 ready 时用 confirm；句子里有“但是/不过/再改”等未完成条件时不要 confirm。
+- 用户只回复“可以/就这样/按这个生成/确认”且 turn_context.plan_status 是 needs_confirmation 或 ready 时用 confirm；句子里有“但是/不过/再改”等未完成条件时不要 confirm：即使句首是“可以”，只要后面跟了新的修改要求（“可以，但是标题改短”），就按修改处理（modify_screen 或 modify_selected），不要用 confirm。
 - 用户回复“直接做/直接生成/按建议做/按默认/你来定”且 turn_context.plan_status 是 needs_confirmation 或 ready 时，用 create、target=current、placement_confirmed=false、confidence>=0.75：这是接受当前默认方案，不是新建屏，也不是 confirm。即使 planner 不确定，也必须保持 target=current，不得带 placement_confirmed=true。
 - 用户回复“重新生成/重新生成方案/再来一版/换一版”时，用 create、target=current、placement_confirmed=false、new_generation=true；它表示同一任务内重开一份方案，不是新建任务。
 - 用户说“项目名称用文字”“合同额用柱状图按部门”这类字段+组件/图表的答法时，理解为对当前方案组件的补充/调整，kind=modify_screen、target=current，不要因为出现“用文字/柱状图”就判为 query 或 help。

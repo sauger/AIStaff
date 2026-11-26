@@ -56,6 +56,15 @@ def _fresh_db() -> Session:
     return session
 
 
+def _plan_call(screen) -> dict:
+    """Arguments of the plan_screen call, or {} when the plan spine never ran."""
+
+    for name, args in screen.calls:
+        if name == "plan_screen":
+            return args
+    return {}
+
+
 def _t1() -> tuple[bool, dict]:
     screen = e2e.FakeScreen(components=[], revision=1)
     context = ScreenTurnContext(
@@ -69,12 +78,16 @@ def _t1() -> tuple[bool, dict]:
         _fresh_db(), screen, message="帮我做一个销售经营大屏", context=context
     )
     names = e2e._tool_names(screen)
-    args = screen.calls[0][1] if screen.calls else {}
+    args = _plan_call(screen)
+    # Whole-screen generation goes through the plan spine: read the catalogue,
+    # submit a draft for confirmation, never write the screen in this turn.
     ok = (
-        names[:1] == ["create_screen"]
-        and args.get("template") == "sales"
-        and args.get("mode") == "new"
-        and ("已创建" in response.reply or "新建" in response.reply)
+        names == ["describe_dataset", "plan_screen"]
+        and args.get("placementHint") == "new"
+        and not args.get("screenId")
+        and bool((args.get("draft") or {}).get("goal"))
+        and not ({"document", "operations", "frame", "x", "y"} & set(args))
+        and "方案" in response.reply
     )
     return ok, {"tools": names, "params": args, "reply": response.reply}
 
@@ -103,14 +116,17 @@ def _t2() -> tuple[bool, dict]:
         _fresh_db(), screen, message="在这个大屏上生成一个销售看板", context=context
     )
     names = e2e._tool_names(screen)
-    apply_args = screen.calls[1][1] if len(screen.calls) > 1 else {}
+    args = _plan_call(screen)
+    # A blank existing screen is filled through the same plan spine, anchored to
+    # the current screen and its revision; nothing is written before confirmation.
     ok = (
-        names == ["get_screen", "apply_screen_operations", "get_screen", "validate_screen"]
-        and apply_args.get("expectedRevision") == 10
-        and apply_args.get("operations", [{}])[0].get("op") == "add_component"
-        and "已完成" in response.reply
+        names == ["describe_dataset", "plan_screen"]
+        and args.get("placementHint") == "current"
+        and args.get("screenId") == "scr_1"
+        and args.get("expectedRevision") == 10
+        and "方案" in response.reply
     )
-    return ok, {"tools": names, "params": apply_args, "reply": response.reply}
+    return ok, {"tools": names, "params": args, "reply": response.reply}
 
 
 def _t3() -> tuple[bool, dict]:
