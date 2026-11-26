@@ -245,17 +245,17 @@ export function attachCompletedResult(raw: string, signHref = completedSignUrl):
   const hand = originalHand ? new XMLSerializer().serializeToString(originalHand) : '';
   originalHand?.setAttribute('visibility', 'hidden');
   // 原画的手臂末端离小牌子还有几像素，右移一点让手真正握住绿色气泡的尾巴。
-  const signX = inkHand ? x + 115 : x + 127;
+  const signX = inkHand ? x + 115 : x + 123;
+  const wristX = inkHand ? x + 115 : x + 131;
   const armMarkup = inkHand
     ? ''
-    : `<path d="M${x + 100} ${y + 65}C${x + 110} ${y + 64} ${x + 125} ${y + 62} ${signX + 10} ${y + 61}" stroke="#000" stroke-width="8" stroke-linecap="round" fill="none"/>`;
+    : `<path d="M${x + 100} ${y + 65}C${x + 112} ${y + 64} ${x + 124} ${y + 63} ${wristX} ${y + 64}" stroke="#000" stroke-width="8" stroke-linecap="round" fill="none"/>`;
   const handMarkup = inkHand
     ? `<g transform="translate(${x + 35} ${y - 17})">${hand}</g>`
-    : `<circle cx="${signX + 10}" cy="${y + 61}" r="6" fill="#000"/><circle cx="${signX + 13}" cy="${y + 56}" r="3" fill="#000"/>`;
-  const href = signHref.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    : `<path d="M${wristX - 3} ${y + 68}C${wristX - 3} ${y + 60} ${wristX - 1} ${y + 54} ${wristX + 1} ${y + 54}C${wristX + 2} ${y + 54} ${wristX + 2} ${y + 56} ${wristX + 2} ${y + 59}C${wristX + 3} ${y + 55} ${wristX + 4} ${y + 54} ${wristX + 5} ${y + 55}C${wristX + 7} ${y + 58} ${wristX + 6} ${y + 65} ${wristX + 4} ${y + 68}C${wristX + 2} ${y + 71} ${wristX - 1} ${y + 71} ${wristX - 3} ${y + 68}Z" fill="#000"/>`;
   const sign = `<g class="summon-wave" style="transform-origin:${x + 117}px ${y + 54}px">`
     + armMarkup
-    + `<image href="${href}" x="${signX}" y="${y + 25}" width="44" height="44"/>${handMarkup}</g>`;
+    + `<image href="${signHref}" x="${signX}" y="${y + 25}" width="44" height="44"/>${handMarkup}</g>`;
   const paper = RESULT_PAPER.replace('__X__', String(x + 72)).replace('__Y__', String(y + 88));
   // 手臂画在围巾后面、结果纸画在桌上；否则举手会盖住围巾。
   const scarf = svg.querySelector('.idle-scarf');
