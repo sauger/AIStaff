@@ -244,7 +244,10 @@ export function attachCompletedResult(raw: string, signHref = completedSignUrl):
     : svg.querySelector('.idle-body > path:nth-child(5)');
   const hand = originalHand ? new XMLSerializer().serializeToString(originalHand) : '';
   originalHand?.setAttribute('visibility', 'hidden');
-  const handMarkup = inkHand ? `<g transform="translate(${x + 35} ${y - 17})">${hand}</g>` : hand;
+  // 原画的手臂末端离小牌子还有几像素，右移一点让手真正握住绿色气泡的尾巴。
+  const handMarkup = inkHand
+    ? `<g transform="translate(${x + 35} ${y - 17})">${hand}</g>`
+    : `<g transform="translate(5 0)">${hand}</g>`;
   const href = signHref.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   const sign = `<g class="summon-wave" style="transform-origin:${x + 117}px ${y + 54}px">`
     + `<image href="${href}" x="${x + 115}" y="${y + 25}" width="44" height="44"/>${handMarkup}</g>`;
