@@ -4,7 +4,7 @@ import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import EmployeeMascot from './EmployeeMascot';
-import { EmployeeAppearanceProvider } from './useEmployeeAppearance';
+import { APPEARANCE_STORAGE_KEY, EmployeeAppearanceProvider } from './useEmployeeAppearance';
 
 afterEach(cleanup);
 
@@ -50,6 +50,19 @@ describe('EmployeeMascot', () => {
     expect(host.getAttribute('data-result-ready')).toBe('true');
     expect(host.getAttribute('data-motion')).toBe('completed');
     expect(host.querySelector('.summon-wave')).toBeTruthy();
-    expect(host.querySelector('.result-paper')).toBeTruthy();
+    expect(host.querySelector('.result-paper')).toBeNull();
+  });
+
+  it('raises the horizontal arm holding the sign in the original appearance', () => {
+    window.localStorage.setItem(APPEARANCE_STORAGE_KEY, 'original');
+    try {
+      const { container } = renderMascot({ artId: 'sales', resultReady: true, motion: 'completed' });
+      const host = container.firstElementChild as HTMLElement;
+      expect(host.getAttribute('data-appearance')).toBe('original');
+      expect(host.querySelector('.completed-arm')).toBeTruthy();
+      expect(host.querySelector('.summon-wave image')).toBeTruthy();
+    } finally {
+      window.localStorage.removeItem(APPEARANCE_STORAGE_KEY);
+    }
   });
 });

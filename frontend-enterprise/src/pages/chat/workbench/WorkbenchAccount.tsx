@@ -88,10 +88,7 @@ export default function WorkbenchAccount({
           {t('模型设置')}
         </DropdownMenuItem>
         <DropdownMenuItem className={ITEM_CLASS} onSelect={() => toggle()}>
-          <span className="flex w-[40px] shrink-0 items-center gap-[4px]">
-            <PersonIcon active={appearance === 'original'} />
-            <GhostIcon active={appearance === 'ink'} />
-          </span>
+          {appearance === 'original' ? <PersonIcon /> : <GhostIcon />}
           {t('切换形象')}
         </DropdownMenuItem>
         <div className="flex h-[46px] items-center gap-[12px] px-[12px]">
@@ -133,15 +130,16 @@ export default function WorkbenchAccount({
   );
 }
 
-function PersonIcon({ active }: { active: boolean }) {
+function PersonIcon() {
   return (
     <svg
       width="18"
       height="18"
       viewBox="0 0 16 16"
       fill="none"
-      className={active ? 'text-[#18181a]' : 'text-[#b9bec9]'}
+      className="size-[18px] text-[#18181a]"
       aria-hidden="true"
+      data-icon="person"
     >
       <circle cx="8" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.3" />
       <path d="M3.3 13.6c0-2.6 2.1-4.5 4.7-4.5s4.7 1.9 4.7 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
@@ -149,15 +147,16 @@ function PersonIcon({ active }: { active: boolean }) {
   );
 }
 
-function GhostIcon({ active }: { active: boolean }) {
+function GhostIcon() {
   return (
     <svg
       width="18"
       height="18"
       viewBox="0 0 16 16"
       fill="none"
-      className={active ? 'text-[#18181a]' : 'text-[#b9bec9]'}
+      className="size-[18px] text-[#18181a]"
       aria-hidden="true"
+      data-icon="ghost"
     >
       <path d="M3.2 13.2V7.4a4.8 4.8 0 0 1 9.6 0v5.8l-2-1.2-1.8 1.2-1.8-1.2-2 1.2Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
       <circle cx="6.2" cy="7.2" r=".7" fill="currentColor" />

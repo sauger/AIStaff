@@ -55,18 +55,36 @@ describe('employeeArt', () => {
     expect(inkMarkup('sales')).toContain('ink-arm');
   });
 
-  it('attaches the waving completed sign and the desk paper', () => {
+  it('attaches the waving completed sign to ink art without a desk paper', () => {
     const markup = attachCompletedResult(inkWorkstationMarkup('sales'), '/assets/completed-sign.svg');
     expect(markup).toContain('class="summon-wave"');
     expect(markup).toContain('href="/assets/completed-sign.svg"');
-    expect(markup).toContain('class="result-paper"');
     expect(markup).toContain('visibility="hidden"');
+    expect(markup).not.toContain('result-paper');
   });
 
-  it('tucks the completed arm behind the scarf in the original art', () => {
+  it('swaps the resting arm for a horizontal arm behind the scarf in the original art', () => {
     const markup = attachCompletedResult(rawArtFor('sales'), '/assets/completed-sign.svg');
     expect(markup.indexOf('class="summon-wave"')).toBeGreaterThan(-1);
     expect(markup.indexOf('class="summon-wave"')).toBeLessThan(markup.indexOf('class="idle-scarf"'));
+    expect(markup).toMatch(/class="wave-arm"[^>]*visibility="hidden"/);
+    expect(markup).toContain('class="completed-arm"');
+    expect(markup.match(/visibility="hidden"/g)).toHaveLength(1);
+  });
+
+  it('seats the completed sign against the head and inside the desk', () => {
+    const markup = attachCompletedResult(rawArtFor('sales'), '/assets/completed-sign.svg');
+    const sign = new DOMParser().parseFromString(markup, 'image/svg+xml').querySelector('.summon-wave image');
+    // 气泡 44×44：左缘贴着头部右缘，右缘不超出桌面（x=165）。
+    expect(sign?.getAttribute('x')).toBe('117.4');
+    expect(sign?.getAttribute('y')).toBe('895.62');
+    expect(Number(sign?.getAttribute('x')) + 44).toBeLessThan(165);
+  });
+
+  it('colors the completed arm like the body and hides the unclassed resting arm in ops art', () => {
+    const markup = attachCompletedResult(rawArtFor('ops'), '/assets/completed-sign.svg');
+    expect(markup).toContain('class="completed-arm" fill="#C4C4C3"');
+    expect(markup.match(/visibility="hidden"/g)).toHaveLength(1);
   });
 
   it('produces a portrait crop with a tightened viewBox when a body exists', () => {

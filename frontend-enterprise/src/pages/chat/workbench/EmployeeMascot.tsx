@@ -17,7 +17,7 @@ type EmployeeMascotProps = {
   /** 站位插画（工位全身）；portrait 为头像特写。 */
   portrait?: boolean;
   motion?: EmployeeMotionState;
-  /** 工作完成未读：挥动完成标记，桌上放结果纸。 */
+  /** 工作完成未读：举着完成标记挥动。 */
   resultReady?: boolean;
   label?: string;
   className?: string;

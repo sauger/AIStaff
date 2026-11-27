@@ -189,7 +189,7 @@ describe('ChatWorkbench', () => {
     expect(offline.querySelector('.cw-work-scene')).toBeNull();
   });
 
-  it('shows a laptop while work is running and a document when the result is unread', () => {
+  it('shows a laptop while work is running and a waving sign when the result is unread', () => {
     const chat = buildChat();
     const teammate = { ...agent, id: 'agent-2', name: '商务总监' };
     chat.agents = [agent, teammate];
@@ -216,7 +216,7 @@ describe('ChatWorkbench', () => {
     const unread = screen.getByRole('img', { name: '商务总监有未读完成结果' });
     expect(unread.getAttribute('data-result-ready')).toBe('true');
     expect(unread.querySelector('.summon-wave')).toBeTruthy();
-    expect(unread.querySelector('.result-paper')).toBeTruthy();
+    expect(unread.querySelector('.result-paper')).toBeNull();
   });
 
   it('shows the team leader and team filter for a team session', () => {

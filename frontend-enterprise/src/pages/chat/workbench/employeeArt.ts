@@ -2,6 +2,7 @@ import rawBackend from '@/assets/employee-art/backend.svg?raw';
 import rawBackendAvatar from '@/assets/employee-art/backend-avatar.svg';
 import rawBrand from '@/assets/employee-art/brand.svg';
 import rawBrandMark from '@/assets/employee-art/brand-mark.svg';
+import completedSignUrl from '@/assets/employee-art/completed-sign.svg';
 import rawDesign from '@/assets/employee-art/design.svg?raw';
 import rawDesignAvatar from '@/assets/employee-art/design-avatar.svg';
 import rawEmpty from '@/assets/employee-art/empty.svg';
@@ -26,7 +27,6 @@ import workDesk from '@/assets/employee-art/work-desk.svg';
 import workHands from '@/assets/employee-art/work-hands.svg?raw';
 import workLaptop from '@/assets/employee-art/work-laptop.svg?raw';
 import workSweat from '@/assets/employee-art/work-sweat.svg?raw';
-import completedSignUrl from '@/assets/employee-art/completed-sign.svg';
 
 export const EMPLOYEE_ART_IDS = [
   'pm', 'product', 'design', 'token', 'backend', 'frontend', 'ops', 'qa', 'sales',
@@ -221,50 +221,50 @@ export function inkWorkstationMarkup(
   return new XMLSerializer().serializeToString(svg);
 }
 
-const RESULT_PAPER = '<g class="result-paper" transform="translate(__X__ __Y__)">'
-  + '<defs><linearGradient id="resultPaperSurface" x1="0" y1="0" x2="0" y2="1">'
-  + '<stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#F0F2F3"/></linearGradient></defs>'
-  + '<rect x=".5" y="1.5" width="46" height="27" rx="1" fill="#000" opacity=".07"/>'
-  + '<path d="M0 26H46V27.2H0Z" fill="#DDE1E3"/>'
-  + '<g transform="scale(1 .84)"><rect width="46" height="31" rx="1.2" fill="url(#resultPaperSurface)" stroke="#CFD6DA" stroke-width=".6"/>'
-  + '<path d="M7 8H28M7 14H25M7 20H22" stroke="#B8C2C7" stroke-width="1.2" stroke-linecap="round"/>'
-  + '<path d="M32 18L35 21L40 14" fill="none" stroke="#34B963" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'
-  + '</g><path d="M1 .3H45" stroke="white" stroke-width=".5"/></g>';
+/**
+ * 完成态手臂（原型画）：从围巾后面水平伸出，右端半椭圆托住气泡，左端藏在身体和围巾下。
+ * 坐标相对工位 viewBox，与设计稿逐像素对齐，不要随意微调。
+ */
+const COMPLETED_ARM = { x: 96, top: 56.82, capX: 115.9, rx: 8.43, ry: 4.33 };
+/** 完成标记气泡（44×44）的左上角：贴着头部右侧。 */
+const COMPLETED_SIGN = { x: 107.4, y: 26.62 };
 
-/** 完成未读：举手挥动完成标记，桌上放结果纸。坐标相对工位 viewBox。 */
+/**
+ * 完成未读：举着完成标记挥动。坐标相对工位 viewBox。
+ * 原型画换成水平伸出的右臂；墨团画沿用原手臂贴在气泡旁。
+ */
 export function attachCompletedResult(raw: string, signHref = completedSignUrl): string {
   const doc = new DOMParser().parseFromString(raw, 'image/svg+xml');
   const svg = doc.documentElement;
   const viewBox = (svg.getAttribute('viewBox') || '0 0 190 171').split(' ').map(Number);
   if (viewBox.length < 2) return raw;
   const [x, y] = viewBox;
-  const inkHand = svg.querySelector('.ink-arm');
-  const originalHand = inkHand
-    ? svg.querySelector('.ink-arm:last-child')
-    : svg.querySelector('.idle-body > path:nth-child(5)');
-  const hand = originalHand ? new XMLSerializer().serializeToString(originalHand) : '';
-  originalHand?.setAttribute('visibility', 'hidden');
-  // 原画的手臂末端离小牌子还有几像素，右移一点让手真正握住绿色气泡的尾巴。
-  const signX = inkHand ? x + 115 : x + 123;
-  const wristX = inkHand ? x + 115 : x + 131;
+  const inkArms = svg.querySelectorAll('.ink-arm');
+  const inkHand = inkArms.item(inkArms.length - 1);
+  // 原型画里自然下垂的右臂在完成态换成水平伸出的手臂。
+  const restingArm = inkHand ? null : svg.querySelector('.wave-arm, .idle-body > path:nth-child(5)');
+  const hand = inkHand
+    ? new XMLSerializer().serializeToString(inkHand).replace(/\svisibility="hidden"/g, '')
+    : '';
+  (inkHand ?? restingArm)?.setAttribute('visibility', 'hidden');
+  const { x: armX, top, capX, rx, ry } = COMPLETED_ARM;
   const armMarkup = inkHand
     ? ''
-    : `<path d="M${x + 100} ${y + 65}C${x + 112} ${y + 64} ${x + 124} ${y + 63} ${wristX} ${y + 64}" stroke="#000" stroke-width="8" stroke-linecap="round" fill="none"/>`;
+    : `<path class="completed-arm" fill="${restingArm?.getAttribute('fill') || 'black'}"`
+      + ` d="M${x + armX} ${y + top}H${x + capX}A${rx} ${ry} 0 0 1 ${x + capX} ${y + top + ry * 2}H${x + armX}Z"/>`;
   const handMarkup = inkHand
     ? `<g transform="translate(${x + 35} ${y - 17})">${hand}</g>`
-    : `<path d="M${wristX - 3} ${y + 68}C${wristX - 3} ${y + 60} ${wristX - 1} ${y + 54} ${wristX + 1} ${y + 54}C${wristX + 2} ${y + 54} ${wristX + 2} ${y + 56} ${wristX + 2} ${y + 59}C${wristX + 3} ${y + 55} ${wristX + 4} ${y + 54} ${wristX + 5} ${y + 55}C${wristX + 7} ${y + 58} ${wristX + 6} ${y + 65} ${wristX + 4} ${y + 68}C${wristX + 2} ${y + 71} ${wristX - 1} ${y + 71} ${wristX - 3} ${y + 68}Z" fill="#000"/>`;
-  const sign = `<g class="summon-wave" style="transform-origin:${x + 117}px ${y + 54}px">`
+    : '';
+  const [signX, signY] = inkHand ? [115, 25] : [COMPLETED_SIGN.x, COMPLETED_SIGN.y];
+  // 原型画绕肩膀（身体右缘）挥动，手臂根部不会脱离围巾。
+  const [pivotX, pivotY] = inkHand ? [117, 54] : [112.5, top + ry];
+  const sign = `<g class="summon-wave" style="transform-origin:${x + pivotX}px ${y + pivotY}px">`
     + armMarkup
-    + `<image href="${signHref}" x="${signX}" y="${y + 25}" width="44" height="44"/>${handMarkup}</g>`;
-  const paper = RESULT_PAPER.replace('__X__', String(x + 72)).replace('__Y__', String(y + 88));
-  // 手臂画在围巾后面、结果纸画在桌上；否则举手会盖住围巾。
+    + `<image href="${signHref}" x="${x + signX}" y="${y + signY}" width="44" height="44"/>${handMarkup}</g>`;
+  // 手臂画在围巾后面，否则会盖住围巾右端。
   const scarf = svg.querySelector('.idle-scarf');
-  if (scarf) {
-    scarf.insertAdjacentHTML('beforebegin', sign);
-    svg.insertAdjacentHTML('beforeend', paper);
-  } else {
-    svg.insertAdjacentHTML('beforeend', sign + paper);
-  }
+  if (scarf) scarf.insertAdjacentHTML('beforebegin', sign);
+  else svg.insertAdjacentHTML('beforeend', sign);
   return new XMLSerializer().serializeToString(svg);
 }
 
