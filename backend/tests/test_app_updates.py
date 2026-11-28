@@ -158,6 +158,182 @@ def test_release_tag_rejects_untrusted_alternate_link() -> None:
     assert release.url == app_updates.RELEASES_PAGE_URL
 
 
+def test_shipped_build_stamp_matches_itself_and_is_not_an_update(monkeypatch) -> None:
+    """0.1.15-<shortsha> is the shipped identity, not a lower semver than upstream tags."""
+    monkeypatch.setattr(app_updates, "app_version", lambda: "0.1.15-769ecd2")
+    monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_updates.httpx,
+        "get",
+        lambda *args, **kwargs: _response(
+            _feed(
+                ("v1.0.0-preview", "2026-10-21T09:39:55Z"),
+                ("v0.5.6", "2026-09-11T10:15:02Z"),
+                ("v0.1.15-769ecd2", "2026-10-29T03:42:58Z"),
+            )
+        ),
+    )
+
+    result = app_updates._fetch_version()
+
+    assert result.current_version == "0.1.15-769ecd2"
+    assert result.latest_version == "0.1.15-769ecd2"
+    assert result.update_available is False
+    assert result.check_succeeded is True
+
+
+def test_shipped_build_stamp_ignores_unrelated_release_line(monkeypatch) -> None:
+    monkeypatch.setattr(app_updates, "app_version", lambda: "0.1.15-769ecd2")
+    monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_updates.httpx,
+        "get",
+        lambda *args, **kwargs: _response(
+            _feed(
+                ("v1.0.0-preview", "2026-10-21T09:39:55Z"),
+                ("v0.5.6", "2026-09-11T10:15:02Z"),
+            )
+        ),
+    )
+
+    result = app_updates._fetch_version()
+
+    assert result.current_version == "0.1.15-769ecd2"
+    assert result.latest_version == "0.1.15-769ecd2"
+    assert result.update_available is False
+    assert result.check_succeeded is True
+
+
+def test_newer_build_stamp_is_an_update(monkeypatch) -> None:
+    monkeypatch.setattr(app_updates, "app_version", lambda: "0.1.15-769ecd2")
+    monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_updates.httpx,
+        "get",
+        lambda *args, **kwargs: _response(
+            _feed(
+                ("v0.5.6", "2026-09-11T10:15:02Z"),
+                ("v0.1.16-abcdef0", "2026-11-01T00:00:00Z"),
+                ("v0.1.15-769ecd2", "2026-10-29T03:42:58Z"),
+            )
+        ),
+    )
+
+    result = app_updates._fetch_version()
+
+    assert result.latest_version == "0.1.16-abcdef0"
+    assert result.update_available is True
+    assert result.current_version == "0.1.15-769ecd2"
+
+
+def test_later_published_build_of_the_same_release_is_newer(monkeypatch) -> None:
+    monkeypatch.setattr(app_updates, "app_version", lambda: "0.1.15-aaaaaaa")
+    monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_updates.httpx,
+        "get",
+        lambda *args, **kwargs: _response(
+            _feed(
+                ("v0.1.15-aaaaaaa", "2026-08-01T00:00:00Z"),
+                ("v0.1.15-769ecd2", "2026-10-29T03:42:58Z"),
+            )
+        ),
+    )
+
+    result = app_updates._fetch_version()
+
+    assert result.latest_version == "0.1.15-769ecd2"
+    assert result.update_available is True
+    assert app_updates._is_newer("0.1.15-769ecd2", "0.1.15-aaaaaaa") is False
+    assert app_updates._is_newer("0.1.15-769ecd2", "0.1.15-769ECD2") is False
+    assert app_updates._is_newer("v0.5.6", "0.1.15-769ecd2") is False
+    assert app_updates._is_newer("v1.0.0-preview", "0.1.15-769ecd2") is False
+
+
+def test_missing_running_stamp_is_not_downgraded_to_another_sha(monkeypatch) -> None:
+    monkeypatch.setattr(app_updates, "app_version", lambda: "0.1.15-769ecd2")
+    monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_updates.httpx,
+        "get",
+        lambda *args, **kwargs: _response(
+            _feed(("v0.1.15-aaaaaaa", "2026-11-02T00:00:00Z"))
+        ),
+    )
+
+    result = app_updates._fetch_version()
+
+    assert result.latest_version == "0.1.15-769ecd2"
+    assert result.update_available is False
+    assert result.check_succeeded is True
+
+
+def test_same_publish_time_does_not_order_build_ids(monkeypatch) -> None:
+    monkeypatch.setattr(app_updates, "app_version", lambda: "0.1.15-769ecd2")
+    monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
+    published = "2026-10-29T03:42:58Z"
+    monkeypatch.setattr(
+        app_updates.httpx,
+        "get",
+        lambda *args, **kwargs: _response(
+            _feed(
+                ("v0.1.15-aaaaaaa", published),
+                ("v0.1.15-769ecd2", published),
+            )
+        ),
+    )
+
+    result = app_updates._fetch_version()
+
+    assert result.update_available is False
+    assert result.latest_version == "0.1.15-769ecd2"
+
+
+def test_build_publish_times_compare_as_instants(monkeypatch) -> None:
+    monkeypatch.setattr(app_updates, "app_version", lambda: "0.1.15-aaaaaaa")
+    monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_updates.httpx,
+        "get",
+        lambda *args, **kwargs: _response(
+            _feed(
+                ("v0.1.15-aaaaaaa", "2026-10-29T04:00:00+02:00"),
+                ("v0.1.15-769ecd2", "2026-10-29T03:00:00Z"),
+            )
+        ),
+    )
+
+    result = app_updates._fetch_version()
+
+    assert result.latest_version == "0.1.15-769ecd2"
+    assert result.update_available is True
+
+
+def test_plain_release_ignores_git_build_stamps() -> None:
+    release = app_updates._parse_release_feed(
+        _feed(
+            ("v0.9.0-abcdef0", "2026-11-01T00:00:00Z"),
+            ("v0.5.6", "2026-09-11T10:15:02Z"),
+        ),
+        "0.5.6",
+    )
+
+    assert release is not None
+    assert release.version == "0.5.6"
+    assert app_updates._is_newer(release.version, "0.5.6") is False
+
+    prerelease = app_updates._parse_release_feed(
+        _feed(
+            ("v0.4.0-abcdef0", "2026-11-01T00:00:00Z"),
+            ("v0.3.0-beta.2", "2026-08-05T12:00:00Z"),
+        ),
+        "0.3.0-beta.1",
+    )
+
+    assert prerelease is not None
+    assert prerelease.version == "0.3.0-beta.2"
+
+
 def test_app_version_priority_and_macos_resources(monkeypatch, tmp_path: Path) -> None:
     app_root = tmp_path / "StaffDeck.app"
     executable = app_root / "Contents" / "MacOS" / "staffdeck"
